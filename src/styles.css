@@ -915,3 +915,38 @@ textarea { resize: vertical; font-family: var(--mono); }
   text-align: left;
 }
 .repo-manage input { width: 140px; }
+
+/* Branch composer: a fixed ticket key with an optional suffix after it. */
+.branch-compose {
+  display: flex;
+  align-items: stretch;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--bg);
+}
+.branch-compose:focus-within { border-color: var(--accent-dim); }
+.branch-key {
+  display: flex;
+  align-items: center;
+  padding: 0 9px;
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--accent);
+  background: var(--panel-2);
+  white-space: nowrap;
+}
+.branch-dash {
+  display: flex;
+  align-items: center;
+  padding: 0 4px;
+  color: var(--dimmer);
+  font-family: var(--mono);
+}
+.branch-compose input {
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  font-family: var(--mono);
+}
+.branch-compose input:focus { border: none; outline: none; }

@@ -24,6 +24,7 @@ export const api = {
     name: string;
     project_ids: string[];
     branch?: string | null;
+    branch_suffix?: string | null;
     issue_key?: string | null;
     issue_url?: string | null;
   }) => invoke<Task>("create_task", { req }),
@@ -99,8 +100,12 @@ export const api = {
   jiraTransition: (key: string, transitionId: string) =>
     invoke<void>("jira_transition", { key, transitionId }),
   jiraComment: (key: string, text: string) => invoke<void>("jira_comment", { key, text }),
-  jiraStartWork: (key: string, projectIds: string[], agentId?: string | null) =>
-    invoke<Task>("jira_start_work", { key, projectIds, agentId: agentId ?? null }),
+  jiraStartWork: (
+    key: string, projectIds: string[],
+    agentId?: string | null, branchSuffix?: string | null,
+  ) => invoke<Task>("jira_start_work", {
+    key, projectIds, agentId: agentId ?? null, branchSuffix: branchSuffix ?? null,
+  }),
 
   // github
   githubConnect: (apiUrl: string, webUrl: string, token: string) =>

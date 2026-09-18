@@ -26,6 +26,7 @@ export function TicketsView() {
   const [picked, setPicked] = useState<string[]>([]);
   const [reason, setReason] = useState<string | null>(null);
   const [agentId, setAgentId] = useState("");
+  const [suffix, setSuffix] = useState("");
   const [starting, setStarting] = useState(false);
   const [shut, setShut] = useState<Record<string, boolean>>({});
   const [query, setQuery] = useState("");
@@ -38,6 +39,7 @@ export function TicketsView() {
 
   useEffect(() => {
     if (!open) { setTransitions([]); setReason(null); return; }
+    setSuffix("");
     api.jiraTransitions(open.key).then(setTransitions).catch(() => setTransitions([]));
     api.suggestRepos({
       issueKey: open.key,
@@ -53,7 +55,7 @@ export function TicketsView() {
     if (!open || picked.length === 0) return;
     setStarting(true);
     try {
-      const task = await api.jiraStartWork(open.key, picked, agentId || null);
+      const task = await api.jiraStartWork(open.key, picked, agentId || null, suffix || null);
       await Promise.all([refreshTasks(), refreshPanes()]);
       select(task.id);
       setOpen(null);
@@ -221,6 +223,21 @@ export function TicketsView() {
               onChange={setPicked}
               reason={reason}
             />
+          </Field>
+
+          <Field
+            label="Branch"
+            hint={`Created in every repo you picked, and names the task folder. Leave the suffix blank for just ${open.key}.`}
+          >
+            <div className="branch-compose">
+              <span className="branch-key">{open.key}</span>
+              <span className="branch-dash">-</span>
+              <input
+                value={suffix}
+                onChange={(e) => setSuffix(e.target.value)}
+                placeholder="optional suffix"
+              />
+            </div>
           </Field>
 
           <Field

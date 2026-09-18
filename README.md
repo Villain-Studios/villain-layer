@@ -40,6 +40,16 @@ are cross-repo because the changes are coupled.
 One branch name across every repo also means sibling PRs are findable by branch
 alone, with no extra bookkeeping.
 
+### Branch names
+
+A ticket's branch is its key: `ACME-21215`. If you want something more descriptive,
+the Start work dialog takes an optional suffix, giving `ACME-21215-locale-switch` —
+typed however you like, slugified on the way in. The task folder is named after
+the branch, so the two are always findable from each other.
+
+Tasks created without a ticket get `villain/<slug-of-the-name>`, and the New task
+dialog takes a fully explicit branch name if you would rather set one yourself.
+
 ## Layout
 
 Four top-level views:

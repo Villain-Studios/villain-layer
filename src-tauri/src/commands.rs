@@ -450,6 +450,30 @@ fn suggest_from(
 }
 
 /// `<worktree_root>/<task-slug>/<repo-name>`, deduped if two repos share a name.
+/// The branch for a task.
+///
+/// A ticket's branch is its key, optionally with a suffix — `ACME-1234` or
+/// `ACME-1234-some-feature`. The key is used verbatim rather than folded into a
+/// slug of the task name, which would repeat it: task names from Jira already
+/// begin with the key.
+fn derive_branch(
+    explicit: Option<&str>,
+    issue_key: Option<&str>,
+    suffix: Option<&str>,
+    name: &str,
+) -> String {
+    if let Some(branch) = explicit.map(str::trim).filter(|b| !b.is_empty()) {
+        return branch.to_string();
+    }
+    match issue_key.map(str::trim).filter(|k| !k.is_empty()) {
+        Some(key) => match suffix.map(slugify).filter(|s| !s.is_empty()) {
+            Some(suffix) => format!("{key}-{suffix}"),
+            None => key.to_string(),
+        },
+        None => format!("villain/{}", slugify(name)),
+    }
+}
+
 /// A task directory no other task owns and nothing occupies, so two tasks with
 /// the same name never share a folder or clobber each other's worktrees.
 fn unique_task_root(config: &ConfigStore, dir_name: &str) -> PathBuf {
@@ -514,8 +538,12 @@ pub struct NewTask {
     pub name: String,
     /// One worktree is created per repository, all on the same branch.
     pub project_ids: Vec<String>,
+    /// A fully explicit branch name, overriding everything below.
     #[serde(default)]
     pub branch: Option<String>,
+    /// Appended to the ticket key: ACME-1234 becomes ACME-1234-some-feature.
+    #[serde(default)]
+    pub branch_suffix: Option<String>,
     #[serde(default)]
     pub issue_key: Option<String>,
     #[serde(default)]
@@ -540,17 +568,16 @@ fn new_task(state: &AppState, req: NewTask) -> Result<Task> {
         .map(|id| state.config.project(id))
         .collect::<Result<_>>()?;
 
-    let slug = slugify(&req.name);
-    let branch = req.branch.unwrap_or_else(|| match &req.issue_key {
-        Some(key) => format!("{}-{slug}", key.to_lowercase()),
-        None => format!("villain/{slug}"),
-    });
+    let branch = derive_branch(
+        req.branch.as_deref(),
+        req.issue_key.as_deref(),
+        req.branch_suffix.as_deref(),
+        &req.name,
+    );
 
-    let dir_name = match &req.issue_key {
-        Some(key) => format!("{}-{slug}", key.to_uppercase()),
-        None => slug.clone(),
-    };
-    let root = unique_task_root(&state.config, &dir_name);
+    // The folder is named after the branch, so the two are always findable
+    // from each other. Slashes would nest it, so they become dashes.
+    let root = unique_task_root(&state.config, &branch.replace('/', "-"));
     std::fs::create_dir_all(&root)?;
 
     let task = Task {
@@ -1226,6 +1253,7 @@ pub async fn jira_start_work(
     key: String,
     project_ids: Vec<String>,
     agent_id: Option<String>,
+    branch_suffix: Option<String>,
 ) -> Result<Task> {
     let (client, _) = jira_client(&state)?;
     let issue = client.issue(&key).await?;
@@ -1236,6 +1264,7 @@ pub async fn jira_start_work(
             name: format!("{} {}", issue.key, issue.summary),
             project_ids,
             branch: None,
+            branch_suffix,
             issue_key: Some(issue.key.clone()),
             issue_url: Some(issue.url.clone()),
             epic_key: issue.epic_key.clone(),
@@ -1693,6 +1722,40 @@ mod tests {
         // The rule matches but resolves to nothing, so the cascade continues.
         let s = suggest_from(&c, Some("ACME-1"), None, &strs(&["Gone"]), &[]);
         assert_eq!(s.project_ids, strs(&["web"]));
+    }
+
+    #[test]
+    fn ticket_branches_are_the_key_plus_an_optional_suffix() {
+        // Jira task names already start with the key, so folding the name into
+        // the branch used to repeat it: acme-1234-acme-1234-fix-the-thing.
+        let name = "ACME-1234 Fix the thing";
+
+        assert_eq!(derive_branch(None, Some("ACME-1234"), None, name), "ACME-1234");
+        assert_eq!(
+            derive_branch(None, Some("ACME-1234"), Some("some feature"), name),
+            "ACME-1234-some-feature",
+        );
+        // The UI sends the suffix exactly as typed; slugifying happens here.
+        assert_eq!(
+            derive_branch(None, Some("ACME-21215"), Some("Locale Switch!!"), name),
+            "ACME-21215-locale-switch",
+        );
+        // A blank or punctuation-only suffix is the same as none.
+        assert_eq!(derive_branch(None, Some("ACME-1234"), Some("   "), name), "ACME-1234");
+        assert_eq!(derive_branch(None, Some("ACME-1234"), Some("--"), name), "ACME-1234");
+    }
+
+    #[test]
+    fn explicit_branch_wins_and_ticketless_tasks_use_the_name() {
+        assert_eq!(
+            derive_branch(Some("hotfix/prod"), Some("ACME-1"), Some("ignored"), "whatever"),
+            "hotfix/prod",
+        );
+        assert_eq!(derive_branch(Some("  "), Some("ACME-1"), None, "n"), "ACME-1");
+        assert_eq!(
+            derive_branch(None, None, None, "fix checkout rounding"),
+            "villain/fix-checkout-rounding",
+        );
     }
 
     #[test]

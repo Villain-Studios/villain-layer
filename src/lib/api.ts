@@ -1,0 +1,129 @@
+import { invoke } from "@tauri-apps/api/core";
+import type {
+  AgentStatus, ChangedFile, Checkout, CheckoutPr, FoundRepo, JiraIssue,
+  JiraTransition, MatchKind, PaneInfo, Project, RepoResult, RepoRule, RepoSet,
+  RepoSuggestion, ReviewComment, Settings, Task, TaskView, UiPrefs, WorktreeEntry,
+} from "./types";
+
+export const api = {
+  // projects
+  listProjects: () => invoke<Project[]>("list_projects"),
+  addProject: (path: string, group?: string | null) =>
+    invoke<Project>("add_project", { path, group: group ?? null }),
+  addProjects: (paths: string[], group?: string | null) =>
+    invoke<Project[]>("add_projects", { paths, group: group ?? null }),
+  setProjectGroup: (projectIds: string[], group: string | null) =>
+    invoke<void>("set_project_group", { projectIds, group }),
+  scanRepos: (root: string, maxDepth?: number) =>
+    invoke<FoundRepo[]>("scan_repos", { root, maxDepth: maxDepth ?? null }),
+  removeProject: (id: string) => invoke<void>("remove_project", { id }),
+
+  // tasks
+  listTasks: () => invoke<TaskView[]>("list_tasks"),
+  createTask: (req: {
+    name: string;
+    project_ids: string[];
+    branch?: string | null;
+    issue_key?: string | null;
+    issue_url?: string | null;
+  }) => invoke<Task>("create_task", { req }),
+  deleteTask: (id: string, force = false) => invoke<void>("delete_task", { id, force }),
+  addCheckout: (taskId: string, projectId: string) =>
+    invoke<Checkout>("add_checkout", { taskId, projectId }),
+  removeCheckout: (checkoutId: string, force = false) =>
+    invoke<void>("remove_checkout", { checkoutId, force }),
+  suggestRepos: (args: {
+    issueKey?: string | null;
+    epicKey?: string | null;
+    components?: string[];
+    labels?: string[];
+  }) => invoke<RepoSuggestion>("suggest_repos", {
+    issueKey: args.issueKey ?? null,
+    epicKey: args.epicKey ?? null,
+    components: args.components ?? [],
+    labels: args.labels ?? [],
+  }),
+
+  // repo sets and Jira rules
+  listRepoSets: () => invoke<RepoSet[]>("list_repo_sets"),
+  saveRepoSet: (name: string, projectIds: string[], id?: string | null) =>
+    invoke<RepoSet>("save_repo_set", { id: id ?? null, name, projectIds }),
+  deleteRepoSet: (id: string) => invoke<void>("delete_repo_set", { id }),
+  listRepoRules: () => invoke<RepoRule[]>("list_repo_rules"),
+  saveRepoRule: (kind: MatchKind, value: string, projectIds: string[], id?: string | null) =>
+    invoke<RepoRule>("save_repo_rule", { id: id ?? null, kind, value, projectIds }),
+  deleteRepoRule: (id: string) => invoke<void>("delete_repo_rule", { id }),
+  scanWorktrees: (projectId: string) =>
+    invoke<WorktreeEntry[]>("scan_worktrees", { projectId }),
+  adoptWorktree: (projectId: string, path: string, name?: string) =>
+    invoke<Task>("adopt_worktree", { projectId, path, name }),
+
+  // panes
+  listAgents: () => invoke<AgentStatus[]>("list_agents"),
+  listPanes: (taskId?: string) => invoke<PaneInfo[]>("list_panes", { taskId: taskId ?? null }),
+  spawnShell: (taskId: string, checkoutId?: string | null) =>
+    invoke<PaneInfo>("spawn_shell", { taskId, checkoutId: checkoutId ?? null }),
+  spawnAgent: (
+    taskId: string, agentId: string,
+    checkoutId?: string | null, prompt?: string | null,
+  ) => invoke<PaneInfo>("spawn_agent", {
+    taskId, agentId, checkoutId: checkoutId ?? null, prompt: prompt ?? null,
+  }),
+  spawnChat: (agentId: string, prompt?: string | null) =>
+    invoke<PaneInfo>("spawn_chat", { agentId, prompt: prompt ?? null }),
+  ptyWrite: (paneId: string, data: string) => invoke<void>("pty_write", { paneId, data }),
+  ptyResize: (paneId: string, rows: number, cols: number) =>
+    invoke<void>("pty_resize", { paneId, rows, cols }),
+  ptyScrollback: (paneId: string) => invoke<string>("pty_scrollback", { paneId }),
+  closePane: (paneId: string) => invoke<void>("close_pane", { paneId }),
+  killPane: (paneId: string) => invoke<void>("kill_pane", { paneId }),
+
+  // diff + git
+  diffFiles: (taskId: string) => invoke<ChangedFile[]>("diff_files", { taskId }),
+  diffFile: (checkoutId: string, path: string) =>
+    invoke<string>("diff_file", { checkoutId, path }),
+  sendReview: (paneId: string, comments: ReviewComment[]) =>
+    invoke<string>("send_review", { paneId, comments }),
+  commitTask: (taskId: string, message: string) =>
+    invoke<RepoResult[]>("commit_task", { taskId, message }),
+  pushTask: (taskId: string) => invoke<RepoResult[]>("push_task", { taskId }),
+
+  // jira
+  jiraConnect: (
+    baseUrl: string, email: string, token: string,
+    projectKey?: string | null, jql?: string | null,
+  ) => invoke<string>("jira_connect", { baseUrl, email, token, projectKey, jql }),
+  jiraIssues: () => invoke<JiraIssue[]>("jira_issues"),
+  jiraIssue: (key: string) => invoke<JiraIssue>("jira_issue", { key }),
+  jiraTransitions: (key: string) => invoke<JiraTransition[]>("jira_transitions", { key }),
+  jiraTransition: (key: string, transitionId: string) =>
+    invoke<void>("jira_transition", { key, transitionId }),
+  jiraComment: (key: string, text: string) => invoke<void>("jira_comment", { key, text }),
+  jiraStartWork: (key: string, projectIds: string[], agentId?: string | null) =>
+    invoke<Task>("jira_start_work", { key, projectIds, agentId: agentId ?? null }),
+
+  // github
+  githubConnect: (apiUrl: string, webUrl: string, token: string) =>
+    invoke<string>("github_connect", { apiUrl, webUrl, token }),
+  githubTaskPrs: (taskId: string) => invoke<CheckoutPr[]>("github_task_prs", { taskId }),
+  githubOpenPrs: (taskId: string, title: string, body: string, draft: boolean) =>
+    invoke<RepoResult[]>("github_open_prs", { taskId, title, body, draft }),
+
+  // slack
+  slackConnect: (secret: string, channel: string) =>
+    invoke<void>("slack_connect", { secret, channel }),
+  slackNotify: (text: string, context?: string) =>
+    invoke<void>("slack_notify", { text, context }),
+
+  // settings
+  getSettings: () => invoke<Settings>("get_settings"),
+  setWorktreeRoot: (path: string | null) => invoke<void>("set_worktree_root", { path }),
+  setUiPrefs: (ui: UiPrefs) => invoke<void>("set_ui_prefs", { ui }),
+  disconnect: (which: "jira" | "github" | "slack") => invoke<void>("disconnect", { which }),
+};
+
+export function errMessage(e: unknown): string {
+  if (typeof e === "string") return e;
+  if (e instanceof Error) return e.message;
+  return JSON.stringify(e);
+}

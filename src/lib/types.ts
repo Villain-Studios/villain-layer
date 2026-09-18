@@ -1,0 +1,218 @@
+export interface Project {
+  id: string;
+  name: string;
+  path: string;
+  default_branch: string;
+  /** One group per repo; null means ungrouped. */
+  group: string | null;
+}
+
+export interface RepoSet {
+  id: string;
+  name: string;
+  project_ids: string[];
+}
+
+export type MatchKind = "component" | "label";
+
+export interface RepoRule {
+  id: string;
+  kind: MatchKind;
+  value: string;
+  project_ids: string[];
+}
+
+export interface RepoSuggestion {
+  project_ids: string[];
+  reason: string | null;
+}
+
+/** One ticket's worth of work, spanning one or more repositories. */
+export interface Task {
+  id: string;
+  name: string;
+  root: string;
+  branch: string;
+  issue_key: string | null;
+  issue_url: string | null;
+  created_at: string;
+}
+
+/** One repository's worktree within a task. */
+export interface Checkout {
+  id: string;
+  task_id: string;
+  project_id: string;
+  path: string;
+  base: string;
+}
+
+export interface WorktreeStatus {
+  branch: string;
+  ahead: number;
+  behind: number;
+  staged: number;
+  unstaged: number;
+  untracked: number;
+  conflicted: number;
+}
+
+export interface CheckoutView extends Checkout {
+  project_name: string;
+  status: WorktreeStatus | null;
+  exists: boolean;
+}
+
+export interface TaskView extends Task {
+  checkouts: CheckoutView[];
+  pane_count: number;
+}
+
+export type PaneKind = "agent" | "shell";
+
+export interface PaneInfo {
+  id: string;
+  task_id: string;
+  /** null means the pane is rooted at the task root, seeing every repo. */
+  checkout_id: string | null;
+  kind: PaneKind;
+  title: string;
+  agent_id: string | null;
+  cwd: string;
+  running: boolean;
+  exit_code: number | null;
+  started_at: string;
+  last_output_at: string;
+}
+
+export interface AgentStatus {
+  id: string;
+  name: string;
+  program: string;
+  installed: boolean;
+  path: string | null;
+}
+
+export interface ChangedFile {
+  path: string;
+  additions: number;
+  deletions: number;
+  binary: boolean;
+  origin: string;
+  checkout_id: string;
+  repo: string;
+}
+
+export interface RepoResult {
+  checkout_id: string;
+  repo: string;
+  ok: boolean;
+  detail: string;
+}
+
+export interface JiraIssue {
+  key: string;
+  summary: string;
+  description: string;
+  status: string;
+  status_category: string;
+  issue_type: string;
+  priority: string | null;
+  assignee: string | null;
+  labels: string[];
+  components: string[];
+  epic_key: string | null;
+  epic_summary: string | null;
+  url: string;
+}
+
+export interface JiraTransition {
+  id: string;
+  name: string;
+  to_status: string;
+}
+
+export interface PullRequest {
+  number: number;
+  title: string;
+  state: string;
+  draft: boolean;
+  author: string;
+  head: string;
+  base: string;
+  url: string;
+  mergeable_state: string | null;
+}
+
+export interface CheckRun {
+  name: string;
+  status: string;
+  conclusion: string | null;
+  url: string | null;
+}
+
+export interface CheckoutPr {
+  checkout_id: string;
+  repo: string;
+  pr: PullRequest | null;
+  checks: CheckRun[];
+  changed: number;
+  error: string | null;
+}
+
+export interface JiraConfig {
+  base_url: string;
+  email: string;
+  project_key: string | null;
+  jql: string | null;
+}
+
+export interface GithubConfig {
+  api_url: string;
+  web_url: string;
+}
+
+export interface SlackConfig {
+  channel: string;
+  notify_on_done: boolean;
+  notify_on_attention: boolean;
+}
+
+export interface UiPrefs {
+  scale: number;
+  terminal_font_size: number;
+}
+
+export interface Settings {
+  ui: UiPrefs;
+  jira: JiraConfig | null;
+  github: GithubConfig | null;
+  slack: SlackConfig | null;
+  worktree_root: string;
+  worktree_root_is_default: boolean;
+  jira_connected: boolean;
+  github_connected: boolean;
+  slack_connected: boolean;
+}
+
+export interface ReviewComment {
+  path: string;
+  line: number;
+  body: string;
+  code?: string | null;
+  repo?: string | null;
+}
+
+export interface FoundRepo {
+  path: string;
+  name: string;
+  branch: string;
+  registered: boolean;
+}
+
+export interface WorktreeEntry {
+  path: string;
+  branch: string | null;
+  head: string | null;
+  locked: boolean;
+}

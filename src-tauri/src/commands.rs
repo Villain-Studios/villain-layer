@@ -678,6 +678,11 @@ pub(crate) fn add_repo(state: &AppState, task_id: &str, project_id: &str) -> Res
         .map(|p| p.name)
         .unwrap_or_else(|_| "a repository".into());
 
+    // The folder gained a sibling, so the description of it is now wrong.
+    if let Ok(task) = state.config.task(task_id) {
+        let _ = write_task_context(state, &task);
+    }
+
     let told = tell_agents(
         state,
         task_id,
@@ -1112,6 +1117,8 @@ pub(crate) fn start_agent(
     // Give the agent the app's own MCP tools. When its cwd is the task root it
     // picks .mcp.json up by itself; when the cwd is a worktree the file has to
     // live elsewhere and be pointed at explicitly.
+    // Best effort: neither is a reason to refuse to start the agent.
+    let _ = write_task_context(state, &task);
     if let Some(dir) = agent_file_dir(state, &task) {
         let _ = crate::mcp::write_config(&dir);
         if Path::new(&cwd) != dir {
@@ -1257,6 +1264,69 @@ pub(crate) fn write_chat_context(state: &AppState, dir: &Path) -> Result<()> {
             md.push('\n');
         }
     }
+
+    std::fs::write(dir.join("CLAUDE.md"), &md)?;
+    // Agents that look for AGENTS.md instead should see the same thing.
+    std::fs::write(dir.join("AGENTS.md"), &md)?;
+    Ok(())
+}
+
+/// The layout of a task, written into its folder for the agent standing in it.
+///
+/// The opening prompt says all of this too, but a prompt is said once: it
+/// scrolls away, and a resumed conversation never hears it at all. A file in
+/// the working directory is read every time, which is what an agent needs when
+/// the task gains a repository weeks after it started.
+///
+/// Never written into a worktree — a generated file there is an untracked
+/// change that turns up in review.
+fn write_task_context(state: &AppState, task: &Task) -> Result<()> {
+    let Some(dir) = agent_file_dir(state, task) else {
+        return Ok(());
+    };
+    let checkouts = state.config.checkouts_of(&task.id);
+
+    let mut md = format!(
+        "# {}\n\nWritten by Villain Layer. You are in the task folder, not inside a \
+         repository: each repository below is checked out as a folder here, all on \
+         branch `{}`.\n\n",
+        task.name, task.branch,
+    );
+    if let Some(url) = &task.issue_url {
+        md.push_str(&format!("Ticket: {url}\n\n"));
+    }
+
+    md.push_str("## Repositories in this task\n\n");
+    if checkouts.is_empty() {
+        md.push_str("None yet.\n\n");
+    } else {
+        md.push_str("| folder | clone it came from |\n|---|---|\n");
+        for c in &checkouts {
+            let origin = state
+                .config
+                .project(&c.project_id)
+                .map(|p| p.path)
+                .unwrap_or_default();
+            let folder = PathBuf::from(&c.path)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            md.push_str(&format!("| `{folder}/` | `{origin}` |\n"));
+        }
+        md.push('\n');
+    }
+
+    md.push_str(concat!(
+        "Run git, and each repository's own tests, from inside its folder. A ",
+        "repository's own CLAUDE.md or AGENTS.md lives in that folder and applies ",
+        "there.\n\n",
+        "## If the work needs a repository that is not here\n\n",
+        "Call `add_repo` on the `villain-layer` MCP server with this task's id and the ",
+        "repository's name, and it is checked out here on the same branch. Do that ",
+        "rather than reading or editing the original clone: that one is on its own ",
+        "branch and is not yours to change. `list_repos` shows what is available and ",
+        "`list_tasks` gives the task id.\n",
+    ));
 
     std::fs::write(dir.join("CLAUDE.md"), &md)?;
     // Agents that look for AGENTS.md instead should see the same thing.

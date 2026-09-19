@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { api } from "../lib/api";
 import { groupByEpic, useStore } from "../store";
 import type { JiraIssue, JiraPage, JiraTransition } from "../lib/types";
@@ -43,6 +44,7 @@ export function TicketsView() {
   const [syncing, setSyncing] = useState<string | null>(null);
 
   const installed = agents.filter((a) => a.installed);
+  const jiraBase = settings?.jira?.base_url.replace(/\/+$/, "") ?? "";
   const types = useMemo(() => typeMap(issueTypes), [issueTypes]);
 
   useEffect(() => {
@@ -426,7 +428,11 @@ export function TicketsView() {
                 </span>
               )}
               <div className="spacer" />
-              {/* The epic is only openable when it is assigned to you too. */}
+              {/*
+                Working on the epic itself is only possible when it is one of
+                your own issues: otherwise all the app has is the key and title
+                its children carry, which is not enough to start from.
+              */}
               {epic.issue && (
                 <button
                   className="btn btn-sm"
@@ -437,7 +443,24 @@ export function TicketsView() {
                     else setOpen(epic.issue!);
                   }}
                 >
-                  {taskFor(epic.issue.key) ? "Open task" : "Open epic"}
+                  {taskFor(epic.issue.key) ? "Open task" : "Start work"}
+                </button>
+              )}
+              {/*
+                Jira itself is always reachable: the key is enough for a link,
+                so every epic gets the same way out rather than some of them
+                appearing actionable and the rest not.
+              */}
+              {epic.key && jiraBase && (
+                <button
+                  className="btn btn-sm"
+                  title={`Open ${epic.key} in Jira`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void openUrl(`${jiraBase}/browse/${epic.key}`).catch(fail);
+                  }}
+                >
+                  Jira ↗
                 </button>
               )}
             </div>

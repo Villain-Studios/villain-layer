@@ -483,7 +483,17 @@ textarea { resize: vertical; font-family: var(--mono); }
   font-weight: 600;
   font-size: 14px;
 }
-.modal-body { padding: 16px; overflow-y: auto; }
+.modal-body { padding: 16px; overflow-y: auto; flex: 1; }
+
+/* A fixed height stops the window resizing every time a section changes. */
+.modal.tall { height: min(74vh, 700px); }
+
+.modal-toolbar {
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+.modal-toolbar .section-tabs { margin-bottom: 0; }
 .modal-foot {
   padding: 10px 16px;
   border-top: 1px solid var(--border);

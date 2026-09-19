@@ -2,13 +2,17 @@ import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 
 export function Modal({
-  title, children, footer, onClose, wide,
+  title, children, footer, toolbar, onClose, wide, tall,
 }: {
   title: string;
   children: ReactNode;
   footer?: ReactNode;
+  /** Pinned under the header, outside the scrolling body. */
+  toolbar?: ReactNode;
   onClose: () => void;
   wide?: boolean;
+  /** Fixed height, so switching sections does not resize the window. */
+  tall?: boolean;
 }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -19,7 +23,7 @@ export function Modal({
   return (
     <div className="overlay" onMouseDown={onClose}>
       <div
-        className="modal"
+        className={`modal${tall ? " tall" : ""}`}
         style={wide ? { maxWidth: 720 } : undefined}
         onMouseDown={(e) => e.stopPropagation()}
       >
@@ -28,6 +32,7 @@ export function Modal({
           <div className="spacer" />
           <button className="btn-sm" onClick={onClose}>✕</button>
         </div>
+        {toolbar && <div className="modal-toolbar">{toolbar}</div>}
         <div className="modal-body">{children}</div>
         {footer && <div className="modal-foot">{footer}</div>}
       </div>

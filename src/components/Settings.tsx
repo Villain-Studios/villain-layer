@@ -162,24 +162,31 @@ export function Settings() {
   }
 
   return (
-    <Modal title="Settings" wide onClose={() => toggleSettings(false)}>
-      <div className="section-tabs">
-        {([
-          ["appearance", "Appearance"],
-          ["jira", "Jira"],
-          ["github", "GitHub"],
-          ["slack", "Slack"],
-          ["general", "General"],
-        ] as [Section, string][]).map(([id, label]) => (
-          <button
-            key={id}
-            className={section === id ? "active" : ""}
-            onClick={() => setSection(id)}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+    <Modal
+      title="Settings"
+      wide
+      tall
+      onClose={() => toggleSettings(false)}
+      toolbar={
+        <div className="section-tabs">
+          {([
+            ["appearance", "Appearance"],
+            ["jira", "Jira"],
+            ["github", "GitHub"],
+            ["slack", "Slack"],
+            ["general", "General"],
+          ] as [Section, string][]).map(([id, label]) => (
+            <button
+              key={id}
+              className={section === id ? "active" : ""}
+              onClick={() => setSection(id)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      }
+    >
 
       {section === "appearance" && settings && (
         <>

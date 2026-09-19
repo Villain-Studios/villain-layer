@@ -194,6 +194,13 @@ pub struct UiPrefs {
     /// board and this app do not disagree about what is being worked on.
     #[serde(default = "yes")]
     pub sync_jira_status: bool,
+    /// Let agents read the output of terminals in this app.
+    ///
+    /// Off by default, and deliberately: a shell's scrollback holds whatever
+    /// has been typed and whatever printed, which can include tokens echoed by
+    /// a failing script or a remote URL with credentials in it.
+    #[serde(default)]
+    pub agents_read_panes: bool,
 }
 
 impl Default for UiPrefs {
@@ -204,6 +211,7 @@ impl Default for UiPrefs {
             restore_panes: true,
             trust_agent_dirs: true,
             sync_jira_status: true,
+            agents_read_panes: false,
         }
     }
 }

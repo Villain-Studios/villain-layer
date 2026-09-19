@@ -349,6 +349,19 @@ fn tools() -> Vec<Value> {
             vec![],
         ),
         tool(
+            "pane_output",
+            "What a terminal in Villain Layer has printed, with the escape codes \
+             stripped: a dev server's log, a test run, or another agent's session. \
+             Read it rather than starting a second copy of something already \
+             running. list_panes gives the ids. Off unless the user has turned it \
+             on, since a shell's scrollback is a record of everything typed in it.",
+            json!({
+                "pane_id": str_prop("Pane id from list_panes"),
+                "lines": { "type": "integer", "description": "How many lines from the end (default 200, max 2000)" }
+            }),
+            vec!["pane_id"],
+        ),
+        tool(
             "task_prs",
             "Pull request state for every repository in a task: the open PR if \
              there is one, its check runs, and how many files have changed.",
@@ -581,6 +594,15 @@ async fn call(app: &AppHandle, name: &str, args: Value) -> Result<Value> {
                 "path": added.checkout.path,
                 "base": added.checkout.base,
             }))
+        }
+
+        "pane_output" => {
+            let pane_id = required(&args, "pane_id")?.to_string();
+            let lines = args
+                .get("lines")
+                .and_then(Value::as_u64)
+                .unwrap_or(200) as usize;
+            Ok(Value::String(commands::pane_output(&state, &pane_id, lines)?))
         }
 
         "forget_repo" => {

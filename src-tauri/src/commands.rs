@@ -643,6 +643,23 @@ pub(crate) fn new_task(state: &AppState, req: NewTask) -> Result<Task> {
 }
 
 /// Add a repository to a task that is already in flight.
+/// What a terminal has printed, as readable text.
+///
+/// Gated here rather than in the tool definition so nothing can route around
+/// it: the scrollback of a shell is a record of everything that has passed
+/// through it, which is useful to an agent and is also not automatically the
+/// agent's business.
+pub(crate) fn pane_output(state: &AppState, pane_id: &str, lines: usize) -> Result<String> {
+    if !state.config.read().ui.agents_read_panes {
+        return Err(Error::Other(
+            "reading terminal output is switched off in the app's settings. Turn on \
+             \"Let agents read terminal output\" there if you want this."
+                .into(),
+        ));
+    }
+    state.ptys.transcript(pane_id, lines.clamp(1, 2_000))
+}
+
 /// Tell the agents working on a task that it gained a repository.
 ///
 /// A worktree appearing beside a running agent is invisible to it: nothing
@@ -1471,19 +1488,18 @@ const SAVED_PANE_LIMIT: usize = 40;
 /// the machine down however the file got that way.
 const RESTORE_LIMIT: usize = 12;
 
-/// What to put back: at most one pane per distinct thing, and never more than
-/// the machine should be asked to start at once.
+/// What to put back: each remembered pane once, and never more than the machine
+/// should be asked to start at once.
+///
+/// Identity is the pane's id, not what it looks like. Three shells in one
+/// folder are three shells someone wanted; collapsing them because they share a
+/// directory throws away work rather than protecting anything. The doubling
+/// this guards against wrote the *same* pane twice, which the id catches.
 fn panes_to_restore(saved: Vec<SavedPane>, limit: usize) -> Vec<SavedPane> {
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
     for pane in saved {
-        let key = (
-            pane.task_id.clone(),
-            pane.kind.clone(),
-            pane.agent_id.clone(),
-            pane.cwd.clone(),
-        );
-        if !seen.insert(key) {
+        if !seen.insert(pane.id.clone()) {
             continue;
         }
         out.push(pane);
@@ -3215,6 +3231,7 @@ pub fn set_ui_prefs(state: State<AppState>, ui: UiPrefs) -> Result<()> {
         scale: ui.scale.clamp(0.8, 1.6),
         terminal_font_size: ui.terminal_font_size.clamp(9, 24),
         restore_panes: ui.restore_panes,
+        agents_read_panes: ui.agents_read_panes,
         trust_agent_dirs: ui.trust_agent_dirs,
         sync_jira_status: ui.sync_jira_status,
     };
@@ -3435,20 +3452,28 @@ mod tests {
     }
 
     #[test]
-    fn a_pane_recorded_twice_is_only_restored_once() {
-        // Restoring recorded what it had just restored, while spawning already
-        // recorded it — so the list doubled on every launch, and a config that
-        // had been through ten restarts asked for hundreds of processes.
+    fn the_same_pane_listed_twice_is_only_restored_once() {
+        // The doubling wrote each pane under its own id, twice.
         let doubled = vec![
             saved("1", "t", "agent", "/w"),
-            saved("2", "t", "agent", "/w"),
-            saved("3", "t", "shell", "/w"),
-            saved("4", "t", "shell", "/w"),
+            saved("1", "t", "agent", "/w"),
+            saved("2", "t", "shell", "/w"),
+            saved("2", "t", "shell", "/w"),
         ];
-        let out = panes_to_restore(doubled, RESTORE_LIMIT);
-        assert_eq!(out.len(), 2);
-        assert_eq!(out[0].kind, "agent");
-        assert_eq!(out[1].kind, "shell");
+        assert_eq!(panes_to_restore(doubled, RESTORE_LIMIT).len(), 2);
+    }
+
+    #[test]
+    fn several_shells_in_one_folder_all_come_back() {
+        // Three shells in the same worktree are three shells someone opened on
+        // purpose. Treating them as duplicates of each other silently threw two
+        // of them away at every launch.
+        let shells = vec![
+            saved("1", "t", "shell", "/w"),
+            saved("2", "t", "shell", "/w"),
+            saved("3", "t", "shell", "/w"),
+        ];
+        assert_eq!(panes_to_restore(shells, RESTORE_LIMIT).len(), 3);
     }
 
     #[test]
@@ -3482,5 +3507,15 @@ mod tests {
             saved("3", "chat", "agent", "/c"),
         ];
         assert_eq!(panes_to_restore(distinct, RESTORE_LIMIT).len(), 3);
+    }
+
+    #[test]
+    fn a_dropped_pane_is_only_ever_a_repeat_or_over_the_cap() {
+        // Nothing else may be dropped: the message the user sees says
+        // "duplicates dropped", and it has to be true.
+        let many: Vec<SavedPane> = (0..RESTORE_LIMIT)
+            .map(|i| saved(&i.to_string(), "t", "shell", "/same"))
+            .collect();
+        assert_eq!(panes_to_restore(many, RESTORE_LIMIT).len(), RESTORE_LIMIT);
     }
 }

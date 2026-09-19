@@ -229,6 +229,12 @@ export function Settings() {
                 onChange={(v) => void saveUi({ ...settings.ui, restore_panes: v })}
               />
               <Switch
+                label="Let agents read terminal output"
+                detail="Agents can read what a terminal here has printed — a dev server's log, a test run — instead of starting a second copy. A shell's scrollback is a record of everything typed in it, so this stays off until you want it."
+                checked={settings.ui.agents_read_panes}
+                onChange={(v) => void saveUi({ ...settings.ui, agents_read_panes: v })}
+              />
+              <Switch
                 label="Move the ticket when work starts"
                 detail="Starting a task transitions its Jira issue into whatever your workflow calls in progress, so the board and this app do not disagree about what is being worked on."
                 checked={settings.ui.sync_jira_status}

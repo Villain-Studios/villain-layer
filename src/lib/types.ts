@@ -232,6 +232,7 @@ export interface UiPrefs {
   restore_panes: boolean;
   trust_agent_dirs: boolean;
   sync_jira_status: boolean;
+  agents_read_panes: boolean;
 }
 
 export interface Settings {

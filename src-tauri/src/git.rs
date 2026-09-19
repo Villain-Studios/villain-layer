@@ -13,7 +13,16 @@ pub fn run(dir: &Path, args: &[&str]) -> Result<String> {
         .args(args)
         .current_dir(dir)
         .output()
-        .map_err(|e| Error::Git(format!("failed to run git: {e}")))?;
+        .map_err(|e| {
+            // The common cause is a missing working directory, not a missing
+            // git. Saying "failed to run git: No such file or directory" sends
+            // people looking for the wrong problem.
+            if !dir.is_dir() {
+                Error::Git(format!("{} no longer exists", dir.display()))
+            } else {
+                Error::Git(format!("failed to run git in {}: {e}", dir.display()))
+            }
+        })?;
 
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
@@ -449,6 +458,16 @@ mod tests {
 
         remove_worktree(&repo, &wt.to_string_lossy(), true).ok();
         std::fs::remove_dir_all(repo.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn a_deleted_worktree_says_so() {
+        let gone = std::env::temp_dir().join(format!("vl-gone-{}", uuid::Uuid::new_v4()));
+        let err = status(&gone).unwrap_err().to_string();
+        assert!(
+            err.contains("no longer exists"),
+            "expected a message about the missing directory, got: {err}"
+        );
     }
 
     #[test]

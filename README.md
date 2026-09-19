@@ -13,11 +13,44 @@ bun install
 bun run tauri dev
 ```
 
+That shares a config with an installed build. If you keep one for daily use, run
+the dev build under its own identity instead — see below.
+
 To produce a distributable app bundle:
 
 ```bash
 bun run tauri build
 ```
+
+On macOS, to build one and install it over the copy in `/Applications`:
+
+```bash
+bun run release:mac
+```
+
+### Two instances at once
+
+Developing the app while using it means two copies running: an installed release
+build doing the real work, and a dev build changing under you. They cannot share
+state. The config is read once at launch and written back whole, so two
+instances pointed at one file would take turns erasing each other's tasks.
+
+The dev build therefore runs under its own identity:
+
+```bash
+bun run dev:app
+```
+
+That merges `src-tauri/tauri.dev.conf.json` over the normal config, giving the
+dev build the identifier `dev.villain.layer.dev` and with it a config directory
+of its own. Point its worktree root somewhere separate too — Settings, or
+`worktree_root` in that config — so dev task folders do not land among real
+ones. The keychain item is shared, so the dev build inherits the Jira, GitHub
+and Slack tokens without asking again.
+
+One dev build at a time: Vite holds port 1420 with `strictPort`, so a second
+`bun run dev:app` fails loudly instead of running against a server that belongs
+to the other one.
 
 ## The model: one task, many repos
 

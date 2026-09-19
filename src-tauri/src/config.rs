@@ -102,13 +102,35 @@ pub struct GithubConfig {
     pub web_url: String,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SlackConfig {
     pub channel: String,
+    /// Master switch. Off means the app posts nothing at all, without having to
+    /// disconnect and re-enter the token.
+    #[serde(default = "yes")]
+    pub enabled: bool,
+    /// An agent pane exiting.
     #[serde(default = "yes")]
     pub notify_on_done: bool,
+    /// Pull requests opened for a task.
     #[serde(default = "yes")]
-    pub notify_on_attention: bool,
+    pub notify_on_prs: bool,
+    /// The `slack_post` MCP tool. Agents post unattended, so this is separate
+    /// from the app's own notifications.
+    #[serde(default = "yes")]
+    pub allow_agent_posts: bool,
+}
+
+impl Default for SlackConfig {
+    fn default() -> Self {
+        Self {
+            channel: String::new(),
+            enabled: true,
+            notify_on_done: true,
+            notify_on_prs: true,
+            allow_agent_posts: true,
+        }
+    }
 }
 
 fn yes() -> bool {

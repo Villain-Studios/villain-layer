@@ -192,7 +192,7 @@ never in `config.json`.
 |---|---|---|
 | **Jira** | Site URL, account email, [API token](https://id.atlassian.com/manage-profile/security/api-tokens) | Your assigned issues, ticket → worktrees + primed agent, status transitions, and the PR-set comment |
 | **GitHub** | API URL, web URL, PAT with `repo` scope | Per-repo PR state and check runs, one-action PR opening across the task. Point `api_url` at `https://ghe.example.com/api/v3` for Enterprise Server |
-| **Slack** | An app with a bot token — see below | A message when an agent finishes and when a task's PRs open |
+| **Slack** | An app with a bot token — see below | A message when an agent finishes and when a task's PRs open, each switchable |
 
 The default Jira query is `assignee = currentUser() AND statusCategory != Done`,
 scoped to your project key if you set one. Override it with your own JQL in
@@ -235,6 +235,12 @@ The manifest requests `chat:write` and `chat:write.public`. The second is what
 lets the bot post to a public channel it has not been invited to; drop it if you
 would rather `/invite` the bot per channel. An existing incoming-webhook URL also
 works — paste it in place of the token and the channel field is ignored.
+
+Not everything belongs in Slack, so each kind of message has its own switch in
+Settings → Slack: agents finishing, pull requests opening, and messages agents
+send themselves through the `slack_post` tool — plus a master switch that mutes
+the lot without disconnecting. The gate is enforced in the backend, so an agent
+cannot route around a setting by calling the tool directly.
 
 Slack's error codes are terse, so they get translated: `not_in_channel` tells you
 to invite the bot or add the scope, `invalid_auth` reminds you the token starts

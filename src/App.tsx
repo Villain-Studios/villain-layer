@@ -12,6 +12,7 @@ import { AgentsView } from "./components/AgentsView";
 import { ChatView } from "./components/ChatView";
 import { ReposView } from "./components/ReposView";
 import { Settings } from "./components/Settings";
+import { GearIcon } from "./components/ui";
 
 export default function App() {
   const task = useStore(selectedTask);
@@ -61,7 +62,8 @@ export default function App() {
           : `${pane.title} exited with ${pane.exit_code} in ${owner?.name ?? "a task"}`,
       );
 
-      if (state.settings?.slack_connected && state.settings.slack?.notify_on_done) {
+      if (state.settings?.slack_connected) {
+        // The backend decides whether this kind of message is muted.
         await api.slackNotify(
           `${pane.title} finished — *${owner?.name ?? pane.task_id}*`,
           owner
@@ -69,6 +71,7 @@ export default function App() {
                 owner.checkouts.length
               } repo${owner.checkouts.length === 1 ? "" : "s"}`
             : undefined,
+          "agent_done",
         ).catch(() => {});
       }
     });
@@ -105,8 +108,8 @@ export default function App() {
           ))}
         </div>
         <div className="topbar-right">
-          <button className="btn btn-sm" title="Settings" onClick={() => toggleSettings(true)}>
-            ⚙
+          <button className="icon-btn" title="Settings" onClick={() => toggleSettings(true)}>
+            <GearIcon />
           </button>
         </div>
       </div>

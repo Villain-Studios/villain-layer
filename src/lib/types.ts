@@ -184,8 +184,10 @@ export interface GithubConfig {
 
 export interface SlackConfig {
   channel: string;
+  enabled: boolean;
   notify_on_done: boolean;
-  notify_on_attention: boolean;
+  notify_on_prs: boolean;
+  allow_agent_posts: boolean;
 }
 
 export interface UiPrefs {

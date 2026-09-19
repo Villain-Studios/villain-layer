@@ -3,8 +3,8 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api } from "../lib/api";
 import { useStore } from "../store";
-import type { UiPrefs } from "../lib/types";
-import { Field, Modal } from "./ui";
+import type { SlackConfig, UiPrefs } from "../lib/types";
+import { Field, Modal, Switch } from "./ui";
 
 type Section = "appearance" | "jira" | "github" | "slack" | "general";
 
@@ -119,6 +119,15 @@ export function Settings() {
       await api.disconnect(which);
       await refreshSettings();
       toast("info", `${which} disconnected`);
+    } catch (e) {
+      fail(e);
+    }
+  }
+
+  async function saveSlack(prefs: SlackConfig) {
+    try {
+      await api.setSlackPrefs(prefs);
+      await refreshSettings();
     } catch (e) {
       fail(e);
     }
@@ -388,6 +397,11 @@ export function Settings() {
               <code>chat:write.public</code>. The second one is what lets the app post to a
               public channel without being invited first — drop it if you would rather
               invite the bot per channel.
+              <br /><br />
+              Adding <code>channels:read</code> and <code>channels:history</code> would let
+              the app find and delete its own older messages. It is not needed for normal
+              use: messages posted from here are remembered and can be deleted without
+              them.
             </div>
           </div>
 
@@ -412,6 +426,43 @@ export function Settings() {
               placeholder="#eng-agents"
             />
           </Field>
+
+          {settings?.slack && (
+            <Field
+              label="What gets posted"
+              hint="Muting is enforced in the backend, so an agent cannot route around it."
+            >
+              <div className="switch-list">
+                <Switch
+                  label="Send anything to Slack"
+                  detail="Master switch. Off means silence, without disconnecting."
+                  checked={settings.slack.enabled}
+                  onChange={(v) => void saveSlack({ ...settings.slack!, enabled: v })}
+                />
+                <Switch
+                  label="When an agent finishes"
+                  checked={settings.slack.notify_on_done}
+                  disabled={!settings.slack.enabled}
+                  onChange={(v) => void saveSlack({ ...settings.slack!, notify_on_done: v })}
+                />
+                <Switch
+                  label="When pull requests open"
+                  checked={settings.slack.notify_on_prs}
+                  disabled={!settings.slack.enabled}
+                  onChange={(v) => void saveSlack({ ...settings.slack!, notify_on_prs: v })}
+                />
+                <Switch
+                  label="Messages agents send themselves"
+                  detail="The slack_post tool. Agents post unattended, so this is separate."
+                  checked={settings.slack.allow_agent_posts}
+                  disabled={!settings.slack.enabled}
+                  onChange={(v) =>
+                    void saveSlack({ ...settings.slack!, allow_agent_posts: v })
+                  }
+                />
+              </div>
+            </Field>
+          )}
           <button
             className="btn btn-primary"
             disabled={busy || !slackSecret.trim()}

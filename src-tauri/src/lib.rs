@@ -100,6 +100,7 @@ pub fn run() {
             commands::github_open_prs,
             commands::slack_connect,
             commands::slack_notify,
+            commands::set_slack_prefs,
             commands::slack_posted_messages,
             commands::slack_diagnose,
             commands::slack_cleanup,

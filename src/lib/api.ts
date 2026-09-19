@@ -3,8 +3,8 @@ import type {
   AgentStatus, ChangedFile, Checkout, CheckoutPr, FoundRepo, JiraIssue,
   JiraIssueType, JiraTransition, MatchKind, PaneInfo, Project, RepoResult, RepoRule,
   RepoSet,
-  RepoSuggestion, ReviewComment, Settings, SlackConfig, Task, TaskView, UiPrefs,
-  WorktreeEntry,
+  RepoSuggestion, Resumable, ReviewComment, Settings, SlackConfig, Task, TaskView,
+  UiPrefs, WorktreeEntry,
 } from "./types";
 
 export const api = {
@@ -69,10 +69,12 @@ export const api = {
     invoke<PaneInfo>("spawn_shell", { taskId, checkoutId: checkoutId ?? null }),
   spawnAgent: (
     taskId: string, agentId: string,
-    checkoutId?: string | null, prompt?: string | null,
+    checkoutId?: string | null, prompt?: string | null, resume = false,
   ) => invoke<PaneInfo>("spawn_agent", {
-    taskId, agentId, checkoutId: checkoutId ?? null, prompt: prompt ?? null,
+    taskId, agentId, checkoutId: checkoutId ?? null, prompt: prompt ?? null, resume,
   }),
+  resumableAgents: (taskId: string, checkoutId?: string | null) =>
+    invoke<Resumable[]>("resumable_agents", { taskId, checkoutId: checkoutId ?? null }),
   spawnChat: (agentId: string, prompt?: string | null) =>
     invoke<PaneInfo>("spawn_chat", { agentId, prompt: prompt ?? null }),
   ptyWrite: (paneId: string, data: string) => invoke<void>("pty_write", { paneId, data }),
@@ -106,6 +108,11 @@ export const api = {
     invoke<void>("jira_transition", { key, transitionId }),
   jiraComment: (key: string, text: string) => invoke<void>("jira_comment", { key, text }),
   taskPrompt: (taskId: string) => invoke<string>("task_prompt", { taskId }),
+  handoffPrompt: (paneId: string) => invoke<string>("handoff_prompt", { paneId }),
+  requestPrDescription: (taskId: string, paneId: string) =>
+    invoke<string>("request_pr_description", { taskId, paneId }),
+  takePrDescription: (taskId: string) =>
+    invoke<string | null>("take_pr_description", { taskId }),
   jiraStartWork: (
     key: string, projectIds: string[],
     agentId?: string | null, branchSuffix?: string | null,

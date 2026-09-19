@@ -83,6 +83,8 @@ export interface PaneInfo {
   exit_code: number | null;
   started_at: string;
   last_output_at: string;
+  /** The agent reported being out of budget, read from its own output. */
+  limit_reached: boolean;
 }
 
 export interface AgentStatus {
@@ -91,6 +93,14 @@ export interface AgentStatus {
   program: string;
   installed: boolean;
   path: string | null;
+}
+
+export interface Resumable {
+  agent_id: string;
+  name: string;
+  sessions: number;
+  /** Unix seconds of the newest transcript. */
+  last_active: number | null;
 }
 
 export interface ChangedFile {

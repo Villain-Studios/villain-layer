@@ -53,8 +53,20 @@ export function AgentsView() {
           <div key={pane.id} className="agent-card">
             <span className={`dot ${st.dot}`} />
             <div className="who">
-              <div className="name">{agent?.name ?? pane.title}</div>
-              <div className="where">{st.label}</div>
+              <div className="name">
+                {agent?.name ?? pane.title}
+                {pane.limit_reached && (
+                  <span style={{ color: "var(--amber)", marginLeft: 6 }} title="Usage limit">
+                    ⚑
+                  </span>
+                )}
+              </div>
+              <div
+                className="where"
+                style={pane.limit_reached ? { color: "var(--amber)" } : undefined}
+              >
+                {st.label}
+              </div>
             </div>
 
             <div className="ctx">

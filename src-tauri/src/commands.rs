@@ -914,10 +914,30 @@ pub fn spawn_agent(
     agent_id: String,
     checkout_id: Option<String>,
     prompt: Option<String>,
+    resume: Option<bool>,
     rows: Option<u16>,
     cols: Option<u16>,
 ) -> Result<PaneInfo> {
-    start_agent(&app, &state, task_id, agent_id, checkout_id, prompt, rows, cols)
+    start_agent(
+        &app, &state, task_id, agent_id, checkout_id, prompt,
+        resume.unwrap_or(false), rows, cols,
+    )
+}
+
+/// Conversations that could be picked up again in a task's working directory.
+///
+/// Panes do not survive the app closing, but the agent CLIs keep their own
+/// transcripts per directory — so the work can continue even though the
+/// process cannot.
+#[tauri::command]
+pub fn resumable_agents(
+    state: State<AppState>,
+    task_id: String,
+    checkout_id: Option<String>,
+) -> Result<Vec<agents::Resumable>> {
+    let task = state.config.task(&task_id)?;
+    let (cwd, _, _) = resolve_scope(&state, &task, checkout_id.as_deref())?;
+    Ok(agents::resumable(&cwd))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -928,6 +948,7 @@ pub(crate) fn start_agent(
     agent_id: String,
     checkout_id: Option<String>,
     prompt: Option<String>,
+    resume: bool,
     rows: Option<u16>,
     cols: Option<u16>,
 ) -> Result<PaneInfo> {
@@ -938,7 +959,17 @@ pub(crate) fn start_agent(
         .ok_or_else(|| Error::NotFound(format!("{} is not on your PATH", def.program)))?;
 
     let (cwd, scope, checkout_id) = resolve_scope(state, &task, checkout_id.as_deref())?;
-    let (mut args, initial_input) = agents::launch_args(def, prompt.as_deref());
+
+    // Resuming means handing the conversation back to the CLI, so an opening
+    // prompt would only talk over it.
+    let (mut args, initial_input) = if resume {
+        let flags = def.resume_args.ok_or_else(|| {
+            Error::Other(format!("{} cannot resume a previous session", def.name))
+        })?;
+        (flags.iter().map(|f| f.to_string()).collect::<Vec<_>>(), None)
+    } else {
+        agents::launch_args(def, prompt.as_deref())
+    };
 
     // Give the agent the app's own MCP tools. When its cwd is the task root it
     // picks .mcp.json up by itself; when the cwd is a worktree the file has to
@@ -960,7 +991,7 @@ pub(crate) fn start_agent(
             checkout_id,
             cwd,
             kind: PaneKind::Agent,
-            title: format!("{} · {scope}", def.name),
+            title: format!("{} · {scope}{}", def.name, if resume { " (resumed)" } else { "" }),
             program,
             args,
             agent_id: Some(agent_id),
@@ -1494,6 +1525,158 @@ pub async fn task_prompt(state: State<'_, AppState>, task_id: String) -> Result<
     Ok(prompt)
 }
 
+/// Where an agent is asked to leave a drafted pull request description.
+///
+/// In the task folder, never a worktree: a generated file inside a checkout
+/// would show up in the very diff the description is about.
+fn pr_draft_path(state: &AppState, task: &Task) -> Option<PathBuf> {
+    agent_file_dir(state, task).map(|d| d.join("PR_DESCRIPTION.md"))
+}
+
+/// Ask a running agent to write the pull request description.
+///
+/// The agent has just done the work, so it knows things the diff does not:
+/// what it tried, what it deliberately left out, where a reviewer should look
+/// hardest. It writes to a file rather than the terminal so the app can pick
+/// the text up cleanly.
+#[tauri::command]
+pub fn request_pr_description(
+    state: State<AppState>,
+    task_id: String,
+    pane_id: String,
+) -> Result<String> {
+    let task = state.config.task(&task_id)?;
+    let path = pr_draft_path(&state, &task).ok_or_else(|| {
+        Error::Other(
+            "this task has no folder outside its worktrees to write the draft into".into(),
+        )
+    })?;
+
+    // A stale draft would look like an instant answer.
+    let _ = std::fs::remove_file(&path);
+
+    let repos: Vec<String> = state
+        .config
+        .checkouts_of(&task_id)
+        .iter()
+        .filter_map(|c| state.config.project(&c.project_id).ok().map(|p| p.name))
+        .collect();
+
+    let prompt = format!(
+        "Write the pull request description for the work on branch `{}`{}.\n\n         Write it for a reviewer who has not seen any of this and was not in the          conversation. Cover: what changed and why, anything you decided against or          left unfinished, and where review effort is best spent. Mention what you          verified and what you did not. Do not pad it, and do not restate the diff          file by file.\n\n         Base it on the actual diff{}. Save it as Markdown to:\n{}\n\n         Write only that file, change nothing else, and tell me when it is saved.",
+        task.branch,
+        task.issue_key
+            .as_ref()
+            .map(|k| format!(" for {k}"))
+            .unwrap_or_default(),
+        if repos.len() > 1 {
+            format!(" across {}", repos.join(", "))
+        } else {
+            String::new()
+        },
+        path.display(),
+    );
+
+    state.ptys.write(&pane_id, &prompt)?;
+    state.ptys.write(&pane_id, "\r")?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+/// The drafted description, if the agent has saved it yet. Reading it takes it.
+#[tauri::command]
+pub fn take_pr_description(state: State<AppState>, task_id: String) -> Result<Option<String>> {
+    let task = state.config.task(&task_id)?;
+    let Some(path) = pr_draft_path(&state, &task) else {
+        return Ok(None);
+    };
+    match std::fs::read_to_string(&path) {
+        Ok(text) => {
+            let _ = std::fs::remove_file(&path);
+            Ok(Some(text))
+        }
+        Err(_) => Ok(None),
+    }
+}
+
+/// Everything a different agent needs to pick this work up.
+///
+/// There is no portable session format between the agent CLIs, so nothing can
+/// truly "resume" across them. What travels is the state of the work: the
+/// ticket, what has changed, and what the outgoing agent was last doing. The
+/// last of those comes from the pane's own scrollback, which matters because
+/// running out of budget is exactly when an agent cannot summarise itself.
+#[tauri::command]
+pub async fn handoff_prompt(state: State<'_, AppState>, pane_id: String) -> Result<String> {
+    let pane = state.ptys.info(&pane_id)?;
+    let task = state.config.task(&pane.task_id)?;
+
+    let mut out = String::from(concat!(
+        "You are taking over work another agent started and could not finish.\n\n",
+    ));
+
+    // The original briefing, refetched so the ticket is current.
+    out.push_str(&task_prompt(state.clone(), task.id.clone()).await?);
+    out.push_str("\n\n---\n\n## What has happened so far\n\n");
+
+    let mut any_change = false;
+    for checkout in state.config.checkouts_of(&task.id) {
+        let dir = PathBuf::from(&checkout.path);
+        let repo = state
+            .config
+            .project(&checkout.project_id)
+            .map(|p| p.name)
+            .unwrap_or_else(|_| "unknown".into());
+
+        let commits = git::run(
+            &dir,
+            &["log", "--oneline", "--no-decorate", &format!("{}..HEAD", checkout.base)],
+        )
+        .unwrap_or_default();
+        let files = git::changed_files(&dir, &checkout.base).unwrap_or_default();
+
+        if commits.trim().is_empty() && files.is_empty() {
+            continue;
+        }
+        any_change = true;
+        out.push_str(&format!("### {repo}\n"));
+        if !commits.trim().is_empty() {
+            out.push_str("\nCommits on this branch:\n");
+            for line in commits.lines() {
+                out.push_str(&format!("- {line}\n"));
+            }
+        }
+        if !files.is_empty() {
+            out.push_str("\nWorking tree against the base branch:\n");
+            for f in &files {
+                out.push_str(&format!("- {} (+{} -{})\n", f.path, f.additions, f.deletions));
+            }
+        }
+        out.push('\n');
+    }
+    if !any_change {
+        out.push_str("Nothing has been committed or changed yet.\n\n");
+    }
+
+    // The outgoing agent's own words, as far as they got.
+    if let Ok(tail) = state.ptys.transcript(&pane_id, 120) {
+        if !tail.trim().is_empty() {
+            out.push_str(&format!(
+                "## The previous agent's terminal, most recent last\n\n                 This is raw output from {}, not a summary, and may be truncated                  mid-thought.\n\n```\n{tail}\n```\n\n",
+                pane.title,
+            ));
+        }
+    }
+
+    out.push_str(concat!(
+        "## What to do\n\n",
+        "Work out from the diff and the transcript above where the previous agent got ",
+        "to, then carry on. Verify its work rather than trusting it — it may have left ",
+        "something half-finished. Say what you think was already done before you start ",
+        "changing anything.",
+    ));
+    Ok(out)
+}
+
 /// The one-click path: ticket -> worktree per repo -> agent primed with both
 /// the ticket and the layout.
 #[tauri::command]
@@ -1550,6 +1733,7 @@ pub async fn jira_start_work(
             agent_id,
             None,
             Some(ticket_prompt(&issue, &task, &repos)),
+            false,
             None,
             None,
         )?;

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api } from "../lib/api";
 import { useStore } from "../store";
@@ -14,6 +14,11 @@ function checkColor(c: CheckRun) {
 
 export function PrPanel({ task }: { task: TaskView }) {
   const settings = useStore((s) => s.settings);
+  const allPanes = useStore((s) => s.panes);
+  const agentPanes = useMemo(
+    () => allPanes.filter((p) => p.task_id === task.id && p.kind === "agent" && p.running),
+    [allPanes, task.id],
+  );
   const toggleSettings = useStore((s) => s.toggleSettings);
   const toast = useStore((s) => s.toast);
   const fail = useStore((s) => s.fail);
@@ -24,6 +29,8 @@ export function PrPanel({ task }: { task: TaskView }) {
   const [title, setTitle] = useState(task.name);
   const [body, setBody] = useState("");
   const [draft, setDraft] = useState(true);
+  const [drafting, setDrafting] = useState(false);
+  const pollRef = useRef<number | null>(null);
 
   const load = useCallback(async () => {
     if (!settings?.github_connected) return;
@@ -39,6 +46,9 @@ export function PrPanel({ task }: { task: TaskView }) {
 
   useEffect(() => { void load(); }, [load]);
 
+  // Stop waiting for a draft if the panel goes away.
+  useEffect(() => () => { if (pollRef.current) window.clearInterval(pollRef.current); }, []);
+
   useEffect(() => {
     setTitle(task.name);
     setBody(task.issue_url ? `Jira: ${task.issue_url}\n` : "");
@@ -50,6 +60,41 @@ export function PrPanel({ task }: { task: TaskView }) {
     if (bad.length) toast("error", bad.map((r) => `${r.repo}: ${r.detail}`).join("\n"));
     if (ok.length) {
       toast("success", `${verb} ${ok.map((r) => `${r.repo} (${r.detail})`).join(", ")}`);
+    }
+  }
+
+  /// The agent that did the work knows what the diff cannot say: what it tried,
+  /// what it left out, where a reviewer should look hardest. Ask it, rather than
+  /// making the reviewer reconstruct that from the changes.
+  async function draftWithAgent() {
+    const pane = agentPanes[0];
+    if (!pane) {
+      toast("error", "No running agent in this task. Start one in Terminals first.");
+      return;
+    }
+    try {
+      await api.requestPrDescription(task.id, pane.id);
+      setDrafting(true);
+      toast("info", `Asked ${pane.title} to write the description — watch it work in Terminals.`);
+
+      const started = Date.now();
+      if (pollRef.current) window.clearInterval(pollRef.current);
+      pollRef.current = window.setInterval(async () => {
+        const text = await api.takePrDescription(task.id).catch(() => null);
+        if (text) {
+          setBody(text.trim());
+          setDrafting(false);
+          if (pollRef.current) window.clearInterval(pollRef.current);
+          toast("success", "Description drafted — edit it before opening the PR.");
+        } else if (Date.now() - started > 5 * 60 * 1000) {
+          setDrafting(false);
+          if (pollRef.current) window.clearInterval(pollRef.current);
+          toast("error", "Gave up waiting for the draft. The agent may still be working.");
+        }
+      }, 2000);
+    } catch (e) {
+      setDrafting(false);
+      fail(e);
     }
   }
 
@@ -175,8 +220,30 @@ export function PrPanel({ task }: { task: TaskView }) {
             <Field label="Title">
               <input value={title} onChange={(e) => setTitle(e.target.value)} />
             </Field>
-            <Field label="Description">
-              <textarea rows={5} value={body} onChange={(e) => setBody(e.target.value)} />
+            <Field
+              label="Description"
+              hint={
+                drafting
+                  ? "Waiting for the agent to save its draft…"
+                  : "Let the agent that did the work write this — it knows what the diff does not."
+              }
+            >
+              <textarea rows={8} value={body} onChange={(e) => setBody(e.target.value)} />
+              <div className="row" style={{ marginTop: 8 }}>
+                <button
+                  className="btn btn-sm"
+                  disabled={drafting || agentPanes.length === 0}
+                  title={
+                    agentPanes.length === 0
+                      ? "Start an agent in Terminals first"
+                      : `Ask ${agentPanes[0].title} to write it`
+                  }
+                  onClick={() => void draftWithAgent()}
+                >
+                  {drafting ? "Drafting…" : "✨ Draft with agent"}
+                </button>
+                {drafting && <Spinner />}
+              </div>
             </Field>
             <div className="row" style={{ marginBottom: 12 }}>
               <label className="row" style={{ gap: 6, cursor: "pointer" }}>

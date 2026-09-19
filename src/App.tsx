@@ -78,6 +78,23 @@ export default function App() {
     return () => { void p.then((un) => un()); };
   }, [refreshPanes, refreshTasks]);
 
+  // Hitting a usage limit is the one thing worth interrupting for: the agent
+  // has stopped working and will not say so again.
+  useEffect(() => {
+    const p = listen<{ pane_id: string }>("pty:limit", async () => {
+      await refreshPanes().catch(() => {});
+      const state = useStore.getState();
+      const pane = state.panes.find((x) => x.limit_reached && x.running);
+      if (!pane) return;
+      const owner = state.tasks.find((t) => t.id === pane.task_id);
+      state.toast(
+        "error",
+        `${pane.title} hit a usage limit in ${owner?.name ?? "a task"} — open it to hand off to another agent.`,
+      );
+    });
+    return () => { void p.then((un) => un()); };
+  }, [refreshPanes]);
+
   const totals = task ? taskTotals(task) : null;
   const changed = totals ? totals.dirty + totals.staged : 0;
   const running = panes.filter((p) => p.kind === "agent" && p.running).length;

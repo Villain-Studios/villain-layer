@@ -85,7 +85,10 @@ waiting for an answer.
    repo. Click a line number to leave a note; *Send to agent* batches them into
    one prompt. Notes are path-qualified with their repo when the target agent is
    sitting at the task root, so `api/src/auth.ts:42` is never ambiguous.
-5. **Ship.** One commit message commits every repo that changed. *Push & open
+5. **Ship.** *Draft with agent* on the Pull requests tab asks the agent that did
+   the work to write the description — it knows what the diff cannot say: what it
+   tried, what it left unfinished, where review effort is best spent. One commit
+   message commits every repo that changed. *Push & open
    PRs* pushes each and opens one PR per repo — then posts all the links back to
    the Jira ticket as a single comment, and one summary to Slack.
 
@@ -129,6 +132,31 @@ without leaving the app.
 It is deliberately not a bespoke chat UI: it is the same agent CLI you already
 pay for, in the same terminal, so there is no second API key and no second set of
 tool integrations to maintain.
+
+## When an agent runs out, or the app restarts
+
+**Handing off.** No agent CLI can resume another's session — Claude Code,
+Codex, OpenCode and Cursor each keep their own transcript format, and
+translating between them would break on every release. So the ⇄ on an agent
+pane moves the *work* rather than the conversation: the ticket, the commits and
+diff so far, and the tail of the outgoing agent's terminal, stripped of ANSI and
+de-duplicated. That last part matters — running out of budget is exactly when an
+agent cannot summarise itself.
+
+The app also watches pane output for the CLIs' own limit messages. When one
+appears the pane is flagged, the Work overview marks it, and a banner offers the
+handoff. It is best-effort pattern matching, deliberately specific enough not to
+fire when an agent merely reads code about rate limiting.
+
+**Resuming.** Panes do not survive the app closing — they are processes, not
+records. But the CLIs keep transcripts per working directory, and every task has
+its own, so the conversation can be picked up even though the process is gone.
+Where a saved conversation exists, Terminals offers *⟲ Resume Claude Code* with
+how long ago it was last active. The app reads each CLI's own store rather than
+keeping its own list, so it is right about sessions it never started.
+
+Only Claude Code supports this today (`--continue`); the others are listed
+without it rather than claiming support that has not been verified.
 
 ## Agents can drive the app
 

@@ -19,6 +19,86 @@ use crate::shellenv;
 /// Roughly one screenful of history per pane, replayed when React remounts it.
 const SCROLLBACK_LIMIT: usize = 256 * 1024;
 
+/// Phrases the agent CLIs print when they will not do any more work.
+///
+/// Best-effort and deliberately specific: a false positive only mislabels a
+/// pane, but matching a bare "rate limit" would fire whenever an agent read
+/// code about rate limiting.
+const LIMIT_MARKERS: &[&str] = &[
+    "usage limit",
+    "rate limit reached",
+    "rate limit exceeded",
+    "quota exceeded",
+    "resource_exhausted",
+    "resource exhausted",
+    "insufficient_quota",
+    "out of credits",
+    "credit balance is too low",
+    "upgrade to continue",
+];
+
+/// Drop ANSI escapes so terminal output can be read as text.
+pub fn strip_ansi(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            if c != '\r' {
+                out.push(c);
+            }
+            continue;
+        }
+        match chars.next() {
+            // CSI: parameters then a final byte in @..~
+            Some('[') => {
+                for c in chars.by_ref() {
+                    if ('\u{40}'..='\u{7e}').contains(&c) {
+                        break;
+                    }
+                }
+            }
+            // OSC: runs to BEL or ST
+            Some(']') => {
+                while let Some(c) = chars.next() {
+                    if c == '\u{7}' {
+                        break;
+                    }
+                    if c == '\u{1b}' && chars.peek() == Some(&'\\') {
+                        chars.next();
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Terminal history as readable text: a TUI redraws constantly, so identical
+/// consecutive lines and blank runs are collapsed before taking the tail.
+pub fn readable_tail(raw: &str, max_lines: usize) -> String {
+    let plain = strip_ansi(raw);
+    let mut lines: Vec<&str> = Vec::new();
+
+    for line in plain.lines() {
+        let line = line.trim_end();
+        let blank = line.trim().is_empty();
+        if blank && lines.last().is_some_and(|l: &&str| l.trim().is_empty()) {
+            continue;
+        }
+        // A TUI repaints the same rows continually; one copy is enough.
+        if lines.last() == Some(&line) {
+            continue;
+        }
+        lines.push(line);
+    }
+
+    let start = lines.len().saturating_sub(max_lines);
+    lines[start..].join("\n").trim().to_string()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PaneKind {
@@ -42,6 +122,8 @@ pub struct PaneInfo {
     pub exit_code: Option<i32>,
     pub started_at: DateTime<Utc>,
     pub last_output_at: DateTime<Utc>,
+    /// The agent said it is out of budget. Best-effort, from its own output.
+    pub limit_reached: bool,
 }
 
 struct PaneMeta {
@@ -87,6 +169,11 @@ pub struct PtyManager {
 struct OutputEvent<'a> {
     pane_id: &'a str,
     data: String,
+}
+
+#[derive(Serialize, Clone)]
+struct LimitEvent<'a> {
+    pane_id: &'a str,
 }
 
 #[derive(Serialize, Clone)]
@@ -148,6 +235,7 @@ impl PtyManager {
             exit_code: None,
             started_at: now,
             last_output_at: now,
+            limit_reached: false,
         };
 
         let pane = Arc::new(Pane {
@@ -181,7 +269,23 @@ impl PtyManager {
                                     sb.drain(..drop_to);
                                 }
                             }
-                            pane.meta.lock().info.last_output_at = Utc::now();
+                            {
+                                let mut meta = pane.meta.lock();
+                                meta.info.last_output_at = Utc::now();
+                                // Check the tail rather than this chunk: the
+                                // phrase can straddle a read boundary.
+                                if !meta.info.limit_reached {
+                                    let sb = pane.scrollback.lock();
+                                    let tail = String::from_utf8_lossy(
+                                        &sb[sb.len().saturating_sub(4096)..],
+                                    )
+                                    .to_lowercase();
+                                    if LIMIT_MARKERS.iter().any(|m| tail.contains(m)) {
+                                        meta.info.limit_reached = true;
+                                        let _ = app.emit("pty:limit", LimitEvent { pane_id: &id });
+                                    }
+                                }
+                            }
                             let data = base64::engine::general_purpose::STANDARD.encode(chunk);
                             let _ = app.emit(
                                 "pty:output",
@@ -264,6 +368,17 @@ impl PtyManager {
         Ok(base64::engine::general_purpose::STANDARD.encode(sb.as_slice()))
     }
 
+    /// Scrollback as readable text, for handing work to another agent.
+    pub fn transcript(&self, id: &str, max_lines: usize) -> Result<String> {
+        let pane = self.get(id)?;
+        let raw = { String::from_utf8_lossy(&pane.scrollback.lock()).to_string() };
+        Ok(readable_tail(&raw, max_lines))
+    }
+
+    pub fn info(&self, id: &str) -> Result<PaneInfo> {
+        Ok(self.get(id)?.meta.lock().info.clone())
+    }
+
     pub fn kill(&self, id: &str) -> Result<()> {
         let pane = self.get(id)?;
         let _ = pane.killer.lock().kill();
@@ -310,5 +425,49 @@ impl PtyManager {
         for id in ids {
             let _ = self.close(&id);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strips_the_escapes_a_tui_emits() {
+        let raw = "\u{1b}[32mgreen\u{1b}[0m plain\u{1b}[1;31mred\u{1b}[m";
+        assert_eq!(strip_ansi(raw), "green plainred");
+
+        // OSC title sequences end with BEL or ST.
+        assert_eq!(strip_ansi("\u{1b}]0;a title\u{7}after"), "after");
+        assert_eq!(strip_ansi("\u{1b}]0;t\u{1b}\\after"), "after");
+
+        // Carriage returns are progress-bar redraw, not content.
+        assert_eq!(strip_ansi("a\rb"), "ab");
+    }
+
+    #[test]
+    fn collapses_the_repaints_and_keeps_the_tail() {
+        // A TUI rewrites the same row over and over.
+        let raw = "thinking\nthinking\nthinking\n\n\n\ndone\nfinal";
+        assert_eq!(readable_tail(raw, 10), "thinking\n\ndone\nfinal");
+
+        let many: String = (0..50).map(|i| format!("line {i}\n")).collect();
+        let tail = readable_tail(&many, 3);
+        assert_eq!(tail, "line 47\nline 48\nline 49");
+    }
+
+    #[test]
+    fn recognises_limit_messages_without_firing_on_prose() {
+        let hit = |s: &str| LIMIT_MARKERS.iter().any(|m| s.to_lowercase().contains(m));
+
+        assert!(hit("You've reached your usage limit. Resets at 3pm."));
+        assert!(hit("Error: quota exceeded for this model"));
+        assert!(hit("RESOURCE_EXHAUSTED"));
+        assert!(hit("Your credit balance is too low"));
+
+        // Reading or writing code about rate limiting must not count.
+        assert!(!hit("added a rate limiter to the gateway"));
+        assert!(!hit("see docs/rate-limits.md for the policy"));
+        assert!(!hit("fn check_quota(user: &User) -> bool"));
     }
 }

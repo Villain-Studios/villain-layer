@@ -139,6 +139,9 @@ export const selectedTask = (s: State) =>
 export const IDLE_AFTER_MS = 45_000;
 
 export function paneState(pane: PaneInfo): { label: string; dot: string } {
+  if (pane.limit_reached && pane.running) {
+    return { label: "out of budget — hand off", dot: "gone" };
+  }
   if (!pane.running) {
     return {
       label: pane.exit_code === 0 ? "finished" : `exited ${pane.exit_code ?? "?"}`,

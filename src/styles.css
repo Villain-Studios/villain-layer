@@ -1068,3 +1068,17 @@ textarea { resize: vertical; font-family: var(--mono); }
   border-color: var(--accent-dim);
   color: var(--text);
 }
+
+/* An agent that has run out of budget says so where you are looking. */
+.limit-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 13px;
+  background: rgba(251, 191, 36, 0.09);
+  border-bottom: 1px solid #45392a;
+  font-size: 13px;
+  color: var(--amber);
+  flex: none;
+}
+.limit-banner b { color: var(--text); }

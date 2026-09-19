@@ -313,6 +313,22 @@ fn tools() -> Vec<Value> {
             vec!["issue_key", "repos"],
         ),
         tool(
+            "handoff_prompt",
+            "Everything another agent needs to take over a pane's work: the \
+             ticket, the diff so far, and the outgoing agent's terminal tail. \
+             There is no portable session format between CLIs, so this is what \
+             travels.",
+            json!({ "pane_id": str_prop("Pane id from list_panes") }),
+            vec!["pane_id"],
+        ),
+        tool(
+            "list_panes",
+            "Panes running in the app, with which task they belong to and \
+             whether the agent has reported hitting a usage limit.",
+            json!({ "task_id": str_prop("Only this task's panes; omit for all") }),
+            vec![],
+        ),
+        tool(
             "task_prs",
             "Pull request state for every repository in a task: the open PR if \
              there is one, its check runs, and how many files have changed.",
@@ -563,6 +579,15 @@ async fn call(app: &AppHandle, name: &str, args: Value) -> Result<Value> {
             )
             .await?;
             Ok(serde_json::to_value(task)?)
+        }
+
+        "list_panes" => Ok(serde_json::to_value(
+            commands::list_panes(state, arg(&args, "task_id").map(str::to_string)),
+        )?),
+
+        "handoff_prompt" => {
+            let pane_id = required(&args, "pane_id")?.to_string();
+            Ok(Value::String(commands::handoff_prompt(state, pane_id).await?))
         }
 
         "task_prs" => {

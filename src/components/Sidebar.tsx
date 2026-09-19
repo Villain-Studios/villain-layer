@@ -1,15 +1,23 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { api, errMessage } from "../lib/api";
-import { paneState, taskTotals, useStore } from "../store";
+import { paneState, taskReview, taskTotals, useStore, type TaskReview } from "../store";
 import type { TaskView } from "../lib/types";
 import { Confirm, ContextMenu, Field, Modal, Switch, type MenuItem } from "./ui";
 import { RepoPicker } from "./RepoPicker";
 import { read, write } from "../lib/persist";
 import { IssueTypeIcon, isEpicType, typeMap } from "./IssueType";
 
+/** What a task out for review is waiting on, in a word. */
+const REVIEW_WORD: Partial<Record<TaskReview, { text: string; color: string }>> = {
+  changes_requested: { text: "changes", color: "var(--red)" },
+  approved: { text: "approved", color: "var(--green)" },
+  merged: { text: "merged", color: "var(--green)" },
+  commented: { text: "comments", color: "var(--blue)" },
+};
+
 export function Sidebar() {
-  const { projects, tasks, panes } = useStore();
+  const { projects, tasks, panes, prs } = useStore();
   const settings = useStore((s) => s.settings);
   const issues = useStore((s) => s.issues);
   const issueTypes = useStore((s) => s.issueTypes);
@@ -315,12 +323,50 @@ export function Sidebar() {
   const available = (task: TaskView) =>
     projects.filter((p) => !task.checkouts.some((c) => c.project_id === p.id));
 
+  // The same panes AgentsView counts, so the row and the view it opens agree.
+  const fleet = panes.filter((p) => p.kind === "agent" && p.running);
+  const fleetWaiting = fleet.some((p) => paneState(p).dot === "idle");
+
+  // Two lists, because they are two questions. A task with a PR open is no
+  // longer asking what to write — it is waiting on somebody, and what it is
+  // waiting on is what the second list says.
+  const reviewing = tasks.filter((t) => (prs[t.id] ?? []).some((r) => r.pr));
+  const working = tasks.filter((t) => !reviewing.includes(t));
+  const ordered = [...working, ...reviewing];
+
   return (
     <div className="sidebar">
       <div className="sidebar-body" style={{ paddingTop: 6 }}>
+        {/*
+          The overview is a place, not merely what you see before choosing.
+          Selecting a task is remembered across restarts, so without a way
+          back the first task ever clicked is the last view the app offers.
+        */}
+        <div
+          className={`ws${selected === null ? " active" : ""}`}
+          onClick={() => select(null)}
+        >
+          <div className="ws-title">
+            <span
+              className={`dot ${fleetWaiting ? "idle" : fleet.length ? "live" : ""}`}
+              title={fleetWaiting ? "An agent has gone quiet — it may need you" : undefined}
+            />
+            <span className="label">All agents</span>
+          </div>
+          <div className="ws-meta">
+            <span>across every task</span>
+            <div className="spacer" />
+            {fleet.length > 0 && (
+              <span style={fleetWaiting ? { color: "var(--amber)" } : undefined}>
+                {fleet.length}▶
+              </span>
+            )}
+          </div>
+        </div>
+
         <div className="section-head">
           Tasks
-          <span className="count">{tasks.length}</span>
+          <span className="count">{working.length}</span>
           <div className="spacer" />
           <button
             className="btn-sm"
@@ -352,7 +398,7 @@ export function Sidebar() {
           </div>
         )}
 
-        {tasks.map((task) => {
+        {ordered.map((task, i) => {
           const mine = panes.filter((p) => p.task_id === task.id && p.running);
           const live = mine.length;
           // Surface "waiting on you" here too, not just in the overview.
@@ -361,8 +407,18 @@ export function Sidebar() {
           const multi = task.checkouts.length > 1;
           const isOpen = expanded[task.id] ?? false;
 
+          const review = taskReview(prs[task.id] ?? []);
+          const verdict = REVIEW_WORD[review];
+
           return (
-            <div key={task.id}>
+            <Fragment key={task.id}>
+              {i === working.length && reviewing.length > 0 && (
+                <div className="section-head">
+                  In review
+                  <span className="count">{reviewing.length}</span>
+                </div>
+              )}
+            <div>
               <div
                 className={`ws${task.id === selected ? " active" : ""}`}
                 onClick={() => select(task.id)}
@@ -413,6 +469,7 @@ export function Sidebar() {
                   {totals.dirty > 0 && (
                     <span style={{ color: "var(--amber)" }}>±{totals.dirty}</span>
                   )}
+                  {verdict && <span style={{ color: verdict.color }}>{verdict.text}</span>}
                 </div>
               </div>
 
@@ -447,6 +504,7 @@ export function Sidebar() {
                 </div>
               )}
             </div>
+            </Fragment>
           );
         })}
 

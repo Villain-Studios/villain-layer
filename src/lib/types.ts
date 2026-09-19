@@ -193,7 +193,22 @@ export interface PullRequest {
   base: string;
   url: string;
   mergeable_state: string | null;
+  merged: boolean;
+  /** Conversation comments and inline review comments. */
+  comments: number;
+  review_comments: number;
 }
+
+export interface Review {
+  author: string;
+  /** APPROVED, CHANGES_REQUESTED, COMMENTED or DISMISSED. */
+  state: string;
+  submitted_at: string | null;
+  url: string;
+}
+
+/** What a PR's reviews add up to. */
+export type Verdict = "approved" | "changes_requested" | "commented" | "none";
 
 export interface CheckRun {
   name: string;
@@ -207,8 +222,17 @@ export interface CheckoutPr {
   repo: string;
   pr: PullRequest | null;
   checks: CheckRun[];
+  reviews: Review[];
+  verdict: Verdict;
+  /** Where this repo's next PR is opened against; may differ from pr.base. */
+  base: string;
   changed: number;
   error: string | null;
+}
+
+export interface TaskPrs {
+  task_id: string;
+  rows: CheckoutPr[];
 }
 
 export interface JiraConfig {

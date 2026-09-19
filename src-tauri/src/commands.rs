@@ -18,7 +18,7 @@ use crate::config::{
 };
 use crate::error::{Error, Result};
 use crate::git;
-use crate::integrations::{github::GitHub, jira, jira::Jira, slack::Slack};
+use crate::integrations::{github, github::GitHub, jira, jira::Jira, slack::Slack};
 use crate::pty::{PaneInfo, PaneKind, PtyManager, SpawnOptions};
 use crate::secrets;
 use crate::shellenv;
@@ -2803,8 +2803,78 @@ pub struct CheckoutPr {
     pub repo: String,
     pub pr: Option<crate::integrations::github::PullRequest>,
     pub checks: Vec<crate::integrations::github::CheckRun>,
+    /// Every review submitted, so the panel can name who said what.
+    pub reviews: Vec<crate::integrations::github::Review>,
+    /// The decision those reviews add up to: "approved", "changes_requested",
+    /// "commented" or "none".
+    pub verdict: String,
+    /// Where this repository's next PR will be opened against. An open PR
+    /// keeps whatever base it was created with until it is retargeted, so
+    /// this and `pr.base` can differ, and the panel says so when they do.
+    pub base: String,
     pub changed: usize,
     pub error: Option<String>,
+}
+
+/// Point a checkout's pull requests at a different branch.
+///
+/// The base is chosen when the worktree is made, from the repository's own
+/// default branch, and there was no way to say otherwise — work meant for a
+/// long-lived integration branch had to be retargeted by hand on GitHub every
+/// time. This decides where the *next* PR is opened; one already open keeps
+/// its base until `github_retarget_pr` moves it.
+#[tauri::command]
+pub async fn set_checkout_base(
+    state: State<'_, AppState>,
+    checkout_id: String,
+    base: String,
+) -> Result<()> {
+    let base = base.trim().to_string();
+    if base.is_empty() {
+        return Err(Error::Other("a pull request needs a base branch".into()));
+    }
+    state.config.update(|c| {
+        let Some(found) = c.checkouts.iter_mut().find(|c| c.id == checkout_id) else {
+            return Err(Error::NotFound(format!("checkout {checkout_id}")));
+        };
+        found.base = base.clone();
+        // The recorded branch point belongs to the base it was taken from, and
+        // `baseline` uses it as-is — keeping it would measure this branch
+        // against where it left a branch it is no longer going to. Dropped, so
+        // the diff falls back to the merge base with whatever the base is now.
+        found.base_commit = None;
+        Ok(())
+    })?
+}
+
+/// Move the open pull request for a checkout onto its current base.
+#[tauri::command]
+pub async fn github_retarget_pr(
+    state: State<'_, AppState>,
+    checkout_id: String,
+) -> Result<String> {
+    let checkout = state.config.checkout(&checkout_id)?;
+    let task = state.config.task(&checkout.task_id)?;
+    let (client, _) = github_client(&state)?;
+
+    let dir = PathBuf::from(&checkout.path);
+    let (owner, name) = git::origin_slug(&dir)?;
+    let pr = client
+        .pull_for_branch(&owner, &name, &task.branch)
+        .await?
+        .ok_or_else(|| Error::NotFound(format!("an open PR for {}", task.branch)))?;
+
+    client
+        .set_pull_base(&owner, &name, pr.number, &checkout.base)
+        .await?;
+    Ok(format!("#{} now targets {}", pr.number, checkout.base))
+}
+
+/// Every task's rows in one sweep, for the watch that polls in the background.
+#[derive(Debug, Serialize)]
+pub struct TaskPrs {
+    pub task_id: String,
+    pub rows: Vec<CheckoutPr>,
 }
 
 /// PR state for every repository in the task, one row each.
@@ -2813,11 +2883,39 @@ pub async fn github_task_prs(
     state: State<'_, AppState>,
     task_id: String,
 ) -> Result<Vec<CheckoutPr>> {
-    let task = state.config.task(&task_id)?;
     let (client, _) = github_client(&state)?;
+    task_prs(&state, &client, &task_id).await
+}
+
+/// The same for every task, over one client.
+///
+/// A task whose rows cannot be read is left out rather than failing the sweep:
+/// the watch runs unattended, and one unreadable repo must not blind the rest.
+#[tauri::command]
+pub async fn github_all_prs(state: State<'_, AppState>) -> Result<Vec<TaskPrs>> {
+    let (client, _) = github_client(&state)?;
+    let ids: Vec<String> = state
+        .config
+        .read()
+        .tasks
+        .iter()
+        .map(|t| t.id.clone())
+        .collect();
+
+    let mut out = Vec::new();
+    for task_id in ids {
+        if let Ok(rows) = task_prs(&state, &client, &task_id).await {
+            out.push(TaskPrs { task_id, rows });
+        }
+    }
+    Ok(out)
+}
+
+async fn task_prs(state: &AppState, client: &GitHub, task_id: &str) -> Result<Vec<CheckoutPr>> {
+    let task = state.config.task(task_id)?;
     let mut out = Vec::new();
 
-    for checkout in state.config.checkouts_of(&task_id) {
+    for checkout in state.config.checkouts_of(task_id) {
         let dir = PathBuf::from(&checkout.path);
         let repo = state
             .config
@@ -2838,6 +2936,9 @@ pub async fn github_task_prs(
             repo,
             pr: None,
             checks: Vec::new(),
+            reviews: Vec::new(),
+            verdict: "none".into(),
+            base: checkout.base.clone(),
             changed,
             error: None,
         };
@@ -2845,16 +2946,25 @@ pub async fn github_task_prs(
         // One repo without a GitHub remote should not fail the whole view.
         match git::origin_slug(&dir) {
             Ok((owner, name)) => {
-                match client.pull_for_branch(&owner, &name, &task.branch).await {
-                    Ok(pr) => {
-                        if pr.is_some() {
-                            row.checks = client
-                                .checks(&owner, &name, &task.branch)
-                                .await
-                                .unwrap_or_default();
-                        }
-                        row.pr = pr;
+                match client.latest_for_branch(&owner, &name, &task.branch).await {
+                    Ok(Some(found)) => {
+                        row.checks = client
+                            .checks(&owner, &name, &task.branch)
+                            .await
+                            .unwrap_or_default();
+                        row.reviews = client
+                            .reviews(&owner, &name, found.number)
+                            .await
+                            .unwrap_or_default();
+                        row.verdict = github::verdict(&row.reviews).to_string();
+
+                        // The listing carries no comment counts and no merged
+                        // flag, so a PR that exists is fetched again in full
+                        // rather than reported with those silently zeroed.
+                        let full = client.pull(&owner, &name, found.number).await.ok();
+                        row.pr = Some(full.unwrap_or(found));
                     }
+                    Ok(None) => {}
                     Err(e) => row.error = Some(e.to_string()),
                 }
             }

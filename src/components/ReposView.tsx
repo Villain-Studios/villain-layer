@@ -27,6 +27,7 @@ export function ReposView() {
   } | null>(null);
 
   const groups = groupProjects(projects);
+  const anyOpen = groups.some((g) => !(shut[g.group] ?? true));
   const names = (ids: string[]) =>
     ids.map((id) => projects.find((p) => p.id === id)?.name ?? "?").join(", ");
 
@@ -101,16 +102,13 @@ export function ReposView() {
           <button
             className="btn btn-sm"
             onClick={() =>
-              setShut(
-                // Collapse everything unless something is already collapsed,
-                // in which case the button means "show me it all again".
-                groups.some((g) => shut[g.group])
-                  ? {}
-                  : Object.fromEntries(groups.map((g) => [g.group, true])),
-              )
+              // Groups start collapsed, so an empty record cannot mean "open".
+              // Every group is written either way, or the ones never touched
+              // would fall back to the default instead of following.
+              setShut(Object.fromEntries(groups.map((g) => [g.group, anyOpen])))
             }
           >
-            {groups.some((g) => shut[g.group]) ? "Expand all" : "Collapse all"}
+            {anyOpen ? "Collapse all" : "Expand all"}
           </button>
         )}
         <button className="btn btn-primary" onClick={() => setAdding(true)}>
@@ -128,7 +126,9 @@ export function ReposView() {
       )}
 
       {groups.map((g) => {
-        const closed = shut[g.group] ?? false;
+        // Collapsed by default: this tab is for finding one repository among
+        // many, and a group is a heading long before it is a list.
+        const closed = shut[g.group] ?? true;
         return (
         <div key={g.group || "_"} className="card">
           <div

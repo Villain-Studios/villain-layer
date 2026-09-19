@@ -28,6 +28,9 @@ On macOS, to build one and install it over the copy in `/Applications`:
 bun run release:mac
 ```
 
+It refuses while the app is running, before building anything. Replacing a
+bundle under a live process kills it, and takes its agents with it.
+
 ### Two instances at once
 
 Developing the app while using it means two copies running: an installed release

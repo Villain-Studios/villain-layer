@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "dev:app": "tauri dev --config src-tauri/tauri.dev.conf.json",
-    "release:mac": "tauri build --bundles app && rm -rf '/Applications/Villain Layer.app' && ditto 'src-tauri/target/release/bundle/macos/Villain Layer.app' '/Applications/Villain Layer.app'"
+    "release:mac": "if pgrep -f 'Villain Layer[.]app/Contents/MacOS/villain-layer' >/dev/null; then echo 'Villain Layer is running. Quit it first — replacing the bundle under a running app kills it, and takes its agents with it.'; exit 1; fi; tauri build --bundles app && rm -rf '/Applications/Villain Layer.app' && ditto 'src-tauri/target/release/bundle/macos/Villain Layer.app' '/Applications/Villain Layer.app'"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

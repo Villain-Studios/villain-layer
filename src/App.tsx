@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api } from "./lib/api";
@@ -16,16 +16,24 @@ import { GearIcon, SidebarToggle } from "./components/ui";
 
 export default function App() {
   const task = useStore(selectedTask);
-  const { view, tab, settingsOpen, toasts, panes, issues, settings, projects } = useStore();
+  const { view, tab, settingsOpen, toasts, panes, issues, settings, projects, prs, tasks } =
+    useStore();
   const setView = useStore((s) => s.setView);
   const setTab = useStore((s) => s.setTab);
   const sidebarHidden = useStore((s) => s.sidebarHidden);
   const toggleSettings = useStore((s) => s.toggleSettings);
   const refreshAll = useStore((s) => s.refreshAll);
   const refreshPanes = useStore((s) => s.refreshPanes);
+  const refreshPrs = useStore((s) => s.refreshPrs);
   const refreshTasks = useStore((s) => s.refreshTasks);
   const dismissToast = useStore((s) => s.dismissToast);
+  const toast = useStore((s) => s.toast);
   const fail = useStore((s) => s.fail);
+
+  /** The last PR state each repo was seen in, so only changes are announced. */
+  const seenPrs = useRef(
+    new Map<string, { verdict: string; comments: number; merged: boolean }>(),
+  );
 
   useEffect(() => { void refreshAll().catch(fail); }, [refreshAll, fail]);
 
@@ -40,6 +48,18 @@ export default function App() {
     const t = setInterval(() => void refreshPanes().catch(() => {}), 3000);
     return () => clearInterval(t);
   }, [refreshPanes]);
+
+  // GitHub is polled slowly and deliberately: nothing here changes in seconds,
+  // the API is rate limited, and one sweep costs a call per repository plus
+  // three more for every repository that has a PR open.
+  // Keyed on the connection too: settings arrive after the first render, and
+  // a sweep that ran before them would find GitHub unconfigured and give up
+  // until the next tick a minute and a half later.
+  useEffect(() => {
+    void refreshPrs();
+    const t = setInterval(() => void refreshPrs(), 90_000);
+    return () => clearInterval(t);
+  }, [refreshPrs, settings?.github_connected]);
 
   // An agent exiting is the moment worth telling someone about.
   useEffect(() => {
@@ -103,6 +123,56 @@ export default function App() {
     });
     return () => { void p.then((un) => un()); };
   }, [refreshPanes]);
+
+  // Say when a review lands, once.
+  //
+  // Only a change against something already seen is worth a toast: the first
+  // sweep of a launch records what is there without announcing it, or every
+  // open PR would report its weeks-old verdict as news. A PR appearing for the
+  // first time is silent too — you opened it, from here.
+  useEffect(() => {
+    const seen = seenPrs.current;
+
+    for (const [taskId, rows] of Object.entries(prs)) {
+      const owner = tasks.find((t) => t.id === taskId);
+      const where = owner?.name ?? "a task";
+
+      for (const row of rows) {
+        if (!row.pr) continue;
+        const key = `${taskId}:${row.checkout_id}`;
+        const now = {
+          verdict: row.verdict,
+          comments: row.pr.comments + row.pr.review_comments,
+          merged: row.pr.merged,
+        };
+        const was = seen.get(key);
+        // A reviews or detail call that failed comes back as verdict "none"
+        // and merged=false. Losing what was known is not news, and recording
+        // it would make the next sweep that succeeds announce a week-old
+        // approval as though it had just landed.
+        const degraded =
+          was && ((now.verdict === "none" && was.verdict !== "none") || (was.merged && !now.merged));
+        if (!degraded) seen.set(key, now);
+        if (!was || degraded) continue;
+
+        const pr = `${row.repo} #${row.pr.number}`;
+        const by = [...row.reviews]
+          .reverse()
+          .find((r) => r.state === "APPROVED" || r.state === "CHANGES_REQUESTED")?.author;
+
+        if (now.merged && !was.merged) {
+          toast("success", `${pr} merged — ${where}`);
+        } else if (now.verdict !== was.verdict && now.verdict === "approved") {
+          toast("success", `${pr} approved${by ? ` by ${by}` : ""} — ${where}`);
+        } else if (now.verdict !== was.verdict && now.verdict === "changes_requested") {
+          toast("error", `${pr}: changes requested${by ? ` by ${by}` : ""} — ${where}`);
+        } else if (now.comments > was.comments) {
+          const n = now.comments - was.comments;
+          toast("info", `${n} new comment${n === 1 ? "" : "s"} on ${pr} — ${where}`);
+        }
+      }
+    }
+  }, [prs, tasks, toast]);
 
   const totals = task ? taskTotals(task) : null;
   // What the Diff tab actually lists: everything that differs from the base,

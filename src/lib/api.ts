@@ -1,9 +1,32 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
-  AddedRepo, AgentStatus, ChangedFile, CheckoutPr, CreateField, DiffScope, FoundRepo, JiraIssue,
-  JiraIssueType, JiraPage, JiraTransition, MatchKind, PaneInfo, Project, RepoResult, RepoRule,
-  RepoSet, RepoSuggestion, Resumable, ReviewComment, Settings, SlackConfig, Started, Task,
-  TaskView, UiPrefs,
+  AddedRepo,
+  AgentStatus,
+  ChangedFile,
+  CheckoutPr,
+  CreateField,
+  DiffScope,
+  FoundRepo,
+  JiraIssue,
+  JiraIssueType,
+  JiraPage,
+  JiraTransition,
+  MatchKind,
+  PaneInfo,
+  Project,
+  RepoResult,
+  RepoRule,
+  RepoSet,
+  RepoSuggestion,
+  Resumable,
+  ReviewComment,
+  Settings,
+  SlackConfig,
+  Started,
+  Task,
+  TaskPrs,
+  TaskView,
+  UiPrefs,
 } from "./types";
 
 export const api = {
@@ -140,6 +163,11 @@ export const api = {
   githubConnect: (apiUrl: string, webUrl: string, token: string) =>
     invoke<string>("github_connect", { apiUrl, webUrl, token }),
   githubTaskPrs: (taskId: string) => invoke<CheckoutPr[]>("github_task_prs", { taskId }),
+  githubAllPrs: () => invoke<TaskPrs[]>("github_all_prs"),
+  setCheckoutBase: (checkoutId: string, base: string) =>
+    invoke<void>("set_checkout_base", { checkoutId, base }),
+  githubRetargetPr: (checkoutId: string) =>
+    invoke<string>("github_retarget_pr", { checkoutId }),
   githubOpenPrs: (taskId: string, title: string, body: string, draft: boolean) =>
     invoke<RepoResult[]>("github_open_prs", { taskId, title, body, draft }),
 

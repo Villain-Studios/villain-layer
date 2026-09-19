@@ -25,6 +25,22 @@ pub struct PullRequest {
     pub base: String,
     pub url: String,
     pub mergeable_state: Option<String>,
+    pub merged: bool,
+    /// Conversation comments and inline review comments. Both are zero on the
+    /// list endpoint, which does not carry them — only `pull` fills them in.
+    pub comments: u64,
+    pub review_comments: u64,
+}
+
+/// One submitted review. A reviewer may leave several; only the latest
+/// decisive one counts, which is what [`verdict`] works out.
+#[derive(Debug, Clone, Serialize)]
+pub struct Review {
+    pub author: String,
+    /// APPROVED, CHANGES_REQUESTED, COMMENTED or DISMISSED.
+    pub state: String,
+    pub submitted_at: Option<String>,
+    pub url: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -93,6 +109,27 @@ impl GitHub {
         Ok(v.as_array().and_then(|a| a.first()).map(to_pr))
     }
 
+    /// The most recent pull request for a branch, whatever became of it.
+    ///
+    /// [`pull_for_branch`](Self::pull_for_branch) asks only for open ones,
+    /// which is right when deciding whether to create another but useless for
+    /// watching: GitHub drops a PR from that listing the moment it merges, so
+    /// a watch built on it would see the PR disappear and never learn why.
+    pub async fn latest_for_branch(
+        &self,
+        owner: &str,
+        repo: &str,
+        branch: &str,
+    ) -> Result<Option<PullRequest>> {
+        let v = self
+            .json(self.req(
+                reqwest::Method::GET,
+                &format!("/repos/{owner}/{repo}/pulls?state=all&head={owner}:{branch}&per_page=1"),
+            ))
+            .await?;
+        Ok(v.as_array().and_then(|a| a.first()).map(to_pr))
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn create_pull(
         &self,
@@ -120,6 +157,75 @@ impl GitHub {
             )
             .await?;
         Ok(to_pr(&v))
+    }
+
+    /// One pull request in full.
+    ///
+    /// The list endpoint that [`pull_for_branch`](Self::pull_for_branch) uses
+    /// omits `merged`, the comment counts and `mergeable_state`, so anything
+    /// that reads those has to come back here for them.
+    pub async fn pull(&self, owner: &str, repo: &str, number: u64) -> Result<PullRequest> {
+        let v = self
+            .json(self.req(
+                reqwest::Method::GET,
+                &format!("/repos/{owner}/{repo}/pulls/{number}"),
+            ))
+            .await?;
+        Ok(to_pr(&v))
+    }
+
+    /// Move an open pull request onto another base branch.
+    ///
+    /// GitHub allows this on an open PR and recomputes the diff itself, which
+    /// is the whole reason it is worth offering: the alternative is closing
+    /// the PR and opening another, losing its review history with it.
+    pub async fn set_pull_base(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+        base: &str,
+    ) -> Result<PullRequest> {
+        let v = self
+            .json(
+                self.req(
+                    reqwest::Method::PATCH,
+                    &format!("/repos/{owner}/{repo}/pulls/{number}"),
+                )
+                .json(&json!({ "base": base })),
+            )
+            .await?;
+        Ok(to_pr(&v))
+    }
+
+    /// Every review submitted on a pull request, oldest first.
+    pub async fn reviews(&self, owner: &str, repo: &str, number: u64) -> Result<Vec<Review>> {
+        let v = self
+            .json(self.req(
+                reqwest::Method::GET,
+                &format!("/repos/{owner}/{repo}/pulls/{number}/reviews?per_page=100"),
+            ))
+            .await?;
+
+        Ok(v.as_array()
+            .map(|arr| {
+                arr.iter()
+                    .map(|r| Review {
+                        author: r
+                            .pointer("/user/login")
+                            .and_then(|l| l.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                        state: s(r, "state"),
+                        submitted_at: r
+                            .get("submitted_at")
+                            .and_then(|x| x.as_str())
+                            .map(str::to_string),
+                        url: s(r, "html_url"),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default())
     }
 
     pub async fn checks(&self, owner: &str, repo: &str, git_ref: &str) -> Result<Vec<CheckRun>> {
@@ -175,9 +281,120 @@ fn to_pr(v: &Value) -> PullRequest {
             .get("mergeable_state")
             .and_then(|m| m.as_str())
             .map(str::to_string),
+        merged: v.get("merged").and_then(|m| m.as_bool()).unwrap_or(false),
+        comments: n(v, "comments"),
+        review_comments: n(v, "review_comments"),
     }
+}
+
+/// What GitHub itself would show as the review decision.
+///
+/// A reviewer may submit any number of reviews, and only their latest decisive
+/// one counts: COMMENTED leaves the previous verdict standing, and DISMISSED
+/// clears it. One outstanding "changes requested" outranks any number of
+/// approvals, because that is the one that still needs answering.
+pub fn verdict(reviews: &[Review]) -> &'static str {
+    let mut decided: Vec<(&str, &str)> = Vec::new();
+    for r in reviews {
+        let decisive = match r.state.as_str() {
+            "APPROVED" | "CHANGES_REQUESTED" => true,
+            "DISMISSED" => false,
+            // COMMENTED and PENDING say nothing about the decision.
+            _ => continue,
+        };
+        decided.retain(|(who, _)| *who != r.author.as_str());
+        if decisive {
+            decided.push((&r.author, &r.state));
+        }
+    }
+
+    if decided.iter().any(|(_, st)| *st == "CHANGES_REQUESTED") {
+        "changes_requested"
+    } else if decided.iter().any(|(_, st)| *st == "APPROVED") {
+        "approved"
+    } else if reviews.iter().any(|r| r.state == "COMMENTED") {
+        "commented"
+    } else {
+        "none"
+    }
+}
+
+fn n(v: &Value, key: &str) -> u64 {
+    v.get(key).and_then(|x| x.as_u64()).unwrap_or(0)
 }
 
 fn s(v: &Value, key: &str) -> String {
     v.get(key).and_then(|x| x.as_str()).unwrap_or_default().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn review(author: &str, state: &str) -> Review {
+        Review {
+            author: author.into(),
+            state: state.into(),
+            submitted_at: None,
+            url: String::new(),
+        }
+    }
+
+    #[test]
+    fn no_reviews_decide_nothing() {
+        assert_eq!(verdict(&[]), "none");
+        assert_eq!(verdict(&[review("ana", "PENDING")]), "none");
+    }
+
+    #[test]
+    fn a_reviewer_may_change_their_mind() {
+        // Only the latest decisive review from each person counts, in either
+        // direction: coming back to approve clears the block, and coming back
+        // to block clears the approval.
+        assert_eq!(
+            verdict(&[review("ana", "CHANGES_REQUESTED"), review("ana", "APPROVED")]),
+            "approved"
+        );
+        assert_eq!(
+            verdict(&[review("ana", "APPROVED"), review("ana", "CHANGES_REQUESTED")]),
+            "changes_requested"
+        );
+    }
+
+    #[test]
+    fn one_block_outranks_any_number_of_approvals() {
+        assert_eq!(
+            verdict(&[
+                review("ana", "APPROVED"),
+                review("bo", "APPROVED"),
+                review("cy", "CHANGES_REQUESTED"),
+            ]),
+            "changes_requested"
+        );
+    }
+
+    #[test]
+    fn commenting_leaves_an_earlier_verdict_standing() {
+        assert_eq!(
+            verdict(&[review("ana", "APPROVED"), review("ana", "COMMENTED")]),
+            "approved"
+        );
+        assert_eq!(verdict(&[review("ana", "COMMENTED")]), "commented");
+    }
+
+    #[test]
+    fn dismissing_clears_the_verdict_it_dismissed() {
+        assert_eq!(
+            verdict(&[review("ana", "APPROVED"), review("ana", "DISMISSED")]),
+            "none"
+        );
+        assert_eq!(
+            verdict(&[
+                review("ana", "CHANGES_REQUESTED"),
+                review("ana", "DISMISSED"),
+                review("bo", "APPROVED"),
+            ]),
+            "approved"
+        );
+    }
 }

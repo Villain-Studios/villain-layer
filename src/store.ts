@@ -2,8 +2,8 @@ import { create } from "zustand";
 import { api, errMessage } from "./lib/api";
 import { read, readOneOf, write } from "./lib/persist";
 import type {
-  AgentStatus, JiraIssue, JiraIssueType, PaneInfo, Project, RepoRule, RepoSet, Settings,
-  TaskView,
+  AgentStatus, CheckoutPr, JiraIssue, JiraIssueType, PaneInfo, Project, RepoRule, RepoSet,
+  Settings, TaskView,
 } from "./lib/types";
 
 export const TABS = ["terminals", "diff", "pr"] as const;
@@ -27,6 +27,8 @@ interface State {
   tasks: TaskView[];
   panes: PaneInfo[];
   agents: AgentStatus[];
+  /** PR rows per task id, refreshed by the background watch. */
+  prs: Record<string, CheckoutPr[]>;
   settings: Settings | null;
   issues: JiraIssue[];
   issueTypes: JiraIssueType[];
@@ -55,11 +57,22 @@ interface State {
   refreshRepos: () => Promise<void>;
   refreshTasks: () => Promise<void>;
   refreshPanes: () => Promise<void>;
+  refreshPrs: () => Promise<void>;
   refreshSettings: () => Promise<void>;
   refreshIssues: () => Promise<void>;
 }
 
 let toastSeq = 0;
+
+/**
+ * Whether a PR sweep is already in the air.
+ *
+ * A sweep walks every task serially and costs four GitHub round trips per
+ * repository that has one, so on a slow link it can outlast the interval that
+ * starts the next. Two at once would double the API spend and let the older
+ * one land last, taking the store backwards.
+ */
+let sweeping = false;
 
 /**
  * Drop a remembered selection whose task is gone.
@@ -79,6 +92,7 @@ export const useStore = create<State>((set, get) => ({
   repoRules: [],
   tasks: [],
   panes: [],
+  prs: {},
   agents: [],
   settings: null,
   issues: [],
@@ -134,6 +148,26 @@ export const useStore = create<State>((set, get) => ({
     set((s) => ({ tasks, selectedTask: stillThere(tasks, s.selectedTask) }));
   },
   refreshPanes: async () => set({ panes: await api.listPanes() }),
+
+  /**
+   * Ask GitHub what has happened to every task's pull requests.
+   *
+   * Quiet on failure: this runs on a timer whether or not anyone is looking,
+   * and a token that has expired or a network that has gone away should not
+   * put a toast on screen every couple of minutes.
+   */
+  refreshPrs: async () => {
+    if (sweeping || !get().settings?.github_connected) return;
+    sweeping = true;
+    try {
+      const all = await api.githubAllPrs();
+      set({ prs: Object.fromEntries(all.map((t) => [t.task_id, t.rows])) });
+    } catch {
+      // Left as it was: stale rows beat empty ones.
+    } finally {
+      sweeping = false;
+    }
+  },
 
   refreshSettings: async () => {
     const settings = await api.getSettings();
@@ -293,3 +327,47 @@ useStore.subscribe((s) => {
   write("tab", s.tab);
   write("sidebarHidden", s.sidebarHidden);
 });
+
+/** What a task's pull requests add up to. */
+export type TaskReview =
+  | "none"
+  | "incomplete"
+  | "open"
+  | "commented"
+  | "changes_requested"
+  | "approved"
+  | "merged";
+
+/**
+ * Roll a task's PR rows up into one answer, where every PR has to agree.
+ *
+ * A ticket is the unit of work even when it spans repositories, so it is not
+ * approved until all of its PRs are, and not merged until all of them are.
+ * One outstanding "changes requested" speaks for the whole task, because that
+ * is the repo that still needs an answer before any of it lands.
+ *
+ * `incomplete` is the honest word for a task whose other repos have changes
+ * but no PR yet: calling that "in review" would claim review of code nobody
+ * has been shown.
+ */
+export function taskReview(rows: CheckoutPr[]): TaskReview {
+  const open = rows.filter((r) => r.pr);
+  if (open.length === 0) return "none";
+
+  // Merged is the last word: a "changes requested" left outstanding on a PR
+  // that landed anyway is history, not something still to answer.
+  if (open.every((r) => r.pr!.merged)) return "merged";
+  if (open.some((r) => r.verdict === "changes_requested")) return "changes_requested";
+  if (rows.some((r) => !r.pr && r.changed > 0)) return "incomplete";
+  if (open.every((r) => r.verdict === "approved")) return "approved";
+  if (open.some((r) => r.verdict === "commented")) return "commented";
+  return "open";
+}
+
+/** How many comments a task's PRs are carrying, conversation and inline both. */
+export function reviewComments(rows: CheckoutPr[]): number {
+  return rows.reduce(
+    (n, r) => n + (r.pr ? r.pr.comments + r.pr.review_comments : 0),
+    0,
+  );
+}

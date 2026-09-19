@@ -2,9 +2,45 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api } from "../lib/api";
-import { useStore } from "../store";
-import type { CheckoutPr, CheckRun, RepoResult, TaskView } from "../lib/types";
+import { reviewComments, taskReview, useStore, type TaskReview } from "../store";
+import type { CheckoutPr, CheckRun, RepoResult, Review, TaskView } from "../lib/types";
 import { Field, Spinner } from "./ui";
+
+/**
+ * The latest review from each reviewer, which is the one GitHub itself shows.
+ *
+ * Reviewers come back and change their minds; listing every submission would
+ * show a PR as both approved and blocked by the same person.
+ */
+function latestByAuthor(reviews: Review[]): Review[] {
+  const by = new Map<string, Review>();
+  for (const r of reviews) by.set(r.author, r);
+  return [...by.values()];
+}
+
+function reviewColor(state: string) {
+  if (state === "APPROVED") return "var(--green)";
+  if (state === "CHANGES_REQUESTED") return "var(--red)";
+  return "var(--dim)";
+}
+
+const REVIEW_WORDS: Record<string, string> = {
+  APPROVED: "approved",
+  CHANGES_REQUESTED: "requested changes",
+  COMMENTED: "commented",
+  DISMISSED: "dismissed",
+};
+
+/** Where the task as a whole stands, in one line. */
+const TASK_REVIEW: Record<TaskReview, { word: string; color: string }> = {
+  none: { word: "", color: "var(--dim)" },
+  incomplete: { word: "Partly up for review", color: "var(--amber)" },
+  open: { word: "In review", color: "var(--blue)" },
+  commented: { word: "In review, with comments", color: "var(--blue)" },
+  changes_requested: { word: "Changes requested", color: "var(--red)" },
+  approved: { word: "Approved", color: "var(--green)" },
+  merged: { word: "Merged", color: "var(--green)" },
+};
 
 function checkColor(c: CheckRun) {
   if (c.status !== "completed") return "var(--amber)";
@@ -22,9 +58,20 @@ export function PrPanel({ task }: { task: TaskView }) {
   );
   const toggleSettings = useStore((s) => s.toggleSettings);
   const toast = useStore((s) => s.toast);
+  const refreshPrs = useStore((s) => s.refreshPrs);
   const fail = useStore((s) => s.fail);
 
+  const watched = useStore((s) => s.prs[task.id]);
   const [rows, setRows] = useState<CheckoutPr[]>([]);
+  /**
+   * Whether GitHub has answered yet.
+   *
+   * Without this the panel renders its empty state first — the form for
+   * opening a PR — and then replaces it with the PR that was there all along.
+   * An answer that arrives a moment later is not a reason to show the wrong
+   * one in the meantime.
+   */
+  const [loaded, setLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [title, setTitle] = useState(task.name);
@@ -38,14 +85,26 @@ export function PrPanel({ task }: { task: TaskView }) {
     setLoading(true);
     try {
       setRows(await api.githubTaskPrs(task.id));
+      setLoaded(true);
     } catch (e) {
       fail(e);
+      // An error is an answer too: leaving this false would hide the form
+      // for good and offer nothing in its place.
+      setLoaded(true);
     } finally {
       setLoading(false);
     }
   }, [task.id, settings?.github_connected, fail]);
 
   useEffect(() => { void load(); }, [load]);
+
+  // The watch refreshes every task on its own timer. Taking what it saw keeps
+  // an open panel current without it having to poll on its own account.
+  useEffect(() => {
+    if (!watched) return;
+    setRows(watched);
+    setLoaded(true);
+  }, [watched]);
 
   // Stop waiting for a draft if the panel goes away.
   useEffect(() => () => { if (pollRef.current) window.clearInterval(pollRef.current); }, []);
@@ -72,6 +131,29 @@ export function PrPanel({ task }: { task: TaskView }) {
     if (bad.length) toast("error", bad.map((r) => `${r.repo}: ${r.detail}`).join("\n"));
     if (ok.length) {
       toast("success", `${verb} ${ok.map((r) => `${r.repo} (${r.detail})`).join(", ")}`);
+    }
+  }
+
+  /** Where this repo's next PR goes. Changing it leaves an open PR alone. */
+  async function setBase(row: CheckoutPr, base: string) {
+    if (base.trim() === row.base || !base.trim()) return;
+    try {
+      await api.setCheckoutBase(row.checkout_id, base);
+      // Both copies, or the watch's older rows would put the old base back.
+      await load();
+      await refreshPrs();
+    } catch (e) {
+      fail(e);
+    }
+  }
+
+  async function retarget(row: CheckoutPr) {
+    try {
+      toast("success", await api.githubRetargetPr(row.checkout_id));
+      await load();
+      await refreshPrs();
+    } catch (e) {
+      fail(e);
     }
   }
 
@@ -161,12 +243,31 @@ export function PrPanel({ task }: { task: TaskView }) {
     );
   }
 
-  const pending = rows.filter((r) => !r.pr && r.changed > 0);
+  // A PR that has merged or closed no longer covers the repo: work committed
+  // after it landed still needs one, and the row keeps the old PR only so the
+  // panel can show what became of it.
+  const pending = rows.filter((r) => (!r.pr || r.pr.state !== "open") && r.changed > 0);
   const open = rows.filter((r) => r.pr);
+  const review = taskReview(rows);
+  const said = reviewComments(rows);
 
   return (
     <div className="panel-scroll">
       {loading && <div className="row" style={{ marginBottom: 10 }}><Spinner /> Loading…</div>}
+
+      {review !== "none" && (
+        <div className="row" style={{ marginBottom: 10 }}>
+          <span className="dot" style={{ background: TASK_REVIEW[review].color }} />
+          <b>{TASK_REVIEW[review].word}</b>
+          <span className="muted">
+            {open.length} PR{open.length === 1 ? "" : "s"}
+            {/* A task is only as reviewed as its least reviewed repository. */}
+            {review === "incomplete" &&
+              `, ${pending.length} repo${pending.length === 1 ? "" : "s"} still without one`}
+            {said > 0 && ` · ${said} comment${said === 1 ? "" : "s"}`}
+          </span>
+        </div>
+      )}
 
       {open.map((row) => (
         <div key={row.checkout_id} className="card">
@@ -177,11 +278,76 @@ export function PrPanel({ task }: { task: TaskView }) {
             </h3>
             <div className="spacer" />
             {row.pr!.draft && <span className="chip">draft</span>}
+            {row.pr!.merged && <span className="chip add">merged</span>}
+            {row.verdict === "approved" && <span className="chip add">approved</span>}
+            {row.verdict === "changes_requested" && (
+              <span className="chip del">changes requested</span>
+            )}
             <span className="chip">{row.pr!.state}</span>
+            {/*
+              At the top, not under the checks: a PR with a dozen check runs
+              put its only link below the fold, which is no link at all.
+            */}
+            <button
+              className="btn-sm"
+              title="Open on GitHub"
+              onClick={() =>
+                void openUrl(row.pr!.url).catch(() =>
+                  toast("error", "Could not open the browser"),
+                )
+              }
+            >
+              ↗
+            </button>
+            <button
+              className="btn-sm"
+              title="Copy link"
+              onClick={() => {
+                navigator.clipboard
+                  .writeText(row.pr!.url)
+                  .then(() => toast("success", `Copied the link to #${row.pr!.number}`))
+                  .catch(() => toast("error", "Could not reach the clipboard"));
+              }}
+            >
+              ⧉
+            </button>
           </div>
           <div className="muted" style={{ marginTop: 6 }}>
             {row.pr!.head} → {row.pr!.base} · opened by {row.pr!.author}
+            {row.pr!.comments + row.pr!.review_comments > 0 && (
+              <>
+                {" · "}
+                {row.pr!.comments + row.pr!.review_comments} comment
+                {row.pr!.comments + row.pr!.review_comments === 1 ? "" : "s"}
+              </>
+            )}
           </div>
+
+          {row.pr!.base !== row.base && row.pr!.state === "open" && (
+            <div className="row" style={{ marginTop: 10 }}>
+              <span className="chip warn">targets {row.pr!.base}</span>
+              <button className="btn btn-sm" onClick={() => void retarget(row)}>
+                Move onto {row.base}
+              </button>
+            </div>
+          )}
+
+          {row.reviews.length > 0 && (
+            <div style={{ marginTop: 10 }}>
+              {latestByAuthor(row.reviews).map((r) => (
+                <div key={r.author} className="check">
+                  <span className="dot" style={{ background: reviewColor(r.state) }} />
+                  <span className="name">{r.author}</span>
+                  <span className="muted">
+                    {REVIEW_WORDS[r.state] ?? r.state.toLowerCase()}
+                  </span>
+                  {r.url && (
+                    <button className="btn-sm" onClick={() => void openUrl(r.url)}>↗</button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
 
           {row.checks.length > 0 && (
             <div style={{ marginTop: 10 }}>
@@ -197,14 +363,21 @@ export function PrPanel({ task }: { task: TaskView }) {
           )}
 
           <div className="row" style={{ marginTop: 10 }}>
-            <button className="btn btn-sm" onClick={() => void openUrl(row.pr!.url)}>
+            <button
+              className="btn btn-sm"
+              onClick={() =>
+                void openUrl(row.pr!.url).catch(() =>
+                  toast("error", "Could not open the browser"),
+                )
+              }
+            >
               Open on GitHub
             </button>
           </div>
         </div>
       ))}
 
-      {rows.some((r) => r.error) && (
+      {loaded && rows.some((r) => r.error) && (
         <div className="card">
           <h3>Repos that could not be read</h3>
           {rows.filter((r) => r.error).map((r) => (
@@ -217,6 +390,7 @@ export function PrPanel({ task }: { task: TaskView }) {
         </div>
       )}
 
+      {loaded && (
       <div className="card">
         <h3>
           {pending.length === 0 && open.length > 0
@@ -239,6 +413,15 @@ export function PrPanel({ task }: { task: TaskView }) {
                     ? `${r.changed} changed file${r.changed === 1 ? "" : "s"}`
                     : "no changes"}
                 </span>
+                <div className="spacer" />
+                <span>→</span>
+                <input
+                  style={{ width: 210 }}
+                  defaultValue={r.base}
+                  title="The branch this repository's pull request is opened against"
+                  onBlur={(e) => void setBase(r, e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
+                />
               </div>
             ))}
           </div>
@@ -308,6 +491,7 @@ export function PrPanel({ task }: { task: TaskView }) {
             : ""}
         </div>
       </div>
+      )}
     </div>
   );
 }

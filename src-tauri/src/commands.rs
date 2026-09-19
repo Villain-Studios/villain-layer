@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::agents;
 use crate::config::{
@@ -1811,8 +1811,18 @@ fn review_context(state: &AppState, task: &Task) -> String {
 /// hands it the diff directly, so nothing has to be discovered and no tools
 /// have to run. `draft_pr_description_from_pane` remains for the case where the
 /// agent's own account of the work is worth the wait.
+#[derive(Clone, Serialize)]
+struct DraftChunk<'a> {
+    task_id: &'a str,
+    text: &'a str,
+}
+
 #[tauri::command]
-pub async fn draft_pr_description(state: State<'_, AppState>, task_id: String) -> Result<String> {
+pub async fn draft_pr_description(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    task_id: String,
+) -> Result<String> {
     let task = state.config.task(&task_id)?;
     let program = shellenv::which("claude")
         .ok_or_else(|| Error::NotFound("claude is not on your PATH".into()))?;
@@ -1841,7 +1851,7 @@ pub async fn draft_pr_description(state: State<'_, AppState>, task_id: String) -
 
     let env = shellenv::user_env().clone();
     let out = tauri::async_runtime::spawn_blocking(move || -> Result<String> {
-        use std::io::Write;
+        use std::io::{BufRead, BufReader, Write};
         use std::process::{Command, Stdio};
 
         let mut child = Command::new(&program)
@@ -1850,6 +1860,15 @@ pub async fn draft_pr_description(state: State<'_, AppState>, task_id: String) -
                 // Cheap and fast: this is a summarising job, not a reasoning one.
                 "--model",
                 "haiku",
+                // Connecting to MCP servers is the single largest part of a cold
+                // start, and this run needs none of them.
+                "--strict-mcp-config",
+                // Streamed, so the description appears as it is written rather
+                // than all at once at the end.
+                "--output-format",
+                "stream-json",
+                "--include-partial-messages",
+                "--verbose",
                 // Everything it needs is in the prompt. Without this it may go
                 // reading the repository and turn seconds into minutes.
                 "--disallowed-tools",
@@ -1863,31 +1882,93 @@ pub async fn draft_pr_description(state: State<'_, AppState>, task_id: String) -
                 "WebSearch",
             ])
             .envs(&env)
+            // Nothing here is worth thinking about first, and the thinking block
+            // is dead time the reader spends watching a spinner.
+            .env("MAX_THINKING_TOKENS", "0")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| Error::Other(format!("could not run claude: {e}")))?;
 
-        child
+        // Both pipes are pumped on their own threads. The prompt carries a whole
+        // diff, which is larger than a pipe buffer, so writing it inline would
+        // block before claude has said anything — and each side would then be
+        // waiting on the other.
+        let mut stdin = child
             .stdin
             .take()
-            .ok_or_else(|| Error::Other("claude took no input".into()))?
-            .write_all(prompt.as_bytes())?;
+            .ok_or_else(|| Error::Other("claude took no input".into()))?;
+        std::thread::spawn(move || {
+            let _ = stdin.write_all(prompt.as_bytes());
+        });
 
-        let done = child
-            .wait_with_output()
+        let errors = child.stderr.take().map(|e| {
+            std::thread::spawn(move || {
+                let mut buf = String::new();
+                let _ = std::io::Read::read_to_string(&mut BufReader::new(e), &mut buf);
+                buf
+            })
+        });
+
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| Error::Other("claude produced no output".into()))?;
+
+        let mut streamed = String::new();
+        let mut result = None;
+        let mut reported = None;
+        for line in BufReader::new(stdout).lines().map_while(std::result::Result::ok) {
+            let Ok(v) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
+            match v.get("type").and_then(Value::as_str) {
+                Some("stream_event") => {
+                    let delta = &v["event"]["delta"];
+                    if delta.get("type").and_then(Value::as_str) != Some("text_delta") {
+                        continue;
+                    }
+                    if let Some(text) = delta.get("text").and_then(Value::as_str) {
+                        streamed.push_str(text);
+                        let _ = app.emit(
+                            "pr:draft",
+                            DraftChunk { task_id: &task_id, text },
+                        );
+                    }
+                }
+                Some("result") => {
+                    let text = v.get("result").and_then(Value::as_str).unwrap_or_default();
+                    if v.get("is_error").and_then(Value::as_bool) == Some(true) {
+                        reported = Some(text.to_string());
+                    } else {
+                        result = Some(text.to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let status = child
+            .wait()
             .map_err(|e| Error::Other(format!("claude did not finish: {e}")))?;
-        if !done.status.success() {
-            let why = String::from_utf8_lossy(&done.stderr);
-            let why = why.trim();
+        let stderr = errors
+            .and_then(|h| h.join().ok())
+            .unwrap_or_default();
+
+        if let Some(why) = reported {
+            return Err(Error::Other(format!("claude: {}", why.trim())));
+        }
+        if !status.success() {
+            let why = stderr.trim();
             return Err(Error::Other(if why.is_empty() {
                 "claude could not draft the description".into()
             } else {
                 format!("claude: {why}")
             }));
         }
-        Ok(String::from_utf8_lossy(&done.stdout).trim().to_string())
+        // The final message is authoritative; the deltas are what was shown.
+        Ok(result.unwrap_or(streamed).trim().to_string())
     })
     .await
     .map_err(|e| Error::Other(format!("drafting was interrupted: {e}")))??;

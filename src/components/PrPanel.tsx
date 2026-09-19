@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api } from "../lib/api";
 import { useStore } from "../store";
@@ -49,6 +50,17 @@ export function PrPanel({ task }: { task: TaskView }) {
   // Stop waiting for a draft if the panel goes away.
   useEffect(() => () => { if (pollRef.current) window.clearInterval(pollRef.current); }, []);
 
+  // The description arrives a few words at a time. Showing it as it is written
+  // is most of what makes this feel quick: the wait is the same, but it starts
+  // reading like an answer straight away instead of a spinner.
+  useEffect(() => {
+    const p = listen<{ task_id: string; text: string }>("pr:draft", (e) => {
+      if (e.payload.task_id !== task.id) return;
+      setBody((current) => current + e.payload.text);
+    });
+    return () => { void p.then((un) => un()); };
+  }, [task.id]);
+
   useEffect(() => {
     setTitle(task.name);
     setBody(task.issue_url ? `Jira: ${task.issue_url}\n` : "");
@@ -71,12 +83,16 @@ export function PrPanel({ task }: { task: TaskView }) {
   /// it knows what the diff cannot say.
   async function draftWithAgent() {
     setDrafting(true);
+    // Cleared so the streamed text is not appended to whatever was there.
+    setBody("");
     try {
       setBody((await api.draftPrDescription(task.id)).trim());
       toast("success", "Description drafted — edit it before opening the PR.");
       setDrafting(false);
       return;
     } catch (e) {
+      // Whatever was streamed before it failed is half an answer, not an answer.
+      setBody("");
       const pane = agentPanes[0];
       if (!pane) {
         setDrafting(false);
@@ -237,7 +253,7 @@ export function PrPanel({ task }: { task: TaskView }) {
               label="Description"
               hint={
                 drafting
-                  ? "Reading the diff and writing it up…"
+                  ? "Writing — it appears here as it goes."
                   : "Written from the diff by a fast model, as a handoff for whoever reviews this."
               }
             >

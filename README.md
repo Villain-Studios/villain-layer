@@ -130,6 +130,34 @@ It is deliberately not a bespoke chat UI: it is the same agent CLI you already
 pay for, in the same terminal, so there is no second API key and no second set of
 tool integrations to maintain.
 
+## Agents can drive the app
+
+Villain Layer hosts its own MCP server, so an agent it launches reaches Jira,
+GitHub and Slack through the credentials the app already holds — no second
+login, and no copy of your tokens in the agent's environment. It also sees live
+app state and can act on it.
+
+| | |
+|---|---|
+| Read | `list_tasks`, `list_repos`, `task_diff`, `jira_search`, `jira_get_issue` |
+| Write | `jira_create_issue`, `jira_comment`, `jira_transition`, `slack_post`, `start_work`, `open_prs` |
+
+The server binds an ephemeral port on loopback and is gated on a bearer token
+minted fresh each run. Writes are **not** confirmed — an agent can file a ticket
+or post to Slack unattended, which is the point, but worth knowing.
+
+Agents get the config automatically:
+
+- The chat folder holds a `.mcp.json`, written at start-up rather than only when
+  the app launches an agent — so running `claude` there yourself gets the same
+  tools and the same context file.
+- Task agents get it too. Where the agent's working directory is a git worktree,
+  the config lives in the task folder and is passed with `--mcp-config`, because
+  a generated `.mcp.json` inside a worktree would show up as an untracked change
+  and could be committed by accident. Agents without such a flag get the tools
+  only when they run at the task root, which is where multi-repo tasks start
+  them anyway.
+
 ## Appearance
 
 Settings → Appearance has two independent controls:

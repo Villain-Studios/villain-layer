@@ -4,6 +4,7 @@ mod config;
 mod error;
 mod git;
 mod integrations;
+mod mcp;
 mod pty;
 mod secrets;
 mod shellenv;
@@ -26,6 +27,24 @@ pub fn run() {
                 jira_types: Default::default(),
             };
             app.manage(state);
+
+            // Agents reach the app's Jira, GitHub and Slack connections through
+            // this rather than holding their own credentials. Bound before any
+            // agent can start, so the endpoint is always ready to hand out.
+            match tauri::async_runtime::block_on(mcp::serve(handle.clone())) {
+                Ok(e) => {
+                    println!("villain-layer mcp listening on {}", e.url);
+                    // Publish into the chat folder up front, not only when the
+                    // app launches an agent: running `claude` in that folder by
+                    // hand should get the same tools and the same context.
+                    let state = handle.state::<AppState>();
+                    if let Ok(dir) = commands::chat_dir(&state) {
+                        let _ = commands::write_chat_context(&state, &dir);
+                        let _ = mcp::write_config(&dir);
+                    }
+                }
+                Err(e) => eprintln!("villain-layer mcp unavailable: {e}"),
+            }
             // Resolve the login shell's PATH once, off the startup path.
             std::thread::spawn(|| {
                 shellenv::user_env();

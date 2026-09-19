@@ -243,6 +243,35 @@ impl Jira {
         Ok(())
     }
 
+    /// Create an issue. `description` is plain text; Jira wants ADF, so it is
+    /// wrapped into one paragraph per line.
+    pub async fn create_issue(
+        &self,
+        project_key: &str,
+        summary: &str,
+        description: &str,
+        issue_type: &str,
+        parent_key: Option<&str>,
+    ) -> Result<String> {
+        let mut fields = json!({
+            "project": { "key": project_key },
+            "summary": summary,
+            "issuetype": { "name": issue_type },
+            "description": text_to_adf(description),
+        });
+        if let Some(parent) = parent_key.filter(|p| !p.is_empty()) {
+            fields["parent"] = json!({ "key": parent });
+        }
+
+        let v = self
+            .json(
+                self.req(reqwest::Method::POST, "/rest/api/3/issue")
+                    .json(&json!({ "fields": fields })),
+            )
+            .await?;
+        Ok(str_at(&v, "key"))
+    }
+
     pub async fn comment(&self, key: &str, text: &str) -> Result<()> {
         let body = json!({
             "body": {
@@ -334,6 +363,25 @@ fn epic_key(fields: &Value) -> Option<String> {
         .and_then(|v| v.as_str())
         .filter(|s| s.contains('-'))
         .map(str::to_string)
+}
+
+/// Plain text as a minimal ADF document: one paragraph per non-empty line.
+pub fn text_to_adf(text: &str) -> Value {
+    let content: Vec<Value> = text
+        .split('\n')
+        .map(|line| {
+            if line.trim().is_empty() {
+                json!({ "type": "paragraph", "content": [] })
+            } else {
+                json!({
+                    "type": "paragraph",
+                    "content": [{ "type": "text", "text": line }]
+                })
+            }
+        })
+        .collect();
+
+    json!({ "type": "doc", "version": 1, "content": content })
 }
 
 fn str_at(v: &Value, key: &str) -> String {

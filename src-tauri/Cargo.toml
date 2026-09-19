@@ -20,7 +20,8 @@ tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process", "io-util"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process", "io-util", "net"] }
+axum = "0.8"
 portable-pty = "0.9"
 
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "rustls-native-certs", "http2", "charset", "system-proxy"] }

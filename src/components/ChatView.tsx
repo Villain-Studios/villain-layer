@@ -86,8 +86,9 @@ export function ChatView() {
               what you are working on without being told.
             </p>
             <p style={{ color: "var(--dimmer)" }}>
-              Reaching Jira, Slack or GitHub is separate: it uses your own CLI's MCP
-              servers, not the app's stored credentials.
+              It also reaches Jira, Slack and GitHub through this app's own
+              connections, so it can search tickets, file one, or start work on it
+              without you configuring anything separately.
             </p>
             <div className="row">
               {installed.length === 0 && <span>No agent CLIs found on your PATH.</span>}

@@ -22,6 +22,10 @@ pub struct AgentDef {
     pub program: &'static str,
     pub base_args: &'static [&'static str],
     pub prompt: PromptMode,
+    /// Flag for pointing the agent at an MCP config file outside its working
+    /// directory. Needed when the cwd is a git worktree, where dropping a
+    /// generated `.mcp.json` would show up as an untracked change.
+    pub mcp_config_flag: Option<&'static str>,
 }
 
 pub const AGENTS: &[AgentDef] = &[
@@ -31,6 +35,7 @@ pub const AGENTS: &[AgentDef] = &[
         program: "claude",
         base_args: &[],
         prompt: PromptMode::Positional,
+        mcp_config_flag: Some("--mcp-config"),
     },
     AgentDef {
         id: "codex",
@@ -38,6 +43,7 @@ pub const AGENTS: &[AgentDef] = &[
         program: "codex",
         base_args: &[],
         prompt: PromptMode::Positional,
+        mcp_config_flag: None,
     },
     AgentDef {
         id: "gemini",
@@ -45,6 +51,7 @@ pub const AGENTS: &[AgentDef] = &[
         program: "gemini",
         base_args: &[],
         prompt: PromptMode::Flag("-i"),
+        mcp_config_flag: None,
     },
     AgentDef {
         id: "cursor",
@@ -52,6 +59,7 @@ pub const AGENTS: &[AgentDef] = &[
         program: "cursor-agent",
         base_args: &[],
         prompt: PromptMode::Positional,
+        mcp_config_flag: None,
     },
     AgentDef {
         id: "opencode",
@@ -59,6 +67,7 @@ pub const AGENTS: &[AgentDef] = &[
         program: "opencode",
         base_args: &[],
         prompt: PromptMode::Typed,
+        mcp_config_flag: None,
     },
     AgentDef {
         id: "amp",
@@ -66,6 +75,7 @@ pub const AGENTS: &[AgentDef] = &[
         program: "amp",
         base_args: &[],
         prompt: PromptMode::Typed,
+        mcp_config_flag: None,
     },
     AgentDef {
         id: "aider",
@@ -73,6 +83,7 @@ pub const AGENTS: &[AgentDef] = &[
         program: "aider",
         base_args: &[],
         prompt: PromptMode::Typed,
+        mcp_config_flag: None,
     },
 ];
 

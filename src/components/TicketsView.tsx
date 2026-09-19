@@ -31,6 +31,14 @@ export function TicketsView() {
   const [starting, setStarting] = useState(false);
   const [shut, setShut] = useState<Record<string, boolean>>({});
   const [query, setQuery] = useState("");
+  const [sub, setSub] = useState<"mine" | "browse">("mine");
+  const [browseText, setBrowseText] = useState("");
+  const [whose, setWhose] = useState("notmine");
+  const [includeDone, setIncludeDone] = useState(false);
+  const [found, setFound] = useState<JiraIssue[] | null>(null);
+  const [searching, setSearching] = useState(false);
+  // Shared by both tabs: your own list filters in place, a search asks Jira.
+  const [kinds, setKinds] = useState<string[]>([]);
 
   const installed = agents.filter((a) => a.installed);
   const types = useMemo(() => typeMap(issueTypes), [issueTypes]);
@@ -52,6 +60,34 @@ export function TicketsView() {
       .then((s) => { setPicked(s.project_ids); setReason(s.reason); })
       .catch(() => { setPicked([]); setReason(null); });
   }, [open]);
+
+  // Narrowing by type or by who holds it is a different question for Jira, so
+  // it is asked again. The text box is not: searching on every keystroke would
+  // be a request per character.
+  useEffect(() => {
+    if (sub !== "browse" || found === null) return;
+    void browse();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kinds, whose, includeDone]);
+
+  useEffect(() => {
+    if (sub === "browse" && found === null) void browse();
+    // Only on entering the tab: re-running on every state change would search
+    // Jira on each keystroke.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sub]);
+
+  async function browse() {
+    setSearching(true);
+    try {
+      setFound(await api.jiraBrowse(browseText.trim(), whose, includeDone, kinds));
+    } catch (e) {
+      setFound([]);
+      fail(e);
+    } finally {
+      setSearching(false);
+    }
+  }
 
   async function startWork() {
     if (!open || picked.length === 0) return;
@@ -94,40 +130,197 @@ export function TicketsView() {
     );
   }
 
+  /// Issue types as toggles. Nothing picked means every type — the same thing
+  /// as picking them all, and less work to say.
+  function typeFilter() {
+    if (issueTypes.length === 0) return null;
+    return (
+      <div className="type-filter">
+        {issueTypes
+          .filter((t) => !t.subtask)
+          .map((t) => {
+            const on = kinds.includes(t.name);
+            return (
+              <button
+                key={t.id}
+                className={`type-pick${on ? " active" : ""}`}
+                onClick={() =>
+                  setKinds((c) =>
+                    c.includes(t.name) ? c.filter((n) => n !== t.name) : [...c, t.name],
+                  )
+                }
+              >
+                <IssueTypeIcon types={types} name={t.name} size={14} />
+                {t.name}
+              </button>
+            );
+          })}
+        {kinds.length > 0 && (
+          <button
+            className="type-pick clear"
+            onClick={() => setKinds([])}
+          >
+            Clear
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  /// One ticket, wherever it is being listed: your own epics or a search.
+  function ticketCard(issue: JiraIssue) {
+    const task = taskFor(issue.key);
+    return (
+      <div
+        key={issue.key}
+        className={
+          `ticket${task ? " started" : ""}` +
+          (isEpicType(types, issue.issue_type) ? " is-epic" : "")
+        }
+        style={{ borderLeftColor: hierarchyAccent(types, issue.issue_type) }}
+        title={task ? "Open the task already running for this ticket" : undefined}
+        onClick={() => {
+          // Already being worked on: go there rather than offering to start it
+          // a second time on the same branch.
+          if (task) select(task.id);
+          else setOpen(issue);
+        }}
+      >
+        <div className="top">
+          <IssueTypeIcon types={types} name={issue.issue_type} />
+          <span className="key-chip">{issue.key}</span>
+          <span className={`status-pill ${statusClass(issue.status_category)}`}>
+            {issue.status}
+          </span>
+          {task && <span className="chip add">in progress →</span>}
+        </div>
+        <div className="summary">{issue.summary}</div>
+        <div className="bottom">
+          <span>{issue.issue_type}</span>
+          {issue.priority && <span>· {issue.priority}</span>}
+          <span className={issue.assignee ? "" : "free"}>
+            · {issue.assignee ?? "unassigned"}
+          </span>
+          {issue.components.map((c) => (
+            <span key={c} className="group-chip">{c}</span>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   const q = query.trim().toLowerCase();
-  const filtered = q
-    ? issues.filter(
-        (i) =>
-          i.key.toLowerCase().includes(q) ||
-          i.summary.toLowerCase().includes(q) ||
-          i.labels.some((l) => l.toLowerCase().includes(q)) ||
-          i.components.some((c) => c.toLowerCase().includes(q)),
-      )
-    : issues;
-  const epics = groupByEpic(filtered);
+  const matchesKind = (i: JiraIssue) => kinds.length === 0 || kinds.includes(i.issue_type);
+  const filtered = issues.filter(
+    (i) =>
+      matchesKind(i) &&
+      (!q ||
+        i.key.toLowerCase().includes(q) ||
+        i.summary.toLowerCase().includes(q) ||
+        i.labels.some((l) => l.toLowerCase().includes(q)) ||
+        i.components.some((c) => c.toLowerCase().includes(q))),
+  );
   const taskFor = (key: string) => tasks.find((t) => t.issue_key === key);
+  const started = new Set(
+    tasks.map((t) => t.issue_key).filter((k): k is string => !!k),
+  );
+  const epics = groupByEpic(filtered, started);
 
   return (
     <div className="wide">
       <div className="wide-head">
         <h2>Tickets</h2>
-        <span className="sub">
-          {filtered.length} issue{filtered.length === 1 ? "" : "s"} in {epics.length} epic
-          {epics.length === 1 ? "" : "s"}
-        </span>
-        {issuesLoading && <Spinner />}
+        <div className="subtabs">
+          <button
+            className={sub === "mine" ? "active" : ""}
+            onClick={() => setSub("mine")}
+          >
+            Mine<span className="badge">{issues.length}</span>
+          </button>
+          <button
+            className={sub === "browse" ? "active" : ""}
+            onClick={() => setSub("browse")}
+          >
+            Find work
+          </button>
+        </div>
         <div className="spacer" />
-        <input
-          type="text"
-          style={{ width: 220 }}
-          placeholder="Filter by key, title, label…"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-        <button className="btn btn-sm" onClick={() => void refreshIssues()}>Refresh</button>
+        {sub === "mine" ? (
+          <>
+            <span className="sub">
+              {filtered.length} issue{filtered.length === 1 ? "" : "s"} in {epics.length} epic
+              {epics.length === 1 ? "" : "s"}
+            </span>
+            {issuesLoading && <Spinner />}
+            <input
+              type="text"
+              style={{ width: 220 }}
+              placeholder="Filter by key, title, label…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+            <button className="btn btn-sm" onClick={() => void refreshIssues()}>Refresh</button>
+          </>
+        ) : (
+          <span className="sub">
+            {found ? `${found.length} result${found.length === 1 ? "" : "s"}` : "Not searched yet"}
+          </span>
+        )}
       </div>
 
-      {epics.length === 0 && !issuesLoading && (
+      {sub === "browse" && (
+        <>
+          {typeFilter()}
+          <div className="card browse-bar">
+            <input
+              type="text"
+              autoFocus
+              placeholder="Words to look for, or paste a key like ACME-21042…"
+              value={browseText}
+              onChange={(e) => setBrowseText(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") void browse(); }}
+            />
+            <select value={whose} onChange={(e) => setWhose(e.target.value)}>
+              <option value="notmine">Not mine</option>
+              <option value="unassigned">Unassigned</option>
+              <option value="anyone">Anyone</option>
+            </select>
+            <label className="row" style={{ gap: 6, cursor: "pointer", whiteSpace: "nowrap" }}>
+              <input
+                type="checkbox"
+                style={{ width: "auto" }}
+                checked={includeDone}
+                onChange={(e) => setIncludeDone(e.target.checked)}
+              />
+              Include done
+            </label>
+            <button
+              className="btn btn-sm btn-primary"
+              disabled={searching}
+              onClick={() => void browse()}
+            >
+              {searching ? "Searching…" : "Search"}
+            </button>
+          </div>
+
+          {found && found.length === 0 && !searching && (
+            <div className="card">
+              <div className="muted">
+                Nothing matched. "Not mine" covers unassigned work as well as other
+                people's, so widening it rarely helps — try fewer words, or turn on
+                <b> Include done</b>.
+              </div>
+            </div>
+          )}
+          {found && found.length > 0 && (
+            <div className="found">{found.map(ticketCard)}</div>
+          )}
+        </>
+      )}
+
+      {sub === "mine" && typeFilter()}
+
+      {sub === "mine" && epics.length === 0 && !issuesLoading && (
         <div className="card">
           <div className="muted">
             {q ? `Nothing matches “${query}”.` : "No issues matched your JQL. Adjust it in Settings."}
@@ -135,7 +328,7 @@ export function TicketsView() {
         </div>
       )}
 
-      {epics.map((epic) => {
+      {sub === "mine" && epics.map((epic) => {
         const closed = shut[epic.key] ?? false;
         // Name the epic's own type from the site rather than assuming "Epic":
         // some Jiras rename the level-1 type.
@@ -154,6 +347,11 @@ export function TicketsView() {
               {epic.key ? <span className="key-chip">{epic.key}</span> : null}
               <span className="title">{epic.summary || (epic.key ? epic.key : "No epic")}</span>
               <span className="count">{epic.issues.length}</span>
+              {epic.live > 0 && (
+                <span className="chip add" title="Tickets in progress, or with a task open here">
+                  {epic.live} in flight
+                </span>
+              )}
               <div className="spacer" />
               {/* The epic is only openable when it is assigned to you too. */}
               {epic.issue && (
@@ -173,47 +371,7 @@ export function TicketsView() {
 
             {!closed && (
               <div className="epic-body">
-                {epic.issues.map((issue) => (
-                  <div
-                    key={issue.key}
-                    className={
-                      `ticket${taskFor(issue.key) ? " started" : ""}` +
-                      (isEpicType(types, issue.issue_type) ? " is-epic" : "")
-                    }
-                    style={{ borderLeftColor: hierarchyAccent(types, issue.issue_type) }}
-                    title={
-                      taskFor(issue.key)
-                        ? "Open the task already running for this ticket"
-                        : undefined
-                    }
-                    onClick={() => {
-                      // Already being worked on: go there rather than offering to
-                      // start it a second time on the same branch.
-                      const task = taskFor(issue.key);
-                      if (task) select(task.id);
-                      else setOpen(issue);
-                    }}
-                  >
-                    <div className="top">
-                      <IssueTypeIcon types={types} name={issue.issue_type} />
-                      <span className="key-chip">{issue.key}</span>
-                      <span className={`status-pill ${statusClass(issue.status_category)}`}>
-                        {issue.status}
-                      </span>
-                      {taskFor(issue.key) && (
-                        <span className="chip add">in progress →</span>
-                      )}
-                    </div>
-                    <div className="summary">{issue.summary}</div>
-                    <div className="bottom">
-                      <span>{issue.issue_type}</span>
-                      {issue.priority && <span>· {issue.priority}</span>}
-                      {issue.components.map((c) => (
-                        <span key={c} className="group-chip">{c}</span>
-                      ))}
-                    </div>
-                  </div>
-                ))}
+                {epic.issues.map(ticketCard)}
               </div>
             )}
           </div>

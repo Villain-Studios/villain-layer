@@ -185,7 +185,16 @@ export function paneState(pane: PaneInfo): { label: string; dot: string } {
 }
 
 /** Issues bucketed by epic, epics in key order, orphans last. */
-export function groupByEpic(issues: JiraIssue[]) {
+/**
+ * Issues grouped under their epic, with the epics that have work in flight
+ * first.
+ *
+ * "In flight" is either signal that something is actually happening: the ticket
+ * is in progress in Jira, or this app already has a task open for it. Sorting
+ * on it puts what you are in the middle of at the top, where an alphabetical
+ * list would bury it under whatever happens to start with an A.
+ */
+export function groupByEpic(issues: JiraIssue[], started: Set<string> = new Set()) {
   // An epic that heads a group is represented by that header. Listing it again
   // as a card in the orphan bucket would show the same ticket twice.
   const heads = new Set(
@@ -219,9 +228,22 @@ export function groupByEpic(issues: JiraIssue[]) {
     }
   }
 
+  const live = (b: { issues: JiraIssue[] }) =>
+    b.issues.filter(
+      (i) => i.status_category === "indeterminate" || started.has(i.key),
+    ).length;
+
   return [...buckets.values()]
     .filter((b) => b.issues.length > 0)
-    .sort((a, b) => (a.key === "" ? 1 : b.key === "" ? -1 : a.key.localeCompare(b.key)));
+    .map((b) => ({ ...b, live: live(b) }))
+    .sort((a, b) => {
+      // Whatever has no epic stays at the bottom either way: it is a leftovers
+      // bucket, not a thing being worked on.
+      if (a.key === "") return 1;
+      if (b.key === "") return -1;
+      if (a.live !== b.live) return b.live - a.live;
+      return a.key.localeCompare(b.key);
+    });
 }
 
 /** Repos bucketed by group, groups alphabetical, ungrouped last. */

@@ -1186,3 +1186,50 @@ textarea { resize: vertical; font-family: var(--mono); }
 }
 .type-pick:hover { border-color: var(--accent-dim); }
 .type-pick.active { color: var(--text); border-color: var(--accent); background: var(--panel-2); }
+
+/* Tickets: two ways of looking — your own queue, and everything else. */
+.subtabs { display: flex; gap: 2px; margin-left: 6px; }
+.subtabs button {
+  padding: 4px 11px;
+  font-size: 13px;
+  color: var(--dim);
+  border-radius: 20px;
+  border: 1px solid transparent;
+}
+.subtabs button:hover { color: var(--text); }
+.subtabs button.active {
+  color: var(--text);
+  background: var(--panel-2);
+  border-color: var(--accent-dim);
+}
+.subtabs .badge { margin-left: 6px; font-size: 11px; color: var(--dimmer); font-family: var(--mono); }
+
+.browse-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.browse-bar input[type="text"] { flex: 1; min-width: 160px; }
+.browse-bar select { width: auto; }
+
+/* Results are not grouped by epic: what matters is finding one ticket. */
+.found {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 8px;
+}
+
+/* Work nobody has claimed is the point of looking, so it should catch the eye. */
+.ticket .bottom .free { color: var(--green); }
+
+/* Type toggles, above whichever list is showing. */
+.type-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.type-filter .type-pick { padding: 4px 9px; font-size: 12.5px; }
+.type-pick.clear { color: var(--dimmer); }
+.type-pick.clear:hover { color: var(--red); border-color: var(--red); }

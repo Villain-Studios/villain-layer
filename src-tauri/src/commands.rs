@@ -1574,6 +1574,30 @@ pub async fn jira_issues(state: State<'_, AppState>) -> Result<Vec<jira::Issue>>
     client.search(&jql, 50).await
 }
 
+/// Look past your own queue: unassigned work, or anyone else's.
+///
+/// The JQL is built here rather than in the UI so what is typed stays a search
+/// term. Results are capped: this is for finding a ticket, not for paging
+/// through a backlog.
+#[tauri::command]
+pub async fn jira_browse(
+    state: State<'_, AppState>,
+    text: Option<String>,
+    whose: String,
+    include_done: Option<bool>,
+    types: Option<Vec<String>>,
+) -> Result<Vec<jira::Issue>> {
+    let (client, cfg) = jira_client(&state)?;
+    let jql = jira::browse_jql(
+        cfg.project_key.as_deref(),
+        text.as_deref(),
+        jira::Whose::parse(&whose),
+        include_done.unwrap_or(false),
+        &types.unwrap_or_default(),
+    );
+    client.search(&jql, 50).await
+}
+
 #[tauri::command]
 pub async fn jira_issue(state: State<'_, AppState>, key: String) -> Result<jira::Issue> {
     let (client, _) = jira_client(&state)?;

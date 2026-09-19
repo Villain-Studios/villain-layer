@@ -115,6 +115,8 @@ export const api = {
     invoke<string>("request_pr_description", { taskId, paneId }),
   takePrDescription: (taskId: string) =>
     invoke<string | null>("take_pr_description", { taskId }),
+  jiraBrowse: (text: string, whose: string, includeDone: boolean, types: string[]) =>
+    invoke<JiraIssue[]>("jira_browse", { text: text || null, whose, includeDone, types }),
   jiraCreateTask: (req: {
     summary: string;
     description: string;

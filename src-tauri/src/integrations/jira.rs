@@ -458,3 +458,165 @@ pub fn default_jql(project_key: Option<&str>) -> String {
         .unwrap_or_default();
     format!("{scope}assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC")
 }
+
+/// Quote a value as a JQL string literal.
+///
+/// Search text comes from a text box, and a stray quote would otherwise end
+/// the literal and let the rest of what was typed be read as query syntax.
+fn jql_string(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len() + 2);
+    out.push('"');
+    for c in raw.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            _ => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Whether something reads as an issue key rather than words to search for.
+fn looks_like_a_key(text: &str) -> bool {
+    let Some((project, number)) = text.split_once('-') else {
+        return false;
+    };
+    !project.is_empty()
+        && project
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+        && project.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+        && !number.is_empty()
+        && number.chars().all(|c| c.is_ascii_digit())
+}
+
+/// Who a browse query is looking at, beyond your own queue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Whose {
+    /// Nobody has picked it up.
+    Unassigned,
+    /// Anyone but you, including nobody.
+    NotMine,
+    /// Everyone, yourself included.
+    Anyone,
+}
+
+impl Whose {
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "unassigned" => Whose::Unassigned,
+            "anyone" => Whose::Anyone,
+            _ => Whose::NotMine,
+        }
+    }
+
+    fn clause(self) -> Option<&'static str> {
+        match self {
+            Whose::Unassigned => Some("assignee IS EMPTY"),
+            // `assignee != currentUser()` alone drops unassigned issues, which
+            // are the ones most worth finding.
+            Whose::NotMine => Some("(assignee IS EMPTY OR assignee != currentUser())"),
+            Whose::Anyone => None,
+        }
+    }
+}
+
+/// JQL for looking past your own queue.
+///
+/// An issue key is matched exactly — typing one is asking for that ticket, and
+/// a full-text search for it often finds everything that merely mentions it.
+pub fn browse_jql(
+    project_key: Option<&str>,
+    text: Option<&str>,
+    whose: Whose,
+    include_done: bool,
+    types: &[String],
+) -> String {
+    let mut parts: Vec<String> = Vec::new();
+
+    if let Some(key) = project_key.map(str::trim).filter(|k| !k.is_empty()) {
+        parts.push(format!("project = {key}"));
+    }
+    if let Some(clause) = whose.clause() {
+        parts.push(clause.to_string());
+    }
+    if !include_done {
+        parts.push("statusCategory != Done".into());
+    }
+    // Names, not ids: they are what the site reported and what the user picked.
+    let types: Vec<String> = types
+        .iter()
+        .map(|t| t.trim())
+        .filter(|t| !t.is_empty())
+        .map(|t| jql_string(t))
+        .collect();
+    if !types.is_empty() {
+        parts.push(format!("issuetype IN ({})", types.join(", ")));
+    }
+    if let Some(text) = text.map(str::trim).filter(|t| !t.is_empty()) {
+        parts.push(if looks_like_a_key(text) {
+            format!("key = {text}")
+        } else {
+            format!("text ~ {}", jql_string(text))
+        });
+    }
+
+    if parts.is_empty() {
+        return "ORDER BY updated DESC".into();
+    }
+    format!("{} ORDER BY updated DESC", parts.join(" AND "))
+}
+
+#[cfg(test)]
+mod browse_tests {
+    use super::*;
+
+    #[test]
+    fn a_key_is_looked_up_rather_than_searched_for() {
+        assert!(looks_like_a_key("ACME-21042"));
+        assert!(looks_like_a_key("AB1-7"));
+        assert!(!looks_like_a_key("acme-21042"), "lower case is prose, not a key");
+        assert!(!looks_like_a_key("ACME-"));
+        assert!(!looks_like_a_key("-21042"));
+        assert!(!looks_like_a_key("rounding error"));
+        assert!(!looks_like_a_key("ACME-21042-fix"));
+
+        assert!(browse_jql(None, Some("ACME-9"), Whose::Anyone, false, &[]).contains("key = ACME-9"));
+        assert!(browse_jql(None, Some("rounding"), Whose::Anyone, false, &[])
+            .contains("text ~ \"rounding\""));
+    }
+
+    #[test]
+    fn picked_types_narrow_the_search() {
+        let jql = browse_jql(None, None, Whose::Anyone, false, &["Bug".into(), "Epic".into()]);
+        assert!(jql.contains(r#"issuetype IN ("Bug", "Epic")"#), "{jql}");
+
+        // Nothing picked means every type, not none of them.
+        assert!(!browse_jql(None, None, Whose::Anyone, false, &[]).contains("issuetype"));
+        assert!(!browse_jql(None, None, Whose::Anyone, false, &["  ".into()]).contains("issuetype"));
+    }
+
+    #[test]
+    fn typed_quotes_cannot_escape_the_literal() {
+        let jql = browse_jql(None, Some("say \"hi\" \\ bye"), Whose::Anyone, false, &[]);
+        assert!(jql.contains("text ~ \"say \\\"hi\\\" \\\\ bye\""), "{jql}");
+    }
+
+    #[test]
+    fn unassigned_is_kept_in_what_is_not_mine() {
+        // The obvious `assignee != currentUser()` silently drops every issue
+        // nobody has picked up, which is most of what this view is for.
+        let mine_excluded = browse_jql(None, None, Whose::NotMine, false, &[]);
+        assert!(mine_excluded.contains("assignee IS EMPTY OR assignee != currentUser()"));
+
+        assert_eq!(
+            browse_jql(Some("ACME"), None, Whose::Unassigned, false, &[]),
+            "project = ACME AND assignee IS EMPTY AND statusCategory != Done ORDER BY updated DESC",
+        );
+        assert_eq!(
+            browse_jql(None, None, Whose::Anyone, true, &[]),
+            "ORDER BY updated DESC",
+        );
+    }
+}

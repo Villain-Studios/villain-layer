@@ -218,6 +218,20 @@ export function Settings() {
           </Field>
 
           <Field
+            label="Terminals"
+            hint="Agents are resumed rather than restarted where their CLI supports it, so the conversation carries on."
+          >
+            <div className="switch-list">
+              <Switch
+                label="Put terminals back when the app reopens"
+                detail="Panes that were open last time are reopened in the same worktrees."
+                checked={settings.ui.restore_panes}
+                onChange={(v) => void saveUi({ ...settings.ui, restore_panes: v })}
+              />
+            </div>
+          </Field>
+
+          <Field
             label={`Terminal text — ${settings.ui.terminal_font_size}px`}
             hint="Applies to running panes immediately; they re-fit to the new cell size."
           >

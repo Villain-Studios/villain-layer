@@ -49,6 +49,13 @@ pub fn run() {
             std::thread::spawn(|| {
                 shellenv::user_env();
             });
+
+            // Put back the panes that were open last time. Off the startup
+            // path too: each agent spawn waits on the login shell's PATH.
+            let restore = handle.clone();
+            std::thread::spawn(move || {
+                commands::restore_panes(&restore);
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

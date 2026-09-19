@@ -70,6 +70,9 @@ export function Terminals({ task }: { task: TaskView }) {
   }, [panes, active]);
 
   const installed = agents.filter((a) => a.installed);
+  const offerResume = resumable.filter(
+    (r) => !panes.some((p) => p.running && p.agent_id === r.agent_id),
+  );
   const scopeName = scope
     ? task.checkouts.find((c) => c.id === scope)?.project_name ?? "repo"
     : `all ${task.checkouts.length} repos`;
@@ -160,12 +163,15 @@ export function Terminals({ task }: { task: TaskView }) {
             onClick={() => setActive(p.id)}
           >
             <span
-              className={`dot ${p.limit_reached && p.running ? "idle" : p.running ? "live" : "gone"}`}
+              className={`dot ${p.notice && p.running ? "idle" : p.running ? "live" : "gone"}`}
             />
             {p.title}
-            {p.limit_reached && (
-              <span title="Reported a usage limit" style={{ color: "var(--amber)" }}>
-                ⚑
+            {p.notice && (
+              <span
+                title={p.notice === "trust_prompt" ? "Waiting: trust this folder?" : "Usage limit"}
+                style={{ color: "var(--amber)" }}
+              >
+                {p.notice === "trust_prompt" ? "?" : "⚑"}
               </span>
             )}
             {!p.running && p.exit_code !== null && (
@@ -210,7 +216,7 @@ export function Terminals({ task }: { task: TaskView }) {
           </>
         )}
 
-        {resumable.map((r) => (
+        {offerResume.map((r) => (
           <button
             key={`resume-${r.agent_id}`}
             className="btn btn-sm"
@@ -229,19 +235,30 @@ export function Terminals({ task }: { task: TaskView }) {
       </div>
 
       {(() => {
-        const stuck = panes.find((p) => p.id === active && p.limit_reached);
-        return stuck ? (
+        const p = panes.find((x) => x.id === active && x.notice);
+        if (!p) return null;
+        if (p.notice === "trust_prompt") {
+          return (
+            <div className="limit-banner">
+              <span>
+                <b>{p.title}</b> is asking whether to trust this folder — answer it in
+                the terminal below. Every task gets its own worktree, so this is asked
+                once per task, and nothing runs until it is answered.
+              </span>
+            </div>
+          );
+        }
+        return (
           <div className="limit-banner">
             <span>
-              <b>{stuck.title}</b> looks out of budget — it reported hitting a usage
-              limit.
+              <b>{p.title}</b> looks out of budget — it reported hitting a usage limit.
             </span>
             <div className="spacer" />
-            <button className="btn btn-sm btn-primary" onClick={() => startHandoff(stuck)}>
+            <button className="btn btn-sm btn-primary" onClick={() => startHandoff(p)}>
               Hand off to another agent…
             </button>
           </div>
-        ) : null;
+        );
       })()}
 
       <div className="pane-stack">
@@ -256,9 +273,9 @@ export function Terminals({ task }: { task: TaskView }) {
                 ? `Start an agent at the task root and it sees all ${task.checkouts.length} repos as sibling folders — the right choice when the change spans them.`
                 : "Start an agent in this worktree, or open a shell to run the dev server and tests beside it."}
             </p>
-            {resumable.length > 0 && (
+            {offerResume.length > 0 && (
               <div className="row" style={{ marginBottom: 6 }}>
-                {resumable.map((r) => (
+                {offerResume.map((r) => (
                   <button
                     key={r.agent_id}
                     className="btn btn-primary"

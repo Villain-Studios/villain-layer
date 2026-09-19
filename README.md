@@ -158,12 +158,21 @@ terminal and went the same way.
 **Resuming.** Panes do not survive the app closing — they are processes, not
 records. But the CLIs keep transcripts per working directory, and every task has
 its own, so the conversation can be picked up even though the process is gone.
-Where a saved conversation exists, Terminals offers *⟲ Resume Claude Code* with
-how long ago it was last active. The app reads each CLI's own store rather than
+Panes that were open when the app closed are reopened when it starts, resuming
+each agent's conversation where its CLI can — turn it off in Settings →
+Appearance. Where a saved conversation exists but nothing is running, Terminals
+also offers *⟲ Resume Claude Code* with how long ago it was last active. The app reads each CLI's own store rather than
 keeping its own list, so it is right about sessions it never started.
 
 Only Claude Code supports this today (`--continue`); the others are listed
 without it rather than claiming support that has not been verified.
+
+**A new worktree is an untrusted folder.** Claude Code asks "do you trust the
+files in this folder?" the first time it runs anywhere new, and every task is
+somewhere new — so it asks once per task, and until it is answered the agent has
+not started, written a transcript, or read the prompt it was given. That looks
+exactly like an agent silently doing nothing, so the app watches for the question
+and says so in the pane and in the Work overview.
 
 ## Agents can drive the app
 

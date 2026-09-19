@@ -153,12 +153,29 @@ pub struct LegacyWorkspace {
     pub created_at: DateTime<Utc>,
 }
 
+/// A pane that was open when the app last closed, so it can be put back.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SavedPane {
+    pub id: String,
+    pub task_id: String,
+    #[serde(default)]
+    pub checkout_id: Option<String>,
+    /// "agent" or "shell".
+    pub kind: String,
+    #[serde(default)]
+    pub agent_id: Option<String>,
+}
+
 /// Presentation preferences. Terminal text scales separately from the chrome,
 /// because xterm measures its own cell grid and a page zoom would fight it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UiPrefs {
     pub scale: f32,
     pub terminal_font_size: u16,
+    /// Put back the panes that were open when the app last closed, resuming
+    /// each agent's conversation where its CLI can.
+    #[serde(default = "yes")]
+    pub restore_panes: bool,
 }
 
 impl Default for UiPrefs {
@@ -166,6 +183,7 @@ impl Default for UiPrefs {
         Self {
             scale: 1.0,
             terminal_font_size: 13,
+            restore_panes: true,
         }
     }
 }
@@ -199,6 +217,8 @@ pub struct AppConfig {
     /// Only a bot can delete a bot's messages, so nobody else can clear these.
     #[serde(default)]
     pub slack_posted: Vec<crate::integrations::slack::Posted>,
+    #[serde(default)]
+    pub saved_panes: Vec<SavedPane>,
     #[serde(default)]
     pub jira: Option<JiraConfig>,
     #[serde(default)]

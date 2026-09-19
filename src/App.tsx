@@ -81,16 +81,24 @@ export default function App() {
   // Hitting a usage limit is the one thing worth interrupting for: the agent
   // has stopped working and will not say so again.
   useEffect(() => {
-    const p = listen<{ pane_id: string }>("pty:limit", async () => {
+    const p = listen<{ pane_id: string; notice: string | null }>("pty:notice", async (e) => {
       await refreshPanes().catch(() => {});
       const state = useStore.getState();
-      const pane = state.panes.find((x) => x.limit_reached && x.running);
+      const pane = state.panes.find((x) => x.id === e.payload.pane_id);
       if (!pane) return;
       const owner = state.tasks.find((t) => t.id === pane.task_id);
-      state.toast(
-        "error",
-        `${pane.title} hit a usage limit in ${owner?.name ?? "a task"} — open it to hand off to another agent.`,
-      );
+
+      if (e.payload.notice === "trust_prompt") {
+        state.toast(
+          "info",
+          `${pane.title} is asking whether to trust ${owner?.name ?? "the worktree"} — answer it in Terminals or it will not start.`,
+        );
+      } else if (e.payload.notice === "usage_limit") {
+        state.toast(
+          "error",
+          `${pane.title} hit a usage limit in ${owner?.name ?? "a task"} — open it to hand off to another agent.`,
+        );
+      }
     });
     return () => { void p.then((un) => un()); };
   }, [refreshPanes]);

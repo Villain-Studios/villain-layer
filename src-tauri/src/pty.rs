@@ -19,6 +19,17 @@ use crate::shellenv;
 /// Roughly one screenful of history per pane, replayed when React remounts it.
 const SCROLLBACK_LIMIT: usize = 256 * 1024;
 
+/// Phrases a CLI prints when it is waiting on the user rather than working.
+///
+/// Every task is a brand-new directory, so the trust question is not a rare
+/// edge case — it is the first thing an agent asks on every new task, and an
+/// unanswered one looks exactly like an agent that has silently done nothing.
+const TRUST_MARKERS: &[&str] = &[
+    "do you trust the files in this folder",
+    "trust the files in this directory",
+    "do you trust this folder",
+];
+
 /// Phrases the agent CLIs print when they will not do any more work.
 ///
 /// Best-effort and deliberately specific: a false positive only mislabels a
@@ -122,8 +133,9 @@ pub struct PaneInfo {
     pub exit_code: Option<i32>,
     pub started_at: DateTime<Utc>,
     pub last_output_at: DateTime<Utc>,
-    /// The agent said it is out of budget. Best-effort, from its own output.
-    pub limit_reached: bool,
+    /// Something is waiting on the user: "usage_limit" or "trust_prompt".
+    /// Read from the agent's own output, so best-effort.
+    pub notice: Option<String>,
 }
 
 struct PaneMeta {
@@ -176,8 +188,9 @@ struct OutputEvent<'a> {
 }
 
 #[derive(Serialize, Clone)]
-struct LimitEvent<'a> {
+struct NoticeEvent<'a> {
     pane_id: &'a str,
+    notice: Option<&'a str>,
 }
 
 #[derive(Serialize, Clone)]
@@ -239,7 +252,7 @@ impl PtyManager {
             exit_code: None,
             started_at: now,
             last_output_at: now,
-            limit_reached: false,
+            notice: None,
         };
 
         let pid = child.process_id();
@@ -280,15 +293,33 @@ impl PtyManager {
                                 meta.info.last_output_at = Utc::now();
                                 // Check the tail rather than this chunk: the
                                 // phrase can straddle a read boundary.
-                                if !meta.info.limit_reached {
+                                {
                                     let sb = pane.scrollback.lock();
                                     let tail = String::from_utf8_lossy(
                                         &sb[sb.len().saturating_sub(4096)..],
                                     )
                                     .to_lowercase();
-                                    if LIMIT_MARKERS.iter().any(|m| tail.contains(m)) {
-                                        meta.info.limit_reached = true;
-                                        let _ = app.emit("pty:limit", LimitEvent { pane_id: &id });
+
+                                    let found = if LIMIT_MARKERS.iter().any(|m| tail.contains(m)) {
+                                        Some("usage_limit")
+                                    } else if TRUST_MARKERS.iter().any(|m| tail.contains(m)) {
+                                        Some("trust_prompt")
+                                    } else {
+                                        None
+                                    };
+
+                                    // A trust prompt clears once answered, so
+                                    // let it come and go; a usage limit sticks.
+                                    if meta.info.notice.as_deref() != found
+                                        && meta.info.notice.as_deref() != Some("usage_limit")
+                                    {
+                                        meta.info.notice = found.map(str::to_string);
+                                        if found.is_some() {
+                                            let _ = app.emit(
+                                                "pty:notice",
+                                                NoticeEvent { pane_id: &id, notice: found },
+                                            );
+                                        }
                                     }
                                 }
                             }
@@ -513,6 +544,15 @@ mod tests {
     }
 
     #[test]
+    fn recognises_the_trust_question_every_new_worktree_triggers() {
+        let hit = |s: &str| TRUST_MARKERS.iter().any(|m| s.to_lowercase().contains(m));
+        assert!(hit("Do you trust the files in this folder?"));
+        assert!(hit("  Do you trust this folder?  "));
+        // Not the usage-limit wording, which is handled separately.
+        assert!(!hit("You've reached your usage limit"));
+    }
+
+    #[test]
     fn collapses_the_repaints_and_keeps_the_tail() {
         // A TUI rewrites the same row over and over.
         let raw = "thinking\nthinking\nthinking\n\n\n\ndone\nfinal";
@@ -534,6 +574,7 @@ mod tests {
 
         // Reading or writing code about rate limiting must not count.
         assert!(!hit("added a rate limiter to the gateway"));
+        assert!(!hit("Do you trust the files in this folder?"));
         assert!(!hit("see docs/rate-limits.md for the policy"));
         assert!(!hit("fn check_quota(user: &User) -> bool"));
     }

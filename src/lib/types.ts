@@ -83,8 +83,8 @@ export interface PaneInfo {
   exit_code: number | null;
   started_at: string;
   last_output_at: string;
-  /** The agent reported being out of budget, read from its own output. */
-  limit_reached: boolean;
+  /** Something is waiting on you: "usage_limit" or "trust_prompt". */
+  notice: string | null;
 }
 
 export interface AgentStatus {
@@ -203,6 +203,7 @@ export interface SlackConfig {
 export interface UiPrefs {
   scale: number;
   terminal_font_size: number;
+  restore_panes: boolean;
 }
 
 export interface Settings {

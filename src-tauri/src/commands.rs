@@ -9,12 +9,12 @@ use std::path::{Path, PathBuf};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
 use crate::agents;
 use crate::config::{
     Checkout, ConfigStore, GithubConfig, JiraConfig, MatchKind, Project, RepoRule,
-    RepoSet, SlackConfig, Task, UiPrefs,
+    RepoSet, SavedPane, SlackConfig, Task, UiPrefs,
 };
 use crate::error::{Error, Result};
 use crate::git;
@@ -885,11 +885,24 @@ pub fn spawn_shell(
     rows: Option<u16>,
     cols: Option<u16>,
 ) -> Result<PaneInfo> {
+    let pane = open_shell(&app, &state, task_id, checkout_id, rows, cols)?;
+    remember_pane(&state, &pane);
+    Ok(pane)
+}
+
+fn open_shell(
+    app: &AppHandle,
+    state: &AppState,
+    task_id: String,
+    checkout_id: Option<String>,
+    rows: Option<u16>,
+    cols: Option<u16>,
+) -> Result<PaneInfo> {
     let task = state.config.task(&task_id)?;
     let (cwd, scope, checkout_id) = resolve_scope(&state, &task, checkout_id.as_deref())?;
 
     state.ptys.spawn(
-        &app,
+        app,
         SpawnOptions {
             task_id,
             checkout_id,
@@ -918,10 +931,12 @@ pub fn spawn_agent(
     rows: Option<u16>,
     cols: Option<u16>,
 ) -> Result<PaneInfo> {
-    start_agent(
+    let pane = start_agent(
         &app, &state, task_id, agent_id, checkout_id, prompt,
         resume.unwrap_or(false), rows, cols,
-    )
+    )?;
+    remember_pane(&state, &pane);
+    Ok(pane)
 }
 
 /// Conversations that could be picked up again in a task's working directory.
@@ -1166,9 +1181,89 @@ pub fn pty_scrollback(state: State<AppState>, pane_id: String) -> Result<String>
     state.ptys.scrollback(&pane_id)
 }
 
+/// Remember a pane so it can be put back next launch.
+fn remember_pane(state: &AppState, pane: &PaneInfo) {
+    let saved = SavedPane {
+        id: pane.id.clone(),
+        task_id: pane.task_id.clone(),
+        checkout_id: pane.checkout_id.clone(),
+        kind: match pane.kind {
+            PaneKind::Agent => "agent".into(),
+            PaneKind::Shell => "shell".into(),
+        },
+        agent_id: pane.agent_id.clone(),
+    };
+    let _ = state.config.update(|c| c.saved_panes.push(saved));
+}
+
 #[tauri::command]
 pub fn close_pane(state: State<AppState>, pane_id: String) -> Result<()> {
+    // Closing a pane on purpose means not wanting it back.
+    let _ = state.config.update(|c| c.saved_panes.retain(|p| p.id != pane_id));
     state.ptys.close(&pane_id)
+}
+
+/// Put back what was open when the app last closed.
+///
+/// Agents are resumed rather than restarted where their CLI can do it, so the
+/// conversation continues instead of beginning again. Anything whose worktree
+/// or repository has since gone is dropped rather than failing the restore.
+pub fn restore_panes(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    if !state.config.read().ui.restore_panes {
+        return;
+    }
+
+    let saved = state.config.read().saved_panes;
+    if saved.is_empty() {
+        return;
+    }
+    // Rebuilt as each pane comes back with a new id.
+    let _ = state.config.update(|c| c.saved_panes.clear());
+
+    for pane in saved {
+        if state.config.task(&pane.task_id).is_err() {
+            continue;
+        }
+        let restored = match pane.kind.as_str() {
+            "agent" => {
+                let Some(agent_id) = pane.agent_id.clone() else {
+                    continue;
+                };
+                // Only resume if there is a conversation to resume.
+                let resume = resolve_scope(
+                    &state,
+                    &match state.config.task(&pane.task_id) {
+                        Ok(t) => t,
+                        Err(_) => continue,
+                    },
+                    pane.checkout_id.as_deref(),
+                )
+                .map(|(cwd, _, _)| {
+                    agents::resumable(&cwd).iter().any(|r| r.agent_id == agent_id)
+                })
+                .unwrap_or(false);
+
+                start_agent(
+                    app,
+                    &state,
+                    pane.task_id.clone(),
+                    agent_id,
+                    pane.checkout_id.clone(),
+                    None,
+                    resume,
+                    None,
+                    None,
+                )
+            }
+            _ => open_shell(app, &state, pane.task_id.clone(), pane.checkout_id.clone(), None, None),
+        };
+
+        match restored {
+            Ok(info) => remember_pane(&state, &info),
+            Err(e) => eprintln!("could not restore a pane: {e}"),
+        }
+    }
 }
 
 /// Stop the process but keep the pane and its scrollback on screen.
@@ -2210,6 +2305,7 @@ pub fn set_ui_prefs(state: State<AppState>, ui: UiPrefs) -> Result<()> {
     let ui = UiPrefs {
         scale: ui.scale.clamp(0.8, 1.6),
         terminal_font_size: ui.terminal_font_size.clamp(9, 24),
+        restore_panes: ui.restore_panes,
     };
     state.config.update(|c| c.ui = ui)
 }

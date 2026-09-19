@@ -139,8 +139,11 @@ export const selectedTask = (s: State) =>
 export const IDLE_AFTER_MS = 45_000;
 
 export function paneState(pane: PaneInfo): { label: string; dot: string } {
-  if (pane.limit_reached && pane.running) {
+  if (pane.running && pane.notice === "usage_limit") {
     return { label: "out of budget — hand off", dot: "gone" };
+  }
+  if (pane.running && pane.notice === "trust_prompt") {
+    return { label: "waiting: trust this folder?", dot: "idle" };
   }
   if (!pane.running) {
     return {

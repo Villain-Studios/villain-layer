@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { api } from "../lib/api";
+import { api, errMessage } from "../lib/api";
 import { paneState, taskTotals, useStore } from "../store";
 import type { TaskView } from "../lib/types";
 import { Confirm, ContextMenu, Field, Modal, Switch, type MenuItem } from "./ui";
@@ -35,6 +35,7 @@ export function Sidebar() {
   const [busy, setBusy] = useState(false);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [addingRepoTo, setAddingRepoTo] = useState<TaskView | null>(null);
+  const [adding, setAdding] = useState<string[]>([]);
   const [reason, setReason] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; task: TaskView } | null>(null);
   const [confirming, setConfirming] = useState<{
@@ -159,15 +160,28 @@ export function Sidebar() {
     });
   }
 
-  async function addRepo(task: TaskView, projectId: string) {
-    try {
-      await api.addCheckout(task.id, projectId);
-      await refreshTasks();
-      setAddingRepoTo(null);
-      setExpanded((e) => ({ ...e, [task.id]: true }));
-    } catch (e) {
-      fail(e);
+  /// Add every repo picked, reporting per repo rather than stopping at the
+  /// first failure: one worktree that will not create is no reason to skip the
+  /// rest, and the user needs to know which one it was.
+  async function addRepos(task: TaskView) {
+    setBusy(true);
+    const failed: string[] = [];
+    for (const id of adding) {
+      try {
+        await api.addCheckout(task.id, id);
+      } catch (e) {
+        failed.push(`${projects.find((p) => p.id === id)?.name ?? id}: ${errMessage(e)}`);
+      }
     }
+    await refreshTasks();
+    setBusy(false);
+    setAddingRepoTo(null);
+    setAdding([]);
+    setExpanded((e) => ({ ...e, [task.id]: true }));
+
+    const added = adding.length - failed.length;
+    if (added > 0) toast("success", `${added} worktree${added === 1 ? "" : "s"} on ${task.branch}`);
+    if (failed.length) toast("error", failed.join("\n"));
   }
 
   /// git refuses to remove a worktree with uncommitted or untracked files. Say
@@ -564,20 +578,39 @@ export function Sidebar() {
       )}
 
       {addingRepoTo && (
-        <Modal title={`Add a repo to ${addingRepoTo.name}`} onClose={() => setAddingRepoTo(null)}>
-          <div className="muted" style={{ marginBottom: 10 }}>
-            A worktree on <code>{addingRepoTo.branch}</code> is created beside the others.
-          </div>
-          {available(addingRepoTo).map((p) => (
-            <div
-              key={p.id}
-              className="repo-pick"
-              onClick={() => void addRepo(addingRepoTo, p.id)}
-            >
-              <span style={{ flex: 1 }}>{p.name}</span>
-              <span className="path">{p.path}</span>
-            </div>
-          ))}
+        <Modal
+          title={`Add repositories to ${addingRepoTo.issue_key ?? addingRepoTo.branch}`}
+          onClose={() => { setAddingRepoTo(null); setAdding([]); }}
+          footer={
+            <>
+              <button
+                className="btn"
+                onClick={() => { setAddingRepoTo(null); setAdding([]); }}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn btn-primary"
+                disabled={busy || adding.length === 0}
+                onClick={() => void addRepos(addingRepoTo)}
+              >
+                {busy
+                  ? "Creating…"
+                  : `Add ${adding.length} repo${adding.length === 1 ? "" : "s"}`}
+              </button>
+            </>
+          }
+        >
+          <Field
+            label="Repositories"
+            hint={`A worktree on ${addingRepoTo.branch} is created for each, beside the ones already in this task.`}
+          >
+            <RepoPicker
+              projects={available(addingRepoTo)}
+              picked={adding}
+              onChange={setAdding}
+            />
+          </Field>
         </Modal>
       )}
     </div>

@@ -3,7 +3,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { api } from "../lib/api";
 import { groupByEpic, useStore } from "../store";
 import type { JiraIssue, JiraPage, JiraTransition } from "../lib/types";
-import { Field, Modal, Spinner } from "./ui";
+import { ContextMenu, Field, Modal, Spinner, type MenuItem } from "./ui";
 import { RepoPicker } from "./RepoPicker";
 import { IssueTypeIcon, hierarchyAccent, isEpicType, typeMap } from "./IssueType";
 
@@ -42,6 +42,9 @@ export function TicketsView() {
   // Shared by both tabs: your own list filters in place, a search asks Jira.
   const [kinds, setKinds] = useState<string[]>([]);
   const [syncing, setSyncing] = useState<string | null>(null);
+  // Held as built items rather than a subject, so an epic header and a ticket
+  // card can each offer what makes sense for them.
+  const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
 
   const installed = agents.filter((a) => a.installed);
   const jiraBase = settings?.jira?.base_url.replace(/\/+$/, "") ?? "";
@@ -80,6 +83,46 @@ export function TicketsView() {
     // Jira on each keystroke.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sub]);
+
+  function copy(text: string, what: string) {
+    navigator.clipboard
+      .writeText(text)
+      .then(() => toast("success", `Copied ${what}`))
+      .catch(() => toast("error", "Could not reach the clipboard"));
+  }
+
+  /// Opening it in Jira and taking its link are the same wherever it is shown,
+  /// and an epic known only through its children still has both.
+  function linkItems(key: string, summary: string, after = true): MenuItem[] {
+    const link = `${jiraBase}/browse/${key}`;
+    return [
+      // A divider only when something precedes them.
+      { label: "Open in Jira", separated: after, onSelect: () => void openUrl(link).catch(fail) },
+      { label: "Copy link", onSelect: () => copy(link, link) },
+      { label: `Copy ${key}`, onSelect: () => copy(key, key) },
+      { label: "Copy summary", onSelect: () => copy(`${key} ${summary}`, key) },
+    ];
+  }
+
+  /// What you can do with a ticket without opening it.
+  function issueMenu(issue: JiraIssue): MenuItem[] {
+    const task = taskFor(issue.key);
+    const items: MenuItem[] = [
+      {
+        label: task ? "Open task" : "Start work…",
+        onSelect: () => (task ? select(task.id) : setOpen(issue)),
+      },
+      ...linkItems(issue.key, issue.summary),
+    ];
+    if (task && issue.status_category !== "indeterminate") {
+      items.push({
+        label: "Move to in progress",
+        separated: true,
+        onSelect: () => void syncStatus(issue.key),
+      });
+    }
+    return items;
+  }
 
   /// Bring a ticket back into step with the work already happening here.
   async function syncStatus(key: string) {
@@ -206,6 +249,10 @@ export function TicketsView() {
         }
         style={{ borderLeftColor: hierarchyAccent(types, issue.issue_type) }}
         title={task ? "Open the task already running for this ticket" : undefined}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setMenu({ x: e.clientX, y: e.clientY, items: issueMenu(issue) });
+        }}
         onClick={() => {
           // Already being worked on: go there rather than offering to start it
           // a second time on the same branch.
@@ -416,6 +463,27 @@ export function TicketsView() {
             <div
               className="epic-head"
               onClick={() => setShut((c) => ({ ...c, [epic.key]: !closed }))}
+              onContextMenu={(e) => {
+                if (!epic.key) return;
+                e.preventDefault();
+                const own = epic.issue;
+                setMenu({
+                  x: e.clientX,
+                  y: e.clientY,
+                  items: [
+                    ...(own
+                      ? [{
+                          label: taskFor(own.key) ? "Open task" : "Start work…",
+                          onSelect: () =>
+                            taskFor(own.key)
+                              ? select(taskFor(own.key)!.id)
+                              : setOpen(own),
+                        }]
+                      : []),
+                    ...linkItems(epic.key, epic.summary, Boolean(own)),
+                  ],
+                });
+              }}
             >
               <span className={`chev${closed ? "" : " open"}`}>▶</span>
               {epic.key && <IssueTypeIcon types={types} name={epicTypeName} size={18} />}
@@ -473,6 +541,15 @@ export function TicketsView() {
           </div>
         );
       })}
+
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          items={menu.items}
+          onClose={() => setMenu(null)}
+        />
+      )}
 
       {open && (
         <Modal

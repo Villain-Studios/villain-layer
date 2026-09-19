@@ -885,9 +885,7 @@ pub fn spawn_shell(
     rows: Option<u16>,
     cols: Option<u16>,
 ) -> Result<PaneInfo> {
-    let pane = open_shell(&app, &state, task_id, checkout_id, rows, cols)?;
-    remember_pane(&state, &pane);
-    Ok(pane)
+    open_shell(&app, &state, task_id, checkout_id, rows, cols)
 }
 
 fn open_shell(
@@ -901,7 +899,7 @@ fn open_shell(
     let task = state.config.task(&task_id)?;
     let (cwd, scope, checkout_id) = resolve_scope(&state, &task, checkout_id.as_deref())?;
 
-    state.ptys.spawn(
+    let pane = state.ptys.spawn(
         app,
         SpawnOptions {
             task_id,
@@ -916,7 +914,9 @@ fn open_shell(
             cols,
             initial_input: None,
         },
-    )
+    )?;
+    remember_pane(state, &pane);
+    Ok(pane)
 }
 
 #[tauri::command]
@@ -931,12 +931,10 @@ pub fn spawn_agent(
     rows: Option<u16>,
     cols: Option<u16>,
 ) -> Result<PaneInfo> {
-    let pane = start_agent(
+    start_agent(
         &app, &state, task_id, agent_id, checkout_id, prompt,
         resume.unwrap_or(false), rows, cols,
-    )?;
-    remember_pane(&state, &pane);
-    Ok(pane)
+    )
 }
 
 /// Conversations that could be picked up again in a task's working directory.
@@ -1016,7 +1014,7 @@ pub(crate) fn start_agent(
 
     pretrust_own_dir(state, &agent_id, &cwd);
 
-    state.ptys.spawn(
+    let pane = state.ptys.spawn(
         app,
         SpawnOptions {
             task_id,
@@ -1031,7 +1029,9 @@ pub(crate) fn start_agent(
             cols,
             initial_input,
         },
-    )
+    )?;
+    remember_pane(state, &pane);
+    Ok(pane)
 }
 
 /// Panes that belong to the standing chat rather than to any task.
@@ -1163,9 +1163,7 @@ pub fn spawn_chat(
     agent_id: String,
     prompt: Option<String>,
 ) -> Result<PaneInfo> {
-    let pane = open_chat(&app, &state, agent_id, prompt, None, false)?;
-    remember_pane(&state, &pane);
-    Ok(pane)
+    open_chat(&app, &state, agent_id, prompt, None, false)
 }
 
 fn open_chat(
@@ -1207,7 +1205,7 @@ fn open_chat(
 
     pretrust_own_dir(state, &agent_id, &dir.to_string_lossy());
 
-    state.ptys.spawn(
+    let pane = state.ptys.spawn(
         app,
         SpawnOptions {
             task_id: CHAT_TASK_ID.to_string(),
@@ -1222,7 +1220,9 @@ fn open_chat(
             cols: None,
             initial_input,
         },
-    )
+    )?;
+    remember_pane(state, &pane);
+    Ok(pane)
 }
 
 #[tauri::command]
@@ -1241,6 +1241,10 @@ pub fn pty_scrollback(state: State<AppState>, pane_id: String) -> Result<String>
 }
 
 /// Remember a pane so it can be put back next launch.
+///
+/// Called where the pane is actually created rather than by each caller: an
+/// agent started from a ticket went through `start_agent` directly and so was
+/// never recorded, and vanished for good at the next restart.
 fn remember_pane(state: &AppState, pane: &PaneInfo) {
     let saved = SavedPane {
         id: pane.id.clone(),
@@ -1278,7 +1282,9 @@ pub fn restore_panes(app: &AppHandle) {
     if saved.is_empty() {
         return;
     }
-    // Rebuilt as each pane comes back with a new id.
+    // The list is rebuilt as each pane comes back with a new id, and only then
+    // written. Clearing it up front meant a restore that failed — or an app
+    // killed part-way through one — lost the record of what had been open.
     let _ = state.config.update(|c| c.saved_panes.clear());
 
     for pane in saved {

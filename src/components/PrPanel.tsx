@@ -63,19 +63,32 @@ export function PrPanel({ task }: { task: TaskView }) {
     }
   }
 
-  /// The agent that did the work knows what the diff cannot say: what it tried,
-  /// what it left out, where a reviewer should look hardest. Ask it, rather than
-  /// making the reviewer reconstruct that from the changes.
+  /// Draft the description from the diff, with a cheap one-shot model.
+  ///
+  /// Fast because it asks nothing of the working agent: no shared context to
+  /// re-read, no waiting for it to finish its turn, no file to hand back. If
+  /// that is not possible, fall back to asking the agent itself — slower, but
+  /// it knows what the diff cannot say.
   async function draftWithAgent() {
-    const pane = agentPanes[0];
-    if (!pane) {
-      toast("error", "No running agent in this task. Start one in Terminals first.");
+    setDrafting(true);
+    try {
+      setBody((await api.draftPrDescription(task.id)).trim());
+      toast("success", "Description drafted — edit it before opening the PR.");
+      setDrafting(false);
       return;
+    } catch (e) {
+      const pane = agentPanes[0];
+      if (!pane) {
+        setDrafting(false);
+        fail(e);
+        return;
+      }
+      toast("info", `Asking ${pane.title} instead — this one takes longer.`);
     }
+
+    const pane = agentPanes[0];
     try {
       await api.requestPrDescription(task.id, pane.id);
-      setDrafting(true);
-      toast("info", `Asked ${pane.title} to write the description — watch it work in Terminals.`);
 
       const started = Date.now();
       if (pollRef.current) window.clearInterval(pollRef.current);
@@ -224,23 +237,19 @@ export function PrPanel({ task }: { task: TaskView }) {
               label="Description"
               hint={
                 drafting
-                  ? "Waiting for the agent to save its draft…"
-                  : "Let the agent that did the work write this — it knows what the diff does not."
+                  ? "Reading the diff and writing it up…"
+                  : "Written from the diff by a fast model, as a handoff for whoever reviews this."
               }
             >
               <textarea rows={8} value={body} onChange={(e) => setBody(e.target.value)} />
               <div className="row" style={{ marginTop: 8 }}>
                 <button
                   className="btn btn-sm"
-                  disabled={drafting || agentPanes.length === 0}
-                  title={
-                    agentPanes.length === 0
-                      ? "Start an agent in Terminals first"
-                      : `Ask ${agentPanes[0].title} to write it`
-                  }
+                  disabled={drafting}
+                  title="Write the description from the diff on this branch"
                   onClick={() => void draftWithAgent()}
                 >
-                  {drafting ? "Drafting…" : "✨ Draft with agent"}
+                  {drafting ? "Drafting…" : "✨ Draft description"}
                 </button>
                 {drafting && <Spinner />}
               </div>

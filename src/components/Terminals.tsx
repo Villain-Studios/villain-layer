@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api";
+import { read, write } from "../lib/persist";
 import { useStore } from "../store";
 import type { PaneInfo, Resumable, TaskView } from "../lib/types";
 import { TerminalPane } from "./Terminal";
-import { Field, Modal } from "./ui";
+import { ContextMenu, Field, Modal } from "./ui";
+import type { MenuItem } from "./ui";
 
 function ago(unixSeconds: number): string {
   const s = Math.max(0, Math.round(Date.now() / 1000 - unixSeconds));
@@ -32,6 +34,8 @@ export function Terminals({ task }: { task: TaskView }) {
   const [handoffLoading, setHandoffLoading] = useState(false);
   const [stopOld, setStopOld] = useState(true);
   const [resumable, setResumable] = useState<Resumable[]>([]);
+  const [addMenu, setAddMenu] = useState<{ x: number; y: number } | null>(null);
+  const addRef = useRef<HTMLButtonElement>(null);
   /** null = the task root, where every repo is visible as a sibling folder. */
   const [scope, setScope] = useState<string | null>(null);
 
@@ -61,12 +65,41 @@ export function Terminals({ task }: { task: TaskView }) {
       .finally(() => setPromptLoading(false));
   }, [launching, task.id]);
 
-  // Keep a sensible pane selected as panes come and go.
+  // Keep a sensible pane selected as panes come and go. Panes are given fresh
+  // ids every launch, so what survives a restart is the position in the bar,
+  // not the identity of the pane.
   useEffect(() => {
     if (panes.length === 0) { setActive(null); return; }
     if (!active || !panes.some((p) => p.id === active)) {
-      setActive(panes[panes.length - 1].id);
+      const want = read<number>(`activePane.${task.id}`, panes.length - 1);
+      const i = Number.isInteger(want) && want >= 0 && want < panes.length
+        ? want
+        : panes.length - 1;
+      setActive(panes[i].id);
     }
+  }, [panes, active, task.id]);
+
+  useEffect(() => {
+    const i = panes.findIndex((p) => p.id === active);
+    if (i >= 0) write(`activePane.${task.id}`, i);
+  }, [active, panes, task.id]);
+
+  // Ctrl+Tab cycles panes the way a browser cycles tabs. It has to be caught in
+  // the capture phase: the focused terminal would otherwise take the key and
+  // send a literal tab to the process.
+  useEffect(() => {
+    if (panes.length < 2) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Tab" || !e.ctrlKey || e.metaKey || e.altKey) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const at = panes.findIndex((p) => p.id === active);
+      const from = at < 0 ? 0 : at;
+      const next = (from + (e.shiftKey ? -1 : 1) + panes.length) % panes.length;
+      setActive(panes[next].id);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, [panes, active]);
 
   const installed = agents.filter((a) => a.installed);
@@ -76,6 +109,25 @@ export function Terminals({ task }: { task: TaskView }) {
   const scopeName = scope
     ? task.checkouts.find((c) => c.id === scope)?.project_name ?? "repo"
     : `all ${task.checkouts.length} repos`;
+
+  // One "+" rather than a button per CLI: the bar has to stay readable with a
+  // pane or two already open, and the list grows with every agent installed.
+  const addItems: MenuItem[] = [
+    ...offerResume.map((r) => ({
+      label: `⟲ Resume ${r.name}${r.last_active ? ` · ${ago(r.last_active)}` : ""}`,
+      onSelect: () => void resume(r.agent_id),
+    })),
+    ...installed.map((a, i) => ({
+      label: a.name,
+      onSelect: () => setLaunching(a.id),
+      separated: i === 0 && offerResume.length > 0,
+    })),
+    {
+      label: "Shell",
+      onSelect: () => void launchShell(),
+      separated: installed.length > 0 || offerResume.length > 0,
+    },
+  ];
 
   async function launchAgent(agentId: string) {
     try {
@@ -216,23 +268,31 @@ export function Terminals({ task }: { task: TaskView }) {
           </>
         )}
 
-        {offerResume.map((r) => (
-          <button
-            key={`resume-${r.agent_id}`}
-            className="btn btn-sm"
-            title={`${r.sessions} saved conversation${r.sessions === 1 ? "" : "s"} in this folder`}
-            onClick={() => void resume(r.agent_id)}
-          >
-            ⟲ Resume {r.name}
-          </button>
-        ))}
-        {installed.map((a) => (
-          <button key={a.id} className="btn btn-sm" onClick={() => setLaunching(a.id)}>
-            + {a.name}
-          </button>
-        ))}
-        <button className="btn btn-sm" onClick={launchShell}>+ Shell</button>
+        <button
+          ref={addRef}
+          className="btn btn-sm btn-add"
+          title="New pane"
+          onClick={() =>
+            setAddMenu((open) => {
+              if (open) return null;
+              const r = addRef.current?.getBoundingClientRect();
+              return r ? { x: r.right, y: r.bottom + 4 } : null;
+            })
+          }
+        >
+          + <span className="caret">▾</span>
+        </button>
       </div>
+
+      {addMenu && (
+        <ContextMenu
+          x={addMenu.x}
+          y={addMenu.y}
+          ignore={addRef}
+          items={addItems}
+          onClose={() => setAddMenu(null)}
+        />
+      )}
 
       {(() => {
         const p = panes.find((x) => x.id === active && x.notice);

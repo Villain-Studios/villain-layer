@@ -109,6 +109,8 @@ export const api = {
   jiraComment: (key: string, text: string) => invoke<void>("jira_comment", { key, text }),
   taskPrompt: (taskId: string) => invoke<string>("task_prompt", { taskId }),
   handoffPrompt: (paneId: string) => invoke<string>("handoff_prompt", { paneId }),
+  draftPrDescription: (taskId: string) =>
+    invoke<string>("draft_pr_description", { taskId }),
   requestPrDescription: (taskId: string, paneId: string) =>
     invoke<string>("request_pr_description", { taskId, paneId }),
   takePrDescription: (taskId: string) =>

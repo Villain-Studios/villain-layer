@@ -97,6 +97,9 @@ textarea { resize: vertical; font-family: var(--mono); }
   height: 100%;
 }
 .app.with-tasks { grid-template-columns: 240px 1fr 300px; }
+/* Hidden rather than unmounted, so expanded groups and scroll survive. */
+.app.no-sidebar { grid-template-columns: 1fr; }
+.app.no-sidebar > .sidebar { display: none; }
 
 .titlebar {
   height: 28px;
@@ -899,7 +902,58 @@ textarea { resize: vertical; font-family: var(--mono); }
 
 /* -------------------------------------------------------------- chat view */
 
-.chat { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+/* Chats run down the left rather than across the top: they are long lived and
+   unbounded in number, which is the case a tab strip handles worst. */
+.chat { flex: 1; display: flex; overflow: hidden; }
+.chat-list {
+  width: 230px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+}
+.chat-list-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px 7px 12px;
+  border-bottom: 1px solid var(--border-soft);
+  font-size: 12px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.chat-list-body { flex: 1; overflow-y: auto; padding: 6px; }
+.chat-list-empty { padding: 10px 6px; color: var(--dimmer); font-size: 12.5px; }
+.chat-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  color: var(--dim);
+  cursor: pointer;
+}
+.chat-item:hover { background: var(--panel-2); }
+.chat-item.active {
+  color: var(--text);
+  background: var(--panel-2);
+  border-color: var(--accent-dim);
+}
+.chat-item-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.chat-item-title {
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chat-item-sub { font-size: 11px; color: var(--dimmer); }
+.chat-item .x { color: var(--dimmer); font-size: 14px; line-height: 1; opacity: 0; }
+.chat-item:hover .x, .chat-item.active .x { opacity: 1; }
+.chat-item .x:hover { color: var(--red); }
 
 /* -------------------------------------------------------------- repos view */
 
@@ -1082,3 +1136,18 @@ textarea { resize: vertical; font-family: var(--mono); }
   flex: none;
 }
 .limit-banner b { color: var(--text); }
+
+/* The pane bar's single launcher. Wider than its glyph so it stays an easy
+   target, and the caret says it opens a menu rather than acting immediately. */
+.btn-add {
+  font-size: 16px;
+  line-height: 1;
+  padding: 4px 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.btn-add .caret {
+  font-size: 10px;
+  opacity: 0.65;
+}

@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { ReactNode, RefObject } from "react";
 import { useEffect, useRef, useState } from "react";
 
 export function Modal({
@@ -81,6 +81,27 @@ export function GearIcon({ size = 18 }: { size?: number }) {
   );
 }
 
+/** A panel with its left column marked, for showing and hiding the task list. */
+export function PanelIcon({ size = 17, open = true }: { size?: number; open?: boolean }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinejoin="round"
+      style={{ display: "block" }}
+      aria-hidden="true"
+    >
+      <rect x="3" y="4" width="18" height="16" rx="2.5" />
+      <line x1="9.5" y1="4" x2="9.5" y2="20" />
+      {open && <rect x="3" y="4" width="6.5" height="16" rx="2.5" fill="currentColor" opacity="0.35" stroke="none" />}
+    </svg>
+  );
+}
+
 /** A labelled toggle row, for settings that read better as switches. */
 export function Switch({
   label, detail, checked, disabled, onChange,
@@ -123,28 +144,53 @@ export interface MenuItem {
  * left and tasks near the bottom would otherwise open a menu below the window.
  */
 export function ContextMenu({
-  x, y, items, onClose,
+  x, y, items, onClose, ignore,
 }: {
   x: number;
   y: number;
   items: MenuItem[];
   onClose: () => void;
+  /**
+   * An element whose clicks must not dismiss the menu, so the button that
+   * opened it can close it again instead of closing and reopening.
+   */
+  ignore?: RefObject<HTMLElement | null>;
 }) {
   const ref = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState({ left: x, top: y });
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
 
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const r = el.getBoundingClientRect();
-    setPos({
-      left: Math.min(x, window.innerWidth - r.width - 8),
-      top: Math.min(y, window.innerHeight - r.height - 8),
-    });
+
+    // The app chrome is scaled with CSS `zoom`, which scales fixed positioning
+    // too: a rect comes back in viewport pixels while `left`/`top` are set in
+    // the element's own units. Rather than assume the factor — engines differ
+    // on what they report — measure it: move the menu a known distance and see
+    // how far it actually went.
+    el.style.left = "0px";
+    el.style.top = "0px";
+    const origin = el.getBoundingClientRect();
+    el.style.left = "100px";
+    el.style.top = "100px";
+    const moved = el.getBoundingClientRect();
+    const sx = (moved.left - origin.left) / 100 || 1;
+    const sy = (moved.top - origin.top) / 100 || 1;
+
+    const left = Math.max(8, Math.min(x, window.innerWidth - origin.width - 8));
+    const top = Math.max(8, Math.min(y, window.innerHeight - origin.height - 8));
+    setPos({ left: (left - origin.left) / sx, top: (top - origin.top) / sy });
   }, [x, y]);
 
   useEffect(() => {
-    const close = () => onClose();
+    const close = (e: MouseEvent) => {
+      // A press inside the menu must not dismiss it: closing on mousedown
+      // detaches the item before the browser can deliver its click, and the
+      // item then does nothing at all.
+      if (ref.current?.contains(e.target as Node)) return;
+      if (ignore?.current?.contains(e.target as Node)) return;
+      onClose();
+    };
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     // Capture so a click anywhere dismisses before it does anything else.
     window.addEventListener("mousedown", close, true);
@@ -153,13 +199,14 @@ export function ContextMenu({
       window.removeEventListener("mousedown", close, true);
       window.removeEventListener("keydown", onKey);
     };
-  }, [onClose]);
+  }, [onClose, ignore]);
 
   return (
     <div
       ref={ref}
       className="ctx-menu"
-      style={{ left: pos.left, top: pos.top }}
+      // Hidden until measured, so it never flashes at the unadjusted spot.
+      style={{ ...(pos ?? {}), visibility: pos ? "visible" : "hidden" }}
       onMouseDown={(e) => e.stopPropagation()}
       onContextMenu={(e) => e.preventDefault()}
     >

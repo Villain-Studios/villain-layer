@@ -1,12 +1,26 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api";
+import { read, write } from "../lib/persist";
 import { CHAT_TASK_ID, useStore } from "../store";
 import { TerminalPane } from "./Terminal";
+import { ContextMenu, Confirm } from "./ui";
+import type { MenuItem } from "./ui";
+
+function started(unix: string): string {
+  const d = new Date(unix);
+  return Number.isNaN(d.getTime())
+    ? ""
+    : d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
 
 /**
  * A standing agent with no worktree: for questions, drafting tickets, and
  * pulling context from whatever MCP servers the user's own CLI is configured
  * with. It runs in a scratch folder so it can keep notes between sessions.
+ *
+ * Conversations live down the left rather than in a tab strip: they are long
+ * lived and there is no obvious limit on how many you might keep, which is the
+ * case tabs handle worst.
  */
 export function ChatView() {
   const allPanes = useStore((s) => s.panes);
@@ -19,13 +33,42 @@ export function ChatView() {
   const fail = useStore((s) => s.fail);
 
   const [active, setActive] = useState<string | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [closing, setClosing] = useState<string | null>(null);
+  const addRef = useRef<HTMLButtonElement>(null);
   const installed = agents.filter((a) => a.installed);
 
+  // Chats are given fresh ids every launch, so what survives a restart is the
+  // position in the list, not the identity of the pane.
   useEffect(() => {
     if (panes.length === 0) { setActive(null); return; }
     if (!active || !panes.some((p) => p.id === active)) {
-      setActive(panes[panes.length - 1].id);
+      const want = read<number>("activeChat", panes.length - 1);
+      const i = Number.isInteger(want) && want >= 0 && want < panes.length
+        ? want
+        : panes.length - 1;
+      setActive(panes[i].id);
     }
+  }, [panes, active]);
+
+  useEffect(() => {
+    const i = panes.findIndex((p) => p.id === active);
+    if (i >= 0) write("activeChat", i);
+  }, [active, panes]);
+
+  // Ctrl+Tab moves between chats, as it does between terminals.
+  useEffect(() => {
+    if (panes.length < 2) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Tab" || !e.ctrlKey || e.metaKey || e.altKey) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const at = panes.findIndex((p) => p.id === active);
+      const from = at < 0 ? 0 : at;
+      setActive(panes[(from + (e.shiftKey ? -1 : 1) + panes.length) % panes.length].id);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, [panes, active]);
 
   async function start(agentId: string) {
@@ -47,26 +90,61 @@ export function ChatView() {
     }
   }
 
+  const addItems: MenuItem[] = installed.length
+    ? installed.map((a) => ({ label: a.name, onSelect: () => void start(a.id) }))
+    : [{ label: "No agent CLIs on your PATH", onSelect: () => {}, disabled: true }];
+
+  const doomed = panes.find((p) => p.id === closing);
+
   return (
     <div className="chat">
-      <div className="pane-bar">
-        {panes.map((p) => (
-          <div
-            key={p.id}
-            className={`pane-tab${p.id === active ? " active" : ""}`}
-            onClick={() => setActive(p.id)}
+      <div className="chat-list">
+        <div className="chat-list-head">
+          Chats
+          <div className="spacer" />
+          <button
+            ref={addRef}
+            className="btn btn-sm btn-add"
+            title="New chat"
+            onClick={() =>
+              setMenu((open) => {
+                if (open) return null;
+                const r = addRef.current?.getBoundingClientRect();
+                return r ? { x: r.right, y: r.bottom + 4 } : null;
+              })
+            }
           >
-            <span className={`dot ${p.running ? "live" : "gone"}`} />
-            {p.title}
-            <span className="x" onClick={(e) => { e.stopPropagation(); void close(p.id); }}>✕</span>
-          </div>
-        ))}
-        <div className="spacer" />
-        {installed.map((a) => (
-          <button key={a.id} className="btn btn-sm" onClick={() => void start(a.id)}>
-            + {a.name}
+            + <span className="caret">▾</span>
           </button>
-        ))}
+        </div>
+
+        <div className="chat-list-body">
+          {panes.map((p) => (
+            <div
+              key={p.id}
+              className={`chat-item${p.id === active ? " active" : ""}`}
+              onClick={() => setActive(p.id)}
+            >
+              <span className={`dot ${p.running ? "live" : "gone"}`} />
+              <span className="chat-item-text">
+                <span className="chat-item-title">{p.title}</span>
+                <span className="chat-item-sub">
+                  {p.running ? started(p.started_at) : "ended"}
+                </span>
+              </span>
+              <span
+                className="x"
+                title="Close this chat"
+                onClick={(e) => { e.stopPropagation(); setClosing(p.id); }}
+              >
+                ✕
+              </span>
+            </div>
+          ))}
+          {panes.length === 0 && (
+            <div className="chat-list-empty">No chats open.</div>
+          )}
+        </div>
       </div>
 
       <div className="pane-stack">
@@ -101,6 +179,31 @@ export function ChatView() {
           </div>
         )}
       </div>
+
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          ignore={addRef}
+          items={addItems}
+          onClose={() => setMenu(null)}
+        />
+      )}
+
+      {doomed && (
+        <Confirm
+          title="Close this chat?"
+          confirmLabel="Close"
+          body={
+            <>
+              <b>{doomed.title}</b> will be stopped and its scrollback discarded.
+              {doomed.running && " Anything it is part-way through is lost."}
+            </>
+          }
+          onCancel={() => setClosing(null)}
+          onConfirm={() => { setClosing(null); void close(doomed.id); }}
+        />
+      )}
     </div>
   );
 }

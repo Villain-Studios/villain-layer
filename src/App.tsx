@@ -1,7 +1,8 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api } from "./lib/api";
+import { read, write } from "./lib/persist";
 import { CHAT_TASK_ID, selectedTask, taskTotals, useStore, type View } from "./store";
 import { Sidebar } from "./components/Sidebar";
 import { Terminals } from "./components/Terminals";
@@ -12,7 +13,7 @@ import { AgentsView } from "./components/AgentsView";
 import { ChatView } from "./components/ChatView";
 import { ReposView } from "./components/ReposView";
 import { Settings } from "./components/Settings";
-import { GearIcon } from "./components/ui";
+import { GearIcon, PanelIcon } from "./components/ui";
 
 export default function App() {
   const task = useStore(selectedTask);
@@ -107,6 +108,16 @@ export default function App() {
   const changed = totals ? totals.dirty + totals.staged : 0;
   const running = panes.filter((p) => p.kind === "agent" && p.running).length;
 
+  // The task list is worth reclaiming on a small screen, and the state should
+  // outlast the window like the rest of the layout.
+  const [sidebarHidden, setSidebarHidden] = useState(() => read("sidebarHidden", false));
+  function toggleSidebar() {
+    setSidebarHidden((hidden: boolean) => {
+      write("sidebarHidden", !hidden);
+      return !hidden;
+    });
+  }
+
   const tabs: { id: View; label: string; badge?: number }[] = [
     { id: "work", label: "Work", badge: running || undefined },
     { id: "tickets", label: "Tickets", badge: issues.length || undefined },
@@ -119,6 +130,15 @@ export default function App() {
       <div className="topbar">
         <div className="topbar-left">
           <div className="brand">villain<span>·</span>layer</div>
+          {view === "work" && (
+            <button
+              className="icon-btn"
+              title={sidebarHidden ? "Show tasks" : "Hide tasks"}
+              onClick={toggleSidebar}
+            >
+              <PanelIcon open={!sidebarHidden} />
+            </button>
+          )}
         </div>
         <div className="topbar-center">
           {tabs.map((t) => (
@@ -141,7 +161,7 @@ export default function App() {
 
       <div className="views">
         {view === "work" && (
-          <div className="app">
+          <div className={`app${sidebarHidden ? " no-sidebar" : ""}`}>
             <Sidebar />
             <div className="main">
               {task ? (

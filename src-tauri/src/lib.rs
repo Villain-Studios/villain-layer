@@ -105,6 +105,7 @@ pub fn run() {
             commands::jira_start_work,
             commands::task_prompt,
             commands::handoff_prompt,
+            commands::draft_pr_description,
             commands::request_pr_description,
             commands::take_pr_description,
             commands::github_connect,

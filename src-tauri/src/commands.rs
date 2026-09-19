@@ -1628,6 +1628,187 @@ fn pr_draft_path(state: &AppState, task: &Task) -> Option<PathBuf> {
     agent_file_dir(state, task).map(|d| d.join("PR_DESCRIPTION.md"))
 }
 
+/// Generated files that are noise at review time: machine-written, enormous,
+/// and never what a reviewer is asked to look at. They stay in the summary of
+/// changed files but are kept out of the diff body, so the model spends its
+/// attention — and the request its time — on real code.
+const GENERATED: &[&str] = &[
+    ":!*package-lock.json",
+    ":!*yarn.lock",
+    ":!*pnpm-lock.yaml",
+    ":!*bun.lockb",
+    ":!*bun.lock",
+    ":!*Cargo.lock",
+    ":!*composer.lock",
+    ":!*Gemfile.lock",
+    ":!*poetry.lock",
+    ":!*go.sum",
+];
+
+/// How much diff to send. Past this a description stops getting better and the
+/// request only gets slower, so the tail is dropped and the model is told.
+const DIFF_BUDGET: usize = 60_000;
+
+/// What the work looks like from outside: commit subjects, the file summary,
+/// and as much of the reviewable diff as fits in the budget.
+fn review_context(state: &AppState, task: &Task) -> String {
+    let mut out = String::new();
+    let mut diff = String::new();
+
+    for checkout in state.config.checkouts_of(&task.id) {
+        let dir = PathBuf::from(&checkout.path);
+        let repo = state
+            .config
+            .project(&checkout.project_id)
+            .map(|p| p.name)
+            .unwrap_or_else(|_| "repo".into());
+        let base = format!("origin/{}", checkout.base);
+        let merge_base = git::run(&dir, &["merge-base", &base, "HEAD"])
+            .or_else(|_| git::run(&dir, &["merge-base", &checkout.base, "HEAD"]))
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|_| checkout.base.clone());
+
+        out.push_str(&format!("\n## {repo}\n\n"));
+        if let Ok(log) = git::run(&dir, &["log", "--no-color", "--format=- %s", &format!("{merge_base}..HEAD")]) {
+            if !log.trim().is_empty() {
+                out.push_str("Commits:\n");
+                out.push_str(log.trim());
+                out.push('\n');
+            }
+        }
+        if let Ok(stat) = git::run(&dir, &["diff", "--no-color", "--stat", &merge_base]) {
+            if !stat.trim().is_empty() {
+                out.push_str("\nFiles changed:\n```\n");
+                out.push_str(stat.trim());
+                out.push_str("\n```\n");
+            }
+        }
+
+        let mut args = vec!["diff", "--no-color", &merge_base, "--", "."];
+        args.extend_from_slice(GENERATED);
+        let mut patch = git::run(&dir, &args).unwrap_or_default();
+        if patch.trim().is_empty() {
+            // A dependency bump is all generated files. Filtering them out
+            // would leave nothing to describe, so in that case they are the
+            // change and the whole diff goes through.
+            patch = git::run(&dir, &["diff", "--no-color", &merge_base]).unwrap_or_default();
+        }
+        if !patch.trim().is_empty() {
+            diff.push_str(&format!("\n### {repo}\n\n```diff\n{}\n```\n", patch.trim()));
+        }
+    }
+
+    out.push_str("\n# Diff\n");
+    if diff.len() > DIFF_BUDGET {
+        // Cut on a line boundary so the last hunk shown is readable.
+        let cut = diff[..DIFF_BUDGET].rfind('\n').unwrap_or(DIFF_BUDGET);
+        out.push_str(&diff[..cut]);
+        out.push_str(
+            "\n\n(The diff was longer than fits here and is cut off. Describe what you\
+             \ncan see, and say that you only reviewed part of it.)\n",
+        );
+    } else {
+        out.push_str(&diff);
+    }
+    out
+}
+
+/// Draft the pull request description without disturbing the working agent.
+///
+/// The obvious implementation — type the request into the agent that did the
+/// work — is slow and fragile: that session carries a large context, it may be
+/// mid-turn or sitting on a permission prompt, and the answer has to travel
+/// back through a file. This asks a fresh, cheap, one-shot model instead and
+/// hands it the diff directly, so nothing has to be discovered and no tools
+/// have to run. `draft_pr_description_from_pane` remains for the case where the
+/// agent's own account of the work is worth the wait.
+#[tauri::command]
+pub async fn draft_pr_description(state: State<'_, AppState>, task_id: String) -> Result<String> {
+    let task = state.config.task(&task_id)?;
+    let program = shellenv::which("claude")
+        .ok_or_else(|| Error::NotFound("claude is not on your PATH".into()))?;
+
+    let prompt = format!(
+        concat!(
+            "Write the body of a pull request description for the work on branch ",
+            "`{branch}`{key}.\n\n",
+            "It is for a reviewer who has not seen this work and was not part of the ",
+            "conversation that produced it. Say what changed and why, call out anything ",
+            "risky or worth a closer look, and note what is not covered. Do not walk ",
+            "through the diff file by file, and do not pad it — a few short sections is ",
+            "right for most changes.\n\n",
+            "Reply with the Markdown body and nothing else: no preamble, no closing ",
+            "remark, no code fence around the whole thing.\n\n",
+            "# The change\n{context}\n",
+        ),
+        branch = task.branch,
+        key = task
+            .issue_key
+            .as_ref()
+            .map(|k| format!(" for {k}"))
+            .unwrap_or_default(),
+        context = review_context(&state, &task),
+    );
+
+    let env = shellenv::user_env().clone();
+    let out = tauri::async_runtime::spawn_blocking(move || -> Result<String> {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+
+        let mut child = Command::new(&program)
+            .args([
+                "-p",
+                // Cheap and fast: this is a summarising job, not a reasoning one.
+                "--model",
+                "haiku",
+                // Everything it needs is in the prompt. Without this it may go
+                // reading the repository and turn seconds into minutes.
+                "--disallowed-tools",
+                "Bash",
+                "Read",
+                "Edit",
+                "Write",
+                "Glob",
+                "Grep",
+                "WebFetch",
+                "WebSearch",
+            ])
+            .envs(&env)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| Error::Other(format!("could not run claude: {e}")))?;
+
+        child
+            .stdin
+            .take()
+            .ok_or_else(|| Error::Other("claude took no input".into()))?
+            .write_all(prompt.as_bytes())?;
+
+        let done = child
+            .wait_with_output()
+            .map_err(|e| Error::Other(format!("claude did not finish: {e}")))?;
+        if !done.status.success() {
+            let why = String::from_utf8_lossy(&done.stderr);
+            let why = why.trim();
+            return Err(Error::Other(if why.is_empty() {
+                "claude could not draft the description".into()
+            } else {
+                format!("claude: {why}")
+            }));
+        }
+        Ok(String::from_utf8_lossy(&done.stdout).trim().to_string())
+    })
+    .await
+    .map_err(|e| Error::Other(format!("drafting was interrupted: {e}")))??;
+
+    if out.is_empty() {
+        return Err(Error::Other("claude returned an empty description".into()));
+    }
+    Ok(out)
+}
+
 /// Ask a running agent to write the pull request description.
 ///
 /// The agent has just done the work, so it knows things the diff does not:

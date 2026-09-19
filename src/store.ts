@@ -1,12 +1,15 @@
 import { create } from "zustand";
 import { api, errMessage } from "./lib/api";
+import { read, readOneOf, write } from "./lib/persist";
 import type {
   AgentStatus, JiraIssue, JiraIssueType, PaneInfo, Project, RepoRule, RepoSet, Settings,
   TaskView,
 } from "./lib/types";
 
-export type Tab = "terminals" | "diff" | "pr";
-export type View = "work" | "tickets" | "chat" | "repos";
+export const TABS = ["terminals", "diff", "pr"] as const;
+export const VIEWS = ["work", "tickets", "chat", "repos"] as const;
+export type Tab = (typeof TABS)[number];
+export type View = (typeof VIEWS)[number];
 
 /** Panes started from the Chat view carry this instead of a real task id. */
 export const CHAT_TASK_ID = "chat";
@@ -54,6 +57,18 @@ interface State {
 
 let toastSeq = 0;
 
+/**
+ * Drop a remembered selection whose task is gone.
+ *
+ * The id outlives the task in storage, and a dangling one would leave the app
+ * opening on a task that no longer exists — an empty pane bar and no way back.
+ */
+function stillThere(tasks: TaskView[], selected: string | null): string | null {
+  if (!selected || tasks.some((t) => t.id === selected)) return selected;
+  write("selectedTask", null);
+  return null;
+}
+
 export const useStore = create<State>((set, get) => ({
   projects: [],
   repoSets: [],
@@ -66,9 +81,11 @@ export const useStore = create<State>((set, get) => ({
   issueTypes: [],
   issuesLoading: false,
 
-  selectedTask: null,
-  view: "work",
-  tab: "terminals",
+  // Where the app was left. Restored so reopening lands on the work in
+  // progress rather than on an empty shell, alongside the panes themselves.
+  selectedTask: read<string | null>("selectedTask", null),
+  view: readOneOf("view", VIEWS, "work"),
+  tab: readOneOf("tab", TABS, "terminals"),
   settingsOpen: false,
   toasts: [],
 
@@ -91,7 +108,10 @@ export const useStore = create<State>((set, get) => ({
       api.listProjects(), api.listTasks(), api.listPanes(), api.listAgents(),
       api.listRepoSets(), api.listRepoRules(),
     ]);
-    set({ projects, tasks, panes, agents, repoSets, repoRules });
+    set((s) => ({
+      projects, tasks, panes, agents, repoSets, repoRules,
+      selectedTask: stillThere(tasks, s.selectedTask),
+    }));
     await get().refreshSettings();
   },
 
@@ -102,7 +122,10 @@ export const useStore = create<State>((set, get) => ({
     set({ projects, repoSets, repoRules });
   },
 
-  refreshTasks: async () => set({ tasks: await api.listTasks() }),
+  refreshTasks: async () => {
+    const tasks = await api.listTasks();
+    set((s) => ({ tasks, selectedTask: stillThere(tasks, s.selectedTask) }));
+  },
   refreshPanes: async () => set({ panes: await api.listPanes() }),
 
   refreshSettings: async () => {
@@ -227,3 +250,16 @@ export function taskTotals(task: TaskView) {
     { dirty: 0, staged: 0, ahead: 0, behind: 0, conflicted: 0, missing: 0 },
   );
 }
+
+// Remember where the app is, so reopening it lands back there rather than on
+// an empty shell. Done by subscription rather than in each setter: the panes
+// are restored whatever moved the selection, and this should be too.
+let lastLayout = "";
+useStore.subscribe((s) => {
+  const now = JSON.stringify([s.selectedTask, s.view, s.tab]);
+  if (now === lastLayout) return;
+  lastLayout = now;
+  write("selectedTask", s.selectedTask);
+  write("view", s.view);
+  write("tab", s.tab);
+});

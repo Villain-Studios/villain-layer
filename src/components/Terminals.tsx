@@ -112,7 +112,9 @@ export function Terminals({ task }: { task: TaskView }) {
   );
   const scopeName = scope
     ? task.checkouts.find((c) => c.id === scope)?.project_name ?? "repo"
-    : `all ${task.checkouts.length} repos`;
+    : task.checkouts.length > 1
+      ? `all ${task.checkouts.length} repos`
+      : "the task folder";
 
   // One "+" rather than a button per CLI: the bar has to stay readable with a
   // pane or two already open, and the list grows with every agent installed.
@@ -334,8 +336,8 @@ export function Terminals({ task }: { task: TaskView }) {
             <h2>No panes yet</h2>
             <p>
               {multi
-                ? `Start an agent at the task root and it sees all ${task.checkouts.length} repos as sibling folders — the right choice when the change spans them.`
-                : "Start an agent in this worktree, or open a shell to run the dev server and tests beside it."}
+                ? `Start an agent in the task folder and it sees all ${task.checkouts.length} repos as sibling folders — the right choice when the change spans them.`
+                : "Start an agent in the task folder, with the repository as a folder inside it, or open a shell to run the dev server and tests."}
             </p>
             {offerResume.length > 0 && (
               <div className="row" style={{ marginBottom: 6 }}>
@@ -460,22 +462,23 @@ export function Terminals({ task }: { task: TaskView }) {
             </>
           }
         >
-          {multi && (
-            <Field
-              label="Scope"
-              hint="At the task root the agent can read and edit across every repo. Inside one repo it keeps its normal git awareness."
+          <Field
+            label="Start in"
+            hint="The task folder is where repositories appear, including ones added later. Starting inside one pins the agent to it, and anything added afterwards lands outside where it can see."
+          >
+            <select
+              value={scope ?? ""}
+              onChange={(e) => setScope(e.target.value || null)}
             >
-              <select
-                value={scope ?? ""}
-                onChange={(e) => setScope(e.target.value || null)}
-              >
-                <option value="">Task root — all {task.checkouts.length} repos</option>
-                {task.checkouts.map((c) => (
-                  <option key={c.id} value={c.id}>Only {c.project_name}</option>
-                ))}
-              </select>
-            </Field>
-          )}
+              <option value="">
+                The task folder
+                {task.checkouts.length > 1 ? ` — all ${task.checkouts.length} repos` : ""}
+              </option>
+              {task.checkouts.map((c) => (
+                <option key={c.id} value={c.id}>Only {c.project_name}</option>
+              ))}
+            </select>
+          </Field>
           <Field
             label="Opening prompt"
             hint={
@@ -495,8 +498,8 @@ export function Terminals({ task }: { task: TaskView }) {
           <div className="muted" style={{ fontSize: 11 }}>
             Starts in <code>{scope
               ? task.checkouts.find((c) => c.id === scope)?.path
-              : multi ? task.root : task.checkouts[0]?.path}</code>
-            {multi && ` · ${scopeName}`}
+              : task.root}</code>
+            {` · ${scopeName}`}
           </div>
         </Modal>
       )}

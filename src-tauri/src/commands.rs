@@ -901,9 +901,14 @@ pub fn list_panes(state: State<AppState>, task_id: Option<String>) -> Vec<PaneIn
 
 /// Where a pane should start, and what to call it.
 ///
-/// An explicit checkout wins. Otherwise a single-repo task starts inside its
-/// repo (so the agent keeps its git awareness) and a multi-repo task starts at
-/// the task root, where every repo is a sibling directory.
+/// An explicit checkout wins. Otherwise everything starts at the task root,
+/// where each repository is a sibling folder — including a task that has only
+/// one today. Starting inside the single repo read better at the time, but it
+/// puts the agent in a directory that cannot grow: a repository added later
+/// lands outside its working directory, where it needs permission to look and
+/// no reason to think of looking. The root is the same place before and after,
+/// which is what lets an agent be told "there is another repo now" and simply
+/// carry on.
 fn resolve_scope(
     state: &AppState,
     task: &Task,
@@ -920,22 +925,58 @@ fn resolve_scope(
     }
 
     let checkouts = state.config.checkouts_of(&task.id);
-    match checkouts.as_slice() {
-        [] => Err(Error::Other("this task has no repositories".into())),
-        [only] => {
-            let name = state
-                .config
-                .project(&only.project_id)
-                .map(|p| p.name)
-                .unwrap_or_else(|_| "repo".into());
-            Ok((only.path.clone(), name, Some(only.id.clone())))
+    let name = match checkouts.as_slice() {
+        [] => return Err(Error::Other("this task has no repositories".into())),
+        [only] => state
+            .config
+            .project(&only.project_id)
+            .map(|p| p.name)
+            .unwrap_or_else(|_| "repo".into()),
+        many => format!("{} repos", many.len()),
+    };
+    Ok((task.root.clone(), name, None))
+}
+
+/// Conversations that could be picked up for this task, wherever they live.
+///
+/// Merged across the task root and every worktree, because the directory an
+/// agent was started in has changed: a session saved under a worktree is still
+/// a session, and refusing to offer it would quietly strand work.
+fn resumable_for(state: &AppState, task: &Task, cwd: &str) -> Vec<agents::Resumable> {
+    let mut found: Vec<agents::Resumable> = agents::resumable(cwd);
+    for checkout in state.config.checkouts_of(&task.id) {
+        if checkout.path == cwd {
+            continue;
         }
-        many => Ok((
-            task.root.clone(),
-            format!("{} repos", many.len()),
-            None,
-        )),
+        for r in agents::resumable(&checkout.path) {
+            match found.iter_mut().find(|f| f.agent_id == r.agent_id) {
+                Some(existing) => {
+                    existing.sessions += r.sessions;
+                    existing.last_active = existing.last_active.max(r.last_active);
+                }
+                None => found.push(r),
+            }
+        }
     }
+    found
+}
+
+/// Where an agent's saved conversation for this task actually lives.
+///
+/// Sessions are keyed by working directory, and tasks started before agents
+/// moved to the task root have theirs under the worktree. Looking in both
+/// means existing work still resumes rather than starting over.
+fn resume_dir(state: &AppState, task: &Task, agent_id: &str, cwd: &str) -> String {
+    if agents::resumable(cwd).iter().any(|r| r.agent_id == agent_id) {
+        return cwd.to_string();
+    }
+    state
+        .config
+        .checkouts_of(&task.id)
+        .into_iter()
+        .find(|c| agents::resumable(&c.path).iter().any(|r| r.agent_id == agent_id))
+        .map(|c| c.path)
+        .unwrap_or_else(|| cwd.to_string())
 }
 
 #[tauri::command]
@@ -1012,7 +1053,11 @@ pub fn resumable_agents(
 ) -> Result<Vec<agents::Resumable>> {
     let task = state.config.task(&task_id)?;
     let (cwd, _, _) = resolve_scope(&state, &task, checkout_id.as_deref())?;
-    Ok(agents::resumable(&cwd))
+    Ok(if checkout_id.is_some() {
+        agents::resumable(&cwd)
+    } else {
+        resumable_for(&state, &task, &cwd)
+    })
 }
 
 /// Answer the trust dialog for a folder this app created, if that is wanted.
@@ -1048,7 +1093,10 @@ pub(crate) fn start_agent(
     let program = shellenv::which(def.program)
         .ok_or_else(|| Error::NotFound(format!("{} is not on your PATH", def.program)))?;
 
-    let (cwd, scope, checkout_id) = resolve_scope(state, &task, checkout_id.as_deref())?;
+    let (mut cwd, scope, checkout_id) = resolve_scope(state, &task, checkout_id.as_deref())?;
+    if resume && checkout_id.is_none() {
+        cwd = resume_dir(state, &task, &agent_id, &cwd);
+    }
 
     // Resuming means handing the conversation back to the CLI, so an opening
     // prompt would only talk over it.
@@ -1382,18 +1430,16 @@ pub fn restore_panes(app: &AppHandle) {
                     continue;
                 };
                 // Only resume if there is a conversation to resume.
-                let resume = resolve_scope(
-                    &state,
-                    &match state.config.task(&pane.task_id) {
-                        Ok(t) => t,
-                        Err(_) => continue,
-                    },
-                    pane.checkout_id.as_deref(),
-                )
-                .map(|(cwd, _, _)| {
-                    agents::resumable(&cwd).iter().any(|r| r.agent_id == agent_id)
-                })
-                .unwrap_or(false);
+                let Ok(task) = state.config.task(&pane.task_id) else {
+                    continue;
+                };
+                let resume = resolve_scope(&state, &task, pane.checkout_id.as_deref())
+                    .map(|(cwd, _, _)| {
+                        resumable_for(&state, &task, &cwd)
+                            .iter()
+                            .any(|r| r.agent_id == agent_id)
+                    })
+                    .unwrap_or(false);
 
                 start_agent(
                     app,
@@ -1715,17 +1761,20 @@ fn ticket_prompt(issue: &jira::Issue, task: &Task, repos: &[(String, String)]) -
         issue.key, issue.url, issue.summary,
     );
 
-    if repos.len() > 1 {
+    if !repos.is_empty() {
         prompt.push_str(&format!(
-            "This task spans {} repositories, checked out as sibling folders in your working directory, all on branch `{}`:\n",
-            repos.len(),
+            "You are in the task folder, not in a repository. {} checked out as {} inside it, on branch `{}`:\n",
+            if repos.len() == 1 { "One repository is" } else { "Each repository is" },
+            if repos.len() == 1 { "a folder" } else { "sibling folders" },
             task.branch,
         ));
         for (folder, origin) in repos {
             prompt.push_str(&format!("  {folder}/  — {origin}\n"));
         }
         prompt.push_str(
-            "\nChanges are expected to span more than one of them, so check how they fit together before editing. Run each repository's own tests from inside its folder.\n\n",
+            "\nRun git and each repository's own tests from inside its folder. More \
+             repositories can be added to the task later, with the add_repo tool if you \
+             find you need one, and they appear here as further folders.\n\n",
         );
     }
 

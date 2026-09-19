@@ -224,7 +224,7 @@ export function Sidebar() {
     }
   }
 
-  function askRemoveRepo(checkoutId: string, repoName: string, dirty: number) {
+  function askRemoveRepo(checkoutId: string, repoName: string, dirty: number, last: boolean) {
     setConfirming({
       title: "Remove repository from task",
       label: "Remove",
@@ -235,6 +235,12 @@ export function Sidebar() {
             Any terminal running inside it is stopped. Panes started at the task
             root, which see every repo, are left alone.
           </div>
+          {last && (
+            <div className="confirm-detail">
+              This is the only repository in the task. Removing it leaves nothing to
+              work in — add another, or delete the task instead.
+            </div>
+          )}
           {dirty > 0 && (
             <div className="confirm-detail">
               {dirty} uncommitted change{dirty === 1 ? "" : "s"} in that worktree will be
@@ -358,24 +364,28 @@ export function Sidebar() {
                 }}
               >
                 <div className="ws-title">
-                  {multi ? (
-                    <span
-                      className={`chev${isOpen ? " open" : ""}`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setExpanded((x) => ({ ...x, [task.id]: !isOpen }));
-                      }}
-                    >
-                      ▶
-                    </span>
-                  ) : (
-                    <span
-                      className={`dot ${
-                        totals.missing ? "gone" : waiting ? "idle" : live ? "live" : ""
-                      }`}
-                      title={waiting ? "An agent has gone quiet — it may need you" : undefined}
-                    />
-                  )}
+                  {/*
+                    Every task expands, whatever its repo count. Gating this on
+                    having several meant a task with one repo could not show or
+                    remove it — and a task that dropped to one lost its rows
+                    while keeping the "add repo" beneath them, with no way left
+                    to close it.
+                  */}
+                  <span
+                    className={`chev${isOpen ? " open" : ""}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setExpanded((x) => ({ ...x, [task.id]: !isOpen }));
+                    }}
+                  >
+                    ▶
+                  </span>
+                  <span
+                    className={`dot ${
+                      totals.missing ? "gone" : waiting ? "idle" : live ? "live" : ""
+                    }`}
+                    title={waiting ? "An agent has gone quiet — it may need you" : undefined}
+                  />
                   {task.issue_key && <span className="key-chip">{task.issue_key}</span>}
                   <span className="label">
                     {task.issue_key ? task.name.replace(`${task.issue_key} `, "") : task.name}
@@ -398,7 +408,7 @@ export function Sidebar() {
                 </div>
               </div>
 
-              {multi && isOpen && task.checkouts.map((c) => {
+              {isOpen && task.checkouts.map((c) => {
                 const d = c.status ? c.status.unstaged + c.status.untracked : 0;
                 return (
                   <div key={c.id} className="repo-row">
@@ -410,7 +420,7 @@ export function Sidebar() {
                       title="Remove repo from task"
                       onClick={(e) => {
                         e.stopPropagation();
-                        askRemoveRepo(c.id, c.project_name, d);
+                        askRemoveRepo(c.id, c.project_name, d, task.checkouts.length === 1);
                       }}
                     >
                       ✕

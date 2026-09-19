@@ -24,7 +24,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"
 axum = "0.8"
 portable-pty = "0.9"
 
-reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "rustls-native-certs", "http2", "charset", "system-proxy"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "query", "rustls", "rustls-native-certs", "http2", "charset", "system-proxy"] }
 
 keyring = "4"
 

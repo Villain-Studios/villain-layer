@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use tauri::{AppHandle, State};
 
 use crate::agents;
@@ -1650,9 +1651,12 @@ pub async fn github_open_prs(
                 .map(|p| format!("<{}|{} #{}>", p.url, p.repo, p.number))
                 .collect::<Vec<_>>()
                 .join("  ·  ");
-            let _ = Slack::new(&secret)
+            if let Ok(posted) = Slack::new(&secret)
                 .post(&cfg.channel, &text, Some(&context))
-                .await;
+                .await
+            {
+                record_post(&state, posted);
+            }
         }
     }
 
@@ -1660,6 +1664,153 @@ pub async fn github_open_prs(
 }
 
 // ------------------------------------------------------------------- slack
+
+/// Remember a posted message so it can be deleted later, newest last.
+fn record_post(state: &AppState, posted: Option<crate::integrations::slack::Posted>) {
+    let Some(posted) = posted.filter(|p| !p.ts.is_empty()) else {
+        return;
+    };
+    let _ = state.config.update(|c| {
+        c.slack_posted.push(posted);
+        // Unbounded history would grow the config file forever.
+        let len = c.slack_posted.len();
+        if len > 100 {
+            c.slack_posted.drain(..len - 100);
+        }
+    });
+}
+
+fn slack_client(state: &AppState) -> Result<(Slack, SlackConfig)> {
+    let cfg = state
+        .config
+        .read()
+        .slack
+        .ok_or(Error::NotConfigured("Slack"))?;
+    let secret = secrets::get(secrets::SLACK)?.ok_or(Error::NotConfigured("Slack"))?;
+    Ok((Slack::new(&secret), cfg))
+}
+
+/// Messages the app has posted and can still take back.
+#[tauri::command]
+pub fn slack_posted_messages(
+    state: State<AppState>,
+) -> Vec<crate::integrations::slack::Posted> {
+    state.config.read().slack_posted
+}
+
+/// Delete messages the app posted. With no `links`, deletes everything it has
+/// recorded; otherwise deletes the Slack permalinks given, which is the only
+/// way to reach messages posted before the app started recording them.
+#[tauri::command]
+pub async fn slack_delete_posted(
+    state: State<'_, AppState>,
+    links: Option<Vec<String>>,
+) -> Result<Vec<RepoResult>> {
+    let (client, _) = slack_client(&state)?;
+
+    let targets: Vec<crate::integrations::slack::Posted> = match links {
+        Some(links) if !links.is_empty() => links
+            .iter()
+            .filter_map(|l| {
+                crate::integrations::slack::parse_permalink(l).or_else(|| {
+                    // Bare "channel ts" pairs are accepted too.
+                    let (c, t) = l.split_once(char::is_whitespace)?;
+                    Some(crate::integrations::slack::Posted {
+                        channel: c.trim().to_string(),
+                        ts: t.trim().to_string(),
+                    })
+                })
+            })
+            .collect(),
+        _ => state.config.read().slack_posted,
+    };
+
+    if targets.is_empty() {
+        return Err(Error::Other(
+            "nothing to delete: no recorded messages, and no usable links given".into(),
+        ));
+    }
+
+    let mut results = Vec::new();
+    for t in &targets {
+        let (ok, detail) = match client.delete(&t.channel, &t.ts).await {
+            Ok(()) => (true, "deleted".to_string()),
+            Err(e) => (false, e.to_string()),
+        };
+        results.push(RepoResult {
+            checkout_id: t.ts.clone(),
+            repo: t.channel.clone(),
+            ok,
+            detail,
+        });
+    }
+
+    // Forget whatever is now gone, so a retry does not report it again.
+    let gone: Vec<String> = results
+        .iter()
+        .filter(|r| r.ok || r.detail == "already gone")
+        .map(|r| r.checkout_id.clone())
+        .collect();
+    state
+        .config
+        .update(|c| c.slack_posted.retain(|p| !gone.contains(&p.ts)))?;
+
+    Ok(results)
+}
+
+/// What the app can see and do in Slack, for when a cleanup is refused.
+#[tauri::command]
+pub async fn slack_diagnose(state: State<'_, AppState>) -> Result<Value> {
+    let (client, cfg) = slack_client(&state)?;
+    let (bot_id, scopes) = client.scopes().await?;
+    Ok(serde_json::json!({
+        "channel": cfg.channel,
+        "bot_id": bot_id,
+        "scopes": scopes.split(',').map(str::trim).collect::<Vec<_>>(),
+        "recorded": state.config.read().slack_posted.len(),
+    }))
+}
+
+/// Find and delete every message this app posted to its channel, including
+/// ones sent before the app started recording them.
+#[tauri::command]
+pub async fn slack_cleanup(state: State<'_, AppState>, dry_run: bool) -> Result<Value> {
+    let (client, cfg) = slack_client(&state)?;
+    let (bot_id, scopes) = client.scopes().await?;
+    if bot_id.is_empty() {
+        return Err(Error::Other(
+            "this token is not a bot token, so it has no messages of its own".into(),
+        ));
+    }
+
+    let channel_id = client.channel_id(&cfg.channel).await.map_err(|e| {
+        Error::Other(format!(
+            "{e}. The app needs the channels:read scope to find the channel by name \
+             (it has: {scopes})"
+        ))
+    })?;
+    let found = client.own_recent(&channel_id, &bot_id).await.map_err(|e| {
+        Error::Other(format!(
+            "{e}. The app needs the channels:history scope to see its own messages \
+             (it has: {scopes})"
+        ))
+    })?;
+
+    if dry_run {
+        return Ok(serde_json::json!({ "would_delete": found.len(), "channel": channel_id }));
+    }
+
+    let mut deleted = 0;
+    let mut failures = Vec::new();
+    for m in &found {
+        match client.delete(&m.channel, &m.ts).await {
+            Ok(()) => deleted += 1,
+            Err(e) => failures.push(format!("{}: {e}", m.ts)),
+        }
+    }
+    state.config.update(|c| c.slack_posted.clear())?;
+    Ok(serde_json::json!({ "deleted": deleted, "failed": failures }))
+}
 
 #[tauri::command]
 pub async fn slack_connect(
@@ -1672,11 +1823,12 @@ pub async fn slack_connect(
         notify_on_done: true,
         notify_on_attention: true,
     };
-    Slack::new(&secret)
+    let posted = Slack::new(&secret)
         .post(&channel, "Villain Layer connected. :white_check_mark:", None)
         .await?;
     secrets::set(secrets::SLACK, &secret)?;
     state.config.update(|c| c.slack = Some(cfg))?;
+    record_post(&state, posted);
     Ok(())
 }
 
@@ -1686,15 +1838,10 @@ pub async fn slack_notify(
     text: String,
     context: Option<String>,
 ) -> Result<()> {
-    let cfg = state
-        .config
-        .read()
-        .slack
-        .ok_or(Error::NotConfigured("Slack"))?;
-    let secret = secrets::get(secrets::SLACK)?.ok_or(Error::NotConfigured("Slack"))?;
-    Slack::new(&secret)
-        .post(&cfg.channel, &text, context.as_deref())
-        .await
+    let (client, cfg) = slack_client(&state)?;
+    let posted = client.post(&cfg.channel, &text, context.as_deref()).await?;
+    record_post(&state, posted);
+    Ok(())
 }
 
 // ---------------------------------------------------------------- settings

@@ -270,6 +270,33 @@ fn tools() -> Vec<Value> {
             vec!["text"],
         ),
         tool(
+            "slack_cleanup",
+            "Delete messages this app posted to its Slack channel. Only a bot can \
+             delete a bot's messages, so this is the only way to clear them.",
+            json!({ "dry_run": { "type": "boolean", "description": "Count without deleting" } }),
+            vec![],
+        ),
+        tool(
+            "slack_delete",
+            "Delete specific messages this app posted, by Slack permalink. Works \
+             with only chat:write, unlike slack_cleanup which has to search.",
+            json!({
+                "links": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Slack permalinks (Copy link on the message)"
+                }
+            }),
+            vec!["links"],
+        ),
+        tool(
+            "slack_diagnose",
+            "What the app's Slack token can see and do: bot id, granted scopes, \
+             configured channel.",
+            json!({}),
+            vec![],
+        ),
+        tool(
             "start_work",
             "Create a task from a Jira issue: a worktree in each named repository, \
              all on one branch, optionally with an agent started in it.",
@@ -293,6 +320,21 @@ fn tools() -> Vec<Value> {
             vec!["task_id"],
         ),
         tool(
+            "create_task",
+            "Create a task with no Jira ticket behind it: a worktree in each named \
+             repository, all on one branch.",
+            json!({
+                "name": str_prop("What the work is; the branch is derived from it"),
+                "repos": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Repository names from list_repos"
+                },
+                "branch": str_prop("Explicit branch name, overriding the derived one")
+            }),
+            vec!["name", "repos"],
+        ),
+        tool(
             "open_prs",
             "Push every repository in a task that has changes and open a pull \
              request for each, then post the links back to the Jira ticket.",
@@ -305,6 +347,38 @@ fn tools() -> Vec<Value> {
             vec!["task_id", "title"],
         ),
     ]
+}
+
+/// Agents think in repository names, not ids.
+fn resolve_repos(
+    state: &tauri::State<'_, AppState>,
+    args: &Value,
+) -> Result<Vec<String>> {
+    let wanted: Vec<String> = args
+        .get("repos")
+        .and_then(|r| r.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+        .unwrap_or_default();
+    if wanted.is_empty() {
+        return Err(crate::error::Error::Other("repos must not be empty".into()));
+    }
+
+    let projects = state.config.read().projects;
+    wanted
+        .iter()
+        .map(|name| {
+            projects
+                .iter()
+                .find(|p| p.name.eq_ignore_ascii_case(name))
+                .map(|p| p.id.clone())
+                .ok_or_else(|| {
+                    crate::error::Error::NotFound(format!(
+                        "no repository named {name}; known: {}",
+                        projects.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", ")
+                    ))
+                })
+        })
+        .collect()
 }
 
 async fn call(app: &AppHandle, name: &str, args: Value) -> Result<Value> {
@@ -396,40 +470,45 @@ async fn call(app: &AppHandle, name: &str, args: Value) -> Result<Value> {
             Ok(json!({ "ok": true }))
         }
 
+        "create_task" => {
+            let ids = resolve_repos(&state, &args)?;
+            let task = commands::new_task(
+                &state,
+                commands::NewTask {
+                    name: required(&args, "name")?.to_string(),
+                    project_ids: ids,
+                    branch: arg(&args, "branch").map(str::to_string),
+                    branch_suffix: None,
+                    issue_key: None,
+                    issue_url: None,
+                    epic_key: None,
+                },
+            )?;
+            Ok(serde_json::to_value(task)?)
+        }
+
+        "slack_diagnose" => Ok(commands::slack_diagnose(state).await?),
+
+        "slack_delete" => {
+            let links: Vec<String> = args
+                .get("links")
+                .and_then(|l| l.as_array())
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+                .unwrap_or_default();
+            Ok(serde_json::to_value(
+                commands::slack_delete_posted(state, Some(links)).await?,
+            )?)
+        }
+
+        "slack_cleanup" => {
+            let dry = args.get("dry_run").and_then(|d| d.as_bool()).unwrap_or(false);
+            Ok(commands::slack_cleanup(state, dry).await?)
+        }
+
         "start_work" => {
             let issue_key = required(&args, "issue_key")?.to_string();
-            let wanted: Vec<String> = args
-                .get("repos")
-                .and_then(|r| r.as_array())
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|v| v.as_str().map(str::to_string))
-                        .collect()
-                })
-                .unwrap_or_default();
-            if wanted.is_empty() {
-                return Err(crate::error::Error::Other("repos must not be empty".into()));
-            }
 
-            // Agents think in repository names, not ids.
-            let projects = state.config.read().projects;
-            let mut ids = Vec::new();
-            for name in &wanted {
-                let found = projects
-                    .iter()
-                    .find(|p| p.name.eq_ignore_ascii_case(name))
-                    .ok_or_else(|| {
-                        crate::error::Error::NotFound(format!(
-                            "no repository named {name}; known: {}",
-                            projects
-                                .iter()
-                                .map(|p| p.name.as_str())
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        ))
-                    })?;
-                ids.push(found.id.clone());
-            }
+            let ids = resolve_repos(&state, &args)?;
 
             let task = commands::jira_start_work(
                 app.clone(),

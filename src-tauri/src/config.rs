@@ -173,6 +173,10 @@ pub struct AppConfig {
     pub repo_rules: Vec<RepoRule>,
     #[serde(default)]
     pub ui: UiPrefs,
+    /// Messages the app posted to Slack, so it can retract its own litter.
+    /// Only a bot can delete a bot's messages, so nobody else can clear these.
+    #[serde(default)]
+    pub slack_posted: Vec<crate::integrations::slack::Posted>,
     #[serde(default)]
     pub jira: Option<JiraConfig>,
     #[serde(default)]

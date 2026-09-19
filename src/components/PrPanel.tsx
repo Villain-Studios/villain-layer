@@ -185,8 +185,8 @@ export function PrPanel({ task }: { task: TaskView }) {
 
           {row.checks.length > 0 && (
             <div style={{ marginTop: 10 }}>
-              {row.checks.map((c) => (
-                <div key={c.name + c.status} className="check">
+              {row.checks.map((c, i) => (
+                <div key={`${c.name}:${i}`} className="check">
                   <span className="dot" style={{ background: checkColor(c) }} />
                   <span className="name">{c.name}</span>
                   <span className="muted">{c.conclusion ?? c.status}</span>

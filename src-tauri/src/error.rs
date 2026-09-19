@@ -38,10 +38,4 @@ impl Serialize for Error {
     }
 }
 
-impl From<anyhow::Error> for Error {
-    fn from(e: anyhow::Error) -> Self {
-        Error::Other(e.to_string())
-    }
-}
-
 pub type Result<T> = std::result::Result<T, Error>;

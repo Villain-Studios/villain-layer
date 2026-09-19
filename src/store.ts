@@ -166,7 +166,7 @@ export const selectedTask = (s: State) =>
   s.tasks.find((t) => t.id === s.selectedTask) ?? null;
 
 /** A running agent that has printed nothing for a while is usually waiting. */
-export const IDLE_AFTER_MS = 45_000;
+const IDLE_AFTER_MS = 45_000;
 
 export function paneState(pane: PaneInfo): { label: string; dot: string } {
   if (pane.running && pane.notice === "usage_limit") {
@@ -187,7 +187,6 @@ export function paneState(pane: PaneInfo): { label: string; dot: string } {
   return { label: "working", dot: "live" };
 }
 
-/** Issues bucketed by epic, epics in key order, orphans last. */
 /**
  * Issues grouped under their epic, with the epics that have work in flight
  * first.

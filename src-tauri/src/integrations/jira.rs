@@ -205,6 +205,9 @@ impl Jira {
 
             // The modern endpoint; older Jira instances still serve /search,
             // which has no page token — so those stop after one page, as before.
+            // Only a missing endpoint falls back: a bad JQL or a rejected token
+            // retried against the old endpoint would come back as *its* error,
+            // hiding the one that says what is actually wrong.
             let v = match self
                 .json(
                     self.req(reqwest::Method::POST, "/rest/api/3/search/jql")
@@ -213,13 +216,14 @@ impl Jira {
                 .await
             {
                 Ok(v) => v,
-                Err(_) => {
+                Err(Error::Other(msg)) if msg.starts_with("Jira 404") => {
                     self.json(
                         self.req(reqwest::Method::POST, "/rest/api/3/search")
                             .json(&body),
                     )
                     .await?
                 }
+                Err(e) => return Err(e),
             };
 
             let page = v
@@ -738,7 +742,7 @@ pub fn browse_jql(
         .iter()
         .map(|t| t.trim())
         .filter(|t| !t.is_empty())
-        .map(|t| jql_string(t))
+        .map(jql_string)
         .collect();
     if !types.is_empty() {
         parts.push(format!("issuetype IN ({})", types.join(", ")));

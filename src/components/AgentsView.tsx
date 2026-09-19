@@ -11,7 +11,6 @@ function ago(iso: string): string {
   return `${Math.round(s / 86400)}d ago`;
 }
 
-
 export function AgentsView() {
   const { panes, tasks, agents } = useStore();
   const refreshPanes = useStore((s) => s.refreshPanes);

@@ -61,7 +61,7 @@ export interface CheckoutView extends Checkout {
   project_name: string;
   status: WorktreeStatus | null;
   exists: boolean;
-  /** Files differing from the base branch — what the Diff tab lists. */
+  /** Files with uncommitted changes — what the Diff tab lists by default. */
   changed: number;
 }
 
@@ -265,11 +265,4 @@ export interface FoundRepo {
   name: string;
   branch: string;
   registered: boolean;
-}
-
-export interface WorktreeEntry {
-  path: string;
-  branch: string | null;
-  head: string | null;
-  locked: boolean;
 }

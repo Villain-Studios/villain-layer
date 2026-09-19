@@ -93,6 +93,7 @@ impl GitHub {
         Ok(v.as_array().and_then(|a| a.first()).map(to_pr))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_pull(
         &self,
         owner: &str,

@@ -105,7 +105,7 @@ fn trust_in(config: &Path, dir: &Path) -> bool {
     if std::fs::write(&tmp, out).is_err() {
         return false;
     }
-    if std::fs::rename(&tmp, &config).is_err() {
+    if std::fs::rename(&tmp, config).is_err() {
         let _ = std::fs::remove_file(&tmp);
         return false;
     }

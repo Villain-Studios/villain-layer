@@ -60,7 +60,12 @@ export function TerminalPane({ pane, visible }: { pane: PaneInfo; visible: boole
     term.loadAddon(fit);
     term.open(host);
     try {
-      term.loadAddon(new WebglAddon());
+      const webgl = new WebglAddon();
+      // The GPU can take the context back — a sleep, a driver reset, too many
+      // panes — and a terminal drawn through a dead context is just blank.
+      // Dropping the addon returns xterm to its own renderer.
+      webgl.onContextLoss(() => webgl.dispose());
+      term.loadAddon(webgl);
     } catch {
       // Software rendering is fine; some VMs have no WebGL context.
     }

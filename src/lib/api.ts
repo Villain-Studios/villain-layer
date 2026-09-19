@@ -2,17 +2,13 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AddedRepo, AgentStatus, ChangedFile, CheckoutPr, CreateField, DiffScope, FoundRepo, JiraIssue,
   JiraIssueType, JiraPage, JiraTransition, MatchKind, PaneInfo, Project, RepoResult, RepoRule,
-  Started,
-  RepoSet,
-  RepoSuggestion, Resumable, ReviewComment, Settings, SlackConfig, Task, TaskView,
-  UiPrefs, WorktreeEntry,
+  RepoSet, RepoSuggestion, Resumable, ReviewComment, Settings, SlackConfig, Started, Task,
+  TaskView, UiPrefs,
 } from "./types";
 
 export const api = {
   // projects
   listProjects: () => invoke<Project[]>("list_projects"),
-  addProject: (path: string, group?: string | null) =>
-    invoke<Project>("add_project", { path, group: group ?? null }),
   addProjects: (paths: string[], group?: string | null) =>
     invoke<Project[]>("add_projects", { paths, group: group ?? null }),
   setProjectGroup: (projectIds: string[], group: string | null) =>
@@ -58,10 +54,6 @@ export const api = {
   saveRepoRule: (kind: MatchKind, value: string, projectIds: string[], id?: string | null) =>
     invoke<RepoRule>("save_repo_rule", { id: id ?? null, kind, value, projectIds }),
   deleteRepoRule: (id: string) => invoke<void>("delete_repo_rule", { id }),
-  scanWorktrees: (projectId: string) =>
-    invoke<WorktreeEntry[]>("scan_worktrees", { projectId }),
-  adoptWorktree: (projectId: string, path: string, name?: string) =>
-    invoke<Task>("adopt_worktree", { projectId, path, name }),
 
   // panes
   listAgents: () => invoke<AgentStatus[]>("list_agents"),
@@ -104,11 +96,9 @@ export const api = {
   jiraIssues: () => invoke<JiraPage>("jira_issues"),
   jiraIssueTypes: (refresh = false) =>
     invoke<JiraIssueType[]>("jira_issue_types", { refresh }),
-  jiraIssue: (key: string) => invoke<JiraIssue>("jira_issue", { key }),
   jiraTransitions: (key: string) => invoke<JiraTransition[]>("jira_transitions", { key }),
   jiraTransition: (key: string, transitionId: string) =>
     invoke<void>("jira_transition", { key, transitionId }),
-  jiraComment: (key: string, text: string) => invoke<void>("jira_comment", { key, text }),
   taskPrompt: (taskId: string) => invoke<string>("task_prompt", { taskId }),
   handoffPrompt: (paneId: string) => invoke<string>("handoff_prompt", { paneId }),
   draftPrDescription: (taskId: string) =>

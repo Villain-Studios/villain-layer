@@ -142,8 +142,6 @@ export function Settings() {
     }
   }
 
-
-
   async function saveWorktreeRoot(path: string) {
     try {
       await api.setWorktreeRoot(path.trim() || null);
@@ -330,10 +328,15 @@ export function Settings() {
           </Field>
           <button
             className="btn btn-primary"
-            disabled={busy || !jiraUrl.trim() || !jiraEmail.trim() || !jiraToken.trim()}
+            // A blank token keeps the stored one, so once connected the
+            // project key and JQL can be changed without pasting it again.
+            disabled={
+              busy || !jiraUrl.trim() || !jiraEmail.trim() ||
+              (!jiraToken.trim() && !settings?.jira_connected)
+            }
             onClick={() => void connectJira()}
           >
-            {busy ? "Verifying…" : "Connect"}
+            {busy ? "Verifying…" : settings?.jira_connected ? "Save & reconnect" : "Connect"}
           </button>
         </>
       )}
@@ -372,10 +375,12 @@ export function Settings() {
           </Field>
           <button
             className="btn btn-primary"
-            disabled={busy || !ghApi.trim() || !ghToken.trim()}
+            disabled={
+              busy || !ghApi.trim() || (!ghToken.trim() && !settings?.github_connected)
+            }
             onClick={() => void connectGithub()}
           >
-            {busy ? "Verifying…" : "Connect"}
+            {busy ? "Verifying…" : settings?.github_connected ? "Save & reconnect" : "Connect"}
           </button>
         </>
       )}

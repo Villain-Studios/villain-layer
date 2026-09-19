@@ -38,11 +38,6 @@ pub fn list_projects(state: State<AppState>) -> Vec<Project> {
     state.config.read().projects
 }
 
-#[tauri::command]
-pub fn add_project(state: State<AppState>, path: String, group: Option<String>) -> Result<Project> {
-    register_project(&state, &path, group.as_deref())
-}
-
 /// Register several repositories at once, skipping any that fail rather than
 /// failing the whole batch.
 #[tauri::command]
@@ -289,8 +284,9 @@ pub struct CheckoutView {
     pub project_name: String,
     pub status: Option<git::WorktreeStatus>,
     pub exists: bool,
-    /// Files that differ from the base branch — what the Diff tab lists.
-    /// Distinct from the status counts, which are only what is uncommitted.
+    /// Files with uncommitted changes — what the Diff tab lists by default.
+    /// The status counts split the same work by staged, unstaged and
+    /// untracked; this is the number of files across all three.
     pub changed: u32,
 }
 
@@ -466,7 +462,6 @@ fn suggest_from(
     }
 }
 
-/// `<worktree_root>/<task-slug>/<repo-name>`, deduped if two repos share a name.
 /// The branch for a task.
 ///
 /// A ticket's branch is its key, optionally with a suffix — `ACME-1234` or
@@ -506,6 +501,7 @@ fn unique_task_root(config: &ConfigStore, dir_name: &str) -> PathBuf {
     candidate
 }
 
+/// `<task root>/<repo-name>`, deduped if two repos share a name.
 fn checkout_path(root: &Path, project: &Project, taken: &[String]) -> PathBuf {
     let mut name = project.name.clone();
     let mut n = 2;
@@ -656,7 +652,6 @@ pub(crate) fn new_task(state: &AppState, req: NewTask) -> Result<Task> {
     Ok(task)
 }
 
-/// Add a repository to a task that is already in flight.
 /// What a terminal has printed, as readable text.
 ///
 /// Gated here rather than in the tool definition so nothing can route around
@@ -705,6 +700,7 @@ pub struct AddedRepo {
     pub told: usize,
 }
 
+/// Add a repository to a task that is already in flight.
 pub(crate) fn add_repo(state: &AppState, task_id: &str, project_id: &str) -> Result<AddedRepo> {
     let checkout = add_checkout_inner(state, task_id, project_id)?;
     let name = state
@@ -788,7 +784,7 @@ fn add_checkout_inner(
                 .map(|n| n.to_string_lossy().to_string())
         })
         .collect();
-    create_checkout(&state, &task, &project, &mut taken)
+    create_checkout(state, &task, &project, &mut taken)
 }
 
 #[tauri::command]
@@ -801,7 +797,13 @@ pub fn remove_checkout(state: State<AppState>, checkout_id: String, force: bool)
 
     state
         .config
-        .update(|c| c.checkouts.retain(|ch| ch.id != checkout_id))
+        .update(|c| c.checkouts.retain(|ch| ch.id != checkout_id))?;
+
+    // The folder lost a sibling, so the description of it is now wrong.
+    if let Ok(task) = state.config.task(&checkout.task_id) {
+        let _ = write_task_context(&state, &task);
+    }
+    Ok(())
 }
 
 /// Delete a task and every worktree it owns.
@@ -860,7 +862,14 @@ pub fn delete_task(state: State<AppState>, id: String, force: bool) -> Result<Ve
         return Ok(results);
     }
 
-    // Only tidies the task directory if nothing else lives there.
+    // The app's own files go first, or the folder is never empty and lingers
+    // as an orphan under the worktree root. Anything else in there is the
+    // user's, so remove_dir refuses rather than taking it.
+    if let Some(dir) = agent_file_dir(&state, &task) {
+        for name in GENERATED_FILES {
+            let _ = std::fs::remove_file(dir.join(name));
+        }
+    }
     let _ = std::fs::remove_dir(&task.root);
 
     state.config.update(|c| {
@@ -868,69 +877,6 @@ pub fn delete_task(state: State<AppState>, id: String, force: bool) -> Result<Ve
         c.checkouts.retain(|ch| ch.task_id != id);
     })?;
     Ok(results)
-}
-
-/// Worktrees that exist on disk but are not part of any task yet.
-#[tauri::command]
-pub fn scan_worktrees(
-    state: State<AppState>,
-    project_id: String,
-) -> Result<Vec<git::WorktreeEntry>> {
-    let project = state.config.project(&project_id)?;
-    let known: Vec<String> = state
-        .config
-        .read()
-        .checkouts
-        .iter()
-        .map(|c| c.path.clone())
-        .collect();
-
-    Ok(git::list_worktrees(&PathBuf::from(&project.path))?
-        .into_iter()
-        .filter(|e| e.path != project.path && !known.contains(&e.path))
-        .collect())
-}
-
-/// Register an existing worktree as a single-repo task, branch untouched.
-#[tauri::command]
-pub fn adopt_worktree(
-    state: State<AppState>,
-    project_id: String,
-    path: String,
-    name: Option<String>,
-) -> Result<Task> {
-    let project = state.config.project(&project_id)?;
-    let dir = PathBuf::from(&path);
-    let branch = git::current_branch(&dir)?;
-
-    let task = Task {
-        id: uuid::Uuid::new_v4().to_string(),
-        name: name.unwrap_or_else(|| branch.clone()),
-        root: path.clone(),
-        branch,
-        issue_key: None,
-        issue_url: None,
-        created_at: Utc::now(),
-    };
-    let checkout = Checkout {
-        id: uuid::Uuid::new_v4().to_string(),
-        task_id: task.id.clone(),
-        project_id: project.id,
-        // An adopted worktree already existed; where it forked is the honest
-        // baseline, and the merge base is the only record of that.
-        base_commit: git::run(&dir, &["merge-base", &project.default_branch, "HEAD"])
-            .ok()
-            .map(|s| s.trim().to_string())
-            .filter(|c| !c.is_empty()),
-        path,
-        base: project.default_branch,
-    };
-
-    state.config.update(|c| {
-        c.tasks.push(task.clone());
-        c.checkouts.push(checkout);
-    })?;
-    Ok(task)
 }
 
 // ------------------------------------------------------------------- panes
@@ -1046,7 +992,7 @@ fn open_shell(
     cols: Option<u16>,
 ) -> Result<PaneInfo> {
     let task = state.config.task(&task_id)?;
-    let (cwd, scope, checkout_id) = resolve_scope(&state, &task, checkout_id.as_deref())?;
+    let (cwd, scope, checkout_id) = resolve_scope(state, &task, checkout_id.as_deref())?;
 
     let pane = state.ptys.spawn(
         app,
@@ -1069,6 +1015,7 @@ fn open_shell(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_agent(
     app: AppHandle,
     state: State<AppState>,
@@ -1213,6 +1160,9 @@ fn chat_room(state: &AppState, id: &str) -> Result<PathBuf> {
     std::fs::create_dir_all(&dir)?;
     Ok(dir)
 }
+
+/// Everything the app itself writes into a task folder.
+const GENERATED_FILES: &[&str] = &["CLAUDE.md", "AGENTS.md", ".mcp.json", "PR_DESCRIPTION.md"];
 
 /// Where generated agent files (`.mcp.json`, context) may safely be written.
 ///
@@ -1508,6 +1458,12 @@ const SAVED_PANE_LIMIT: usize = 40;
 /// the machine down however the file got that way.
 const RESTORE_LIMIT: usize = 12;
 
+// Raising the restore limit past what the manager will open would make a
+// restore fail part-way through, which is the confusing version of the bug
+// rather than the dangerous one. Checked at compile time, so it cannot drift.
+const _: () = assert!(RESTORE_LIMIT < crate::pty::MAX_PANES);
+const _: () = assert!(RESTORE_LIMIT <= SAVED_PANE_LIMIT);
+
 /// What to put back: each remembered pane once, and never more than the machine
 /// should be asked to start at once.
 ///
@@ -1767,11 +1723,13 @@ pub fn commit_task(
         if !dir.is_dir() {
             continue;
         }
+        // Uncommitted, not branch: a repo whose work is already committed has
+        // nothing to add, and git would refuse with "nothing to commit".
         if git::changed_files(
             &dir,
             &checkout.base,
             checkout.base_commit.as_deref(),
-            git::Scope::Branch,
+            git::Scope::Uncommitted,
         )
             .map(|f| f.is_empty())
             .unwrap_or(true)
@@ -1820,6 +1778,16 @@ pub fn push_task(state: State<AppState>, task_id: String) -> Result<Vec<RepoResu
 
 // -------------------------------------------------------------------- jira
 
+/// The token as typed, or the one already in the keychain when the field was
+/// left blank — which is what the settings form says a blank field means.
+fn stored_or(key: &str, typed: &str, what: &'static str) -> Result<String> {
+    let typed = typed.trim();
+    if !typed.is_empty() {
+        return Ok(typed.to_string());
+    }
+    secrets::get(key)?.ok_or(Error::NotConfigured(what))
+}
+
 pub(crate) fn jira_client(state: &AppState) -> Result<(Jira, JiraConfig)> {
     let cfg = state
         .config
@@ -1846,6 +1814,8 @@ pub async fn jira_connect(
         jql,
         epic_field: None,
     };
+    // Changing the project key or JQL should not need the token typed again.
+    let token = stored_or(secrets::JIRA, &token, "Jira")?;
     // Verify before persisting, so a typo never looks like a working setup.
     let client = Jira::new(&cfg, &token);
     let who = client.myself().await?;
@@ -1941,12 +1911,6 @@ pub async fn jira_browse(
 }
 
 #[tauri::command]
-pub async fn jira_issue(state: State<'_, AppState>, key: String) -> Result<jira::Issue> {
-    let (client, _) = jira_client(&state)?;
-    client.issue(&key).await
-}
-
-#[tauri::command]
 pub async fn jira_transitions(
     state: State<'_, AppState>,
     key: String,
@@ -1963,12 +1927,6 @@ pub async fn jira_transition(
 ) -> Result<()> {
     let (client, _) = jira_client(&state)?;
     client.transition(&key, &transition_id).await
-}
-
-#[tauri::command]
-pub async fn jira_comment(state: State<'_, AppState>, key: String, text: String) -> Result<()> {
-    let (client, _) = jira_client(&state)?;
-    client.comment(&key, &text).await
 }
 
 /// The opening prompt. For a multi-repo task it also spells out the layout, so
@@ -2452,9 +2410,8 @@ pub async fn handoff_prompt(state: State<'_, AppState>, pane_id: String) -> Resu
     let pane = state.ptys.info(&pane_id)?;
     let task = state.config.task(&pane.task_id)?;
 
-    let mut out = String::from(concat!(
-        "You are taking over work another agent started and could not finish.\n\n",
-    ));
+    let mut out =
+        String::from("You are taking over work another agent started and could not finish.\n\n");
 
     // The original briefing, refetched so the ticket is current.
     out.push_str(&task_prompt(state.clone(), task.id.clone()).await?);
@@ -2833,6 +2790,7 @@ pub async fn github_connect(
         api_url: api_url.trim_end_matches('/').to_string(),
         web_url: web_url.trim_end_matches('/').to_string(),
     };
+    let token = stored_or(secrets::GITHUB, &token, "GitHub")?;
     let login = GitHub::new(&cfg, &token).login().await?;
     secrets::set(secrets::GITHUB, &token)?;
     state.config.update(|c| c.github = Some(cfg))?;
@@ -3079,14 +3037,6 @@ fn slack_client(state: &AppState) -> Result<(Slack, SlackConfig)> {
     Ok((Slack::new(&secret), cfg))
 }
 
-/// Messages the app has posted and can still take back.
-#[tauri::command]
-pub fn slack_posted_messages(
-    state: State<AppState>,
-) -> Vec<crate::integrations::slack::Posted> {
-    state.config.read().slack_posted
-}
-
 /// Delete messages the app posted. With no `links`, deletes everything it has
 /// recorded; otherwise deletes the Slack permalinks given, which is the only
 /// way to reach messages posted before the app started recording them.
@@ -3322,7 +3272,6 @@ pub fn disconnect(state: State<AppState>, which: String) -> Result<()> {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3532,19 +3481,6 @@ mod tests {
             saved("3", "t", "shell", "/w"),
         ];
         assert_eq!(panes_to_restore(shells, RESTORE_LIMIT).len(), 3);
-    }
-
-    #[test]
-    fn a_restore_can_never_ask_for_more_panes_than_are_allowed() {
-        // Raising the restore limit past what the manager will open would make
-        // a restore fail part-way through, which is the confusing version of
-        // the bug rather than the dangerous one. Kept honest here.
-        assert!(
-            RESTORE_LIMIT < crate::pty::MAX_PANES,
-            "restore limit {RESTORE_LIMIT} must stay under the pane cap {}",
-            crate::pty::MAX_PANES,
-        );
-        assert!(RESTORE_LIMIT <= SAVED_PANE_LIMIT);
     }
 
     #[test]

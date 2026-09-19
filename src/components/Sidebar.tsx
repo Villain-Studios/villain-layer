@@ -271,7 +271,6 @@ export function Sidebar() {
     });
   }
 
-
   function taskMenu(task: TaskView): MenuItem[] {
     const items: MenuItem[] = [
       { label: "Open", onSelect: () => select(task.id) },

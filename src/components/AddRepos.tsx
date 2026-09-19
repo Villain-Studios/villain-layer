@@ -103,10 +103,14 @@ export function AddRepos({ onClose }: { onClose: () => void }) {
       {!found && (
         <>
           <div className="row" style={{ gap: 10, marginBottom: 14 }}>
-            <button className="btn btn-primary" disabled={scanning} onClick={() => void scan()}>
+            <button
+              className="btn btn-primary"
+              disabled={scanning}
+              onClick={() => void scan().catch(fail)}
+            >
               {scanning ? "Scanning…" : "Scan a folder…"}
             </button>
-            <button className="btn" disabled={busy} onClick={() => void pickFolders()}>
+            <button className="btn" disabled={busy} onClick={() => void pickFolders().catch(fail)}>
               Pick folders…
             </button>
             {scanning && <Spinner />}

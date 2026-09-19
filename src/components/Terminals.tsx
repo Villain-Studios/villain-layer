@@ -378,7 +378,7 @@ export function Terminals({ task }: { task: TaskView }) {
                   Start {a.name}
                 </button>
               ))}
-              <button className="btn" onClick={launchShell}>Open shell</button>
+              <button className="btn" onClick={() => void launchShell()}>Open shell</button>
             </div>
           </div>
         )}

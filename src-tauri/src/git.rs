@@ -68,7 +68,9 @@ pub fn branch_exists(dir: &Path, branch: &str) -> bool {
     .is_ok()
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg(test)]
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct WorktreeEntry {
     pub path: String,
     pub branch: Option<String>,
@@ -76,6 +78,8 @@ pub struct WorktreeEntry {
     pub locked: bool,
 }
 
+/// `git worktree list`, parsed. Only the tests read it back today.
+#[cfg(test)]
 pub fn list_worktrees(repo: &Path) -> Result<Vec<WorktreeEntry>> {
     let out = run(repo, &["worktree", "list", "--porcelain"])?;
     let mut entries = Vec::new();
@@ -210,7 +214,7 @@ pub struct ChangedFile {
     pub additions: u32,
     pub deletions: u32,
     pub binary: bool,
-    /// "staged" | "unstaged" | "untracked" | "committed"
+    /// "tracked" for anything git already knows about, "untracked" otherwise.
     pub origin: String,
 }
 
@@ -263,8 +267,6 @@ pub fn changed_files(
     Ok(files)
 }
 
-/// Unified patch for one file, against the baseline. Untracked files are
-/// rendered as an all-additions patch so the review UI has one code path.
 /// What the diff is measured against.
 ///
 /// Two honest answers to "what changed", and which one is wanted depends on
@@ -272,19 +274,14 @@ pub fn changed_files(
 /// what `git status` shows. Branch is everything since the worktree was made,
 /// which is what a reviewer eventually sees — and is only meaningful when the
 /// branch was actually cut for this work.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Scope {
     /// Everything not yet committed, plus untracked files.
+    #[default]
     Uncommitted,
     /// Everything since the branch point, committed or not.
     Branch,
-}
-
-impl Default for Scope {
-    fn default() -> Self {
-        Scope::Uncommitted
-    }
 }
 
 /// The revision a scope compares against: HEAD for uncommitted work, the
@@ -345,6 +342,8 @@ pub fn changed_count(
     (tracked + untracked) as u32
 }
 
+/// Unified patch for one file, against the baseline. Untracked files are
+/// rendered as an all-additions patch so the review UI has one code path.
 pub fn file_diff(
     dir: &Path,
     base: &str,

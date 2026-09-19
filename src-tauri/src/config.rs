@@ -78,7 +78,7 @@ pub struct Checkout {
     pub task_id: String,
     pub project_id: String,
     pub path: String,
-    /// The commit-ish this worktree branched from; the diff baseline.
+    /// The branch this worktree was cut from, usually the repo's default.
     pub base: String,
     /// The commit this worktree was branched from.
     ///

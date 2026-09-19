@@ -17,17 +17,29 @@ interface DiffLine {
 function parseDiff(patch: string): DiffLine[] {
   const out: DiffLine[] = [];
   let newLine = 0;
+  // Whether the line belongs to a hunk or to the header before one. It
+  // matters for `---` and `+++`: in the header they name the two files, but
+  // inside a hunk a removed `-- SQL comment` or an added `++ counter` looks
+  // exactly the same, and reading those as headers dropped them from the
+  // numbering and drew them as metadata.
+  let inHunk = false;
 
   for (const raw of patch.split("\n")) {
     if (raw.startsWith("@@")) {
       const m = /@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(raw);
       newLine = m ? Number(m[1]) : 0;
+      inHunk = true;
       out.push({ kind: "hunk", text: raw, newLine: null });
+    } else if (raw.startsWith("diff ")) {
+      inHunk = false;
+      out.push({ kind: "meta", text: raw, newLine: null });
     } else if (
-      raw.startsWith("diff ") || raw.startsWith("index ") ||
-      raw.startsWith("--- ") || raw.startsWith("+++ ") ||
-      raw.startsWith("new file") || raw.startsWith("deleted file") ||
-      raw.startsWith("similarity ") || raw.startsWith("rename ")
+      !inHunk && (
+        raw.startsWith("index ") ||
+        raw.startsWith("--- ") || raw.startsWith("+++ ") ||
+        raw.startsWith("new file") || raw.startsWith("deleted file") ||
+        raw.startsWith("similarity ") || raw.startsWith("rename ")
+      )
     ) {
       out.push({ kind: "meta", text: raw, newLine: null });
     } else if (raw.startsWith("+")) {
@@ -42,7 +54,6 @@ function parseDiff(patch: string): DiffLine[] {
   }
   return out;
 }
-
 
 /** A changed file, or a folder holding more of them. */
 interface Node {
@@ -300,16 +311,45 @@ export function DiffView({ task }: { task: TaskView }) {
     }
   }
 
+  // The scope switch lives in the tray under the diff, and the tray is drawn
+  // in both states: an empty "uncommitted" view is exactly when someone wants
+  // to flip to the whole branch and see what was committed.
+  const scopeTabs = (
+    <div className="subtabs">
+      {(["uncommitted", "branch"] as DiffScope[]).map((v) => (
+        <button
+          key={v}
+          className={scope === v ? "active" : ""}
+          title={
+            v === "uncommitted"
+              ? "Everything not yet committed — what git status shows"
+              : "Everything since this worktree was created, committed or not"
+          }
+          onClick={() => { setScope(v); write("diffScope", v); }}
+        >
+          {v === "uncommitted" ? "Uncommitted" : "Whole branch"}
+        </button>
+      ))}
+    </div>
+  );
+
   if (files.length === 0) {
+    const where = multi ? "any of the task's repos" : "this worktree";
     return (
-      <div className="empty">
-        <h2>No changes yet</h2>
-        <p>
-          Nothing differs from the base branch in {multi ? "any of the task's repos" : "this worktree"}.
-          Once an agent edits files they show up here.
-        </p>
-        <button className="btn" onClick={() => void load()}>Refresh</button>
-      </div>
+      <>
+        <div className="empty">
+          <h2>{scope === "uncommitted" ? "Nothing uncommitted" : "No changes yet"}</h2>
+          <p>
+            {scope === "uncommitted"
+              ? `The working tree is clean in ${where}. Switch to Whole branch to see what has been committed.`
+              : `Nothing differs from where this branch started in ${where}. Once an agent edits files they show up here.`}
+          </p>
+          <button className="btn" onClick={() => void load()}>Refresh</button>
+        </div>
+        <div className="review-tray">
+          {scopeTabs}
+        </div>
+      </>
     );
   }
 
@@ -449,22 +489,7 @@ export function DiffView({ task }: { task: TaskView }) {
       </div>
 
       <div className="review-tray">
-        <div className="subtabs">
-          {(["uncommitted", "branch"] as DiffScope[]).map((v) => (
-            <button
-              key={v}
-              className={scope === v ? "active" : ""}
-              title={
-                v === "uncommitted"
-                  ? "Everything not yet committed — what git status shows"
-                  : "Everything since this worktree was created, committed or not"
-              }
-              onClick={() => { setScope(v); write("diffScope", v); }}
-            >
-              {v === "uncommitted" ? "Uncommitted" : "Whole branch"}
-            </button>
-          ))}
-        </div>
+        {scopeTabs}
         <span style={{ color: "var(--dim)" }}>
           {drafts.length === 0
             ? "Click a line number to leave a note for the agent."

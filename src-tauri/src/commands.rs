@@ -1780,14 +1780,18 @@ pub async fn jira_connect(
     project_key: Option<String>,
     jql: Option<String>,
 ) -> Result<String> {
-    let cfg = JiraConfig {
+    let mut cfg = JiraConfig {
         base_url: base_url.trim_end_matches('/').to_string(),
         email,
         project_key,
         jql,
+        epic_field: None,
     };
     // Verify before persisting, so a typo never looks like a working setup.
-    let who = Jira::new(&cfg, &token).myself().await?;
+    let client = Jira::new(&cfg, &token);
+    let who = client.myself().await?;
+    // Asked once, here, because the id differs on every site.
+    cfg.epic_field = client.epic_link_field().await;
     secrets::set(secrets::JIRA, &token)?;
     state.config.update(|c| c.jira = Some(cfg))?;
     Ok(who.display_name)
@@ -1800,12 +1804,19 @@ pub async fn jira_issue_types(
     state: State<'_, AppState>,
     refresh: Option<bool>,
 ) -> Result<Vec<jira::IssueType>> {
-    if refresh != Some(true) {
+    jira_issue_types_inner(&state, refresh == Some(true)).await
+}
+
+pub(crate) async fn jira_issue_types_inner(
+    state: &AppState,
+    refresh: bool,
+) -> Result<Vec<jira::IssueType>> {
+    if !refresh {
         if let Some(cached) = state.jira_types.lock().clone() {
             return Ok(cached);
         }
     }
-    let (client, _) = jira_client(&state)?;
+    let (client, _) = jira_client(state)?;
     let types = client.issue_types().await?;
     *state.jira_types.lock() = Some(types.clone());
     Ok(types)
@@ -1813,6 +1824,7 @@ pub async fn jira_issue_types(
 
 #[tauri::command]
 pub async fn jira_issues(state: State<'_, AppState>) -> Result<jira::Page> {
+    learn_epic_field(&state).await;
     let (client, cfg) = jira_client(&state)?;
     let jql = cfg
         .jql
@@ -1821,6 +1833,26 @@ pub async fn jira_issues(state: State<'_, AppState>) -> Result<jira::Page> {
     // Your own queue should be all of it: this is the list the app groups into
     // epics and reasons about, and a silent cut makes that grouping wrong.
     client.search(&jql, 500).await
+}
+
+/// Find this site's Epic Link field once, for a connection made before the app
+/// knew to ask. Sites that have no such field are asked again next time, which
+/// is one cheap request and keeps the config free of "we looked and found
+/// nothing" bookkeeping.
+async fn learn_epic_field(state: &AppState) {
+    let Ok((client, cfg)) = jira_client(state) else {
+        return;
+    };
+    if cfg.epic_field.is_some() {
+        return;
+    }
+    if let Some(field) = client.epic_link_field().await {
+        let _ = state.config.update(|c| {
+            if let Some(j) = c.jira.as_mut() {
+                j.epic_field = Some(field.clone());
+            }
+        });
+    }
 }
 
 /// Look past your own queue: unassigned work, or anyone else's.
@@ -2439,6 +2471,10 @@ pub struct NewIssue {
     pub project_key: Option<String>,
     #[serde(default)]
     pub parent_key: Option<String>,
+    /// Anything else this project requires, already shaped the way Jira wants
+    /// it by the caller, which is the side that has the metadata.
+    #[serde(default)]
+    pub fields: Option<Value>,
 }
 
 /// The project a key belongs to: everything before the first dash.
@@ -2446,6 +2482,37 @@ fn project_of(key: &str) -> Option<String> {
     let (project, number) = key.split_once('-')?;
     (!project.is_empty() && !number.is_empty() && number.chars().all(|c| c.is_ascii_digit()))
         .then(|| project.to_uppercase())
+}
+
+/// Whatever this site calls an ordinary issue.
+///
+/// Not "Task": that is one site's name for it. Hierarchy level is Jira's own
+/// and means the same everywhere — 0 is a standard issue — so the plain type
+/// is found rather than assumed, preferring one actually called Task when
+/// there is one.
+pub(crate) async fn default_issue_type(state: &AppState) -> Result<String> {
+    let types = jira_issue_types_inner(state, false).await?;
+    let plain: Vec<&jira::IssueType> = types
+        .iter()
+        .filter(|t| t.hierarchy_level == 0 && !t.subtask)
+        .collect();
+    plain
+        .iter()
+        .find(|t| t.name.eq_ignore_ascii_case("task"))
+        .or_else(|| plain.first())
+        .map(|t| t.name.clone())
+        .ok_or_else(|| Error::Other("this Jira defines no ordinary issue type".into()))
+}
+
+/// What a project demands before it will accept a new issue of this type.
+#[tauri::command]
+pub async fn jira_create_fields(
+    state: State<'_, AppState>,
+    project_key: String,
+    issue_type_id: String,
+) -> Result<Vec<jira::CreateField>> {
+    let (client, _) = jira_client(&state)?;
+    client.create_fields(&project_key, &issue_type_id).await
 }
 
 /// File a ticket without starting work on it.
@@ -2482,6 +2549,7 @@ pub async fn jira_create_issue(state: State<'_, AppState>, req: NewIssue) -> Res
             &req.description,
             &req.issue_type,
             req.parent_key.as_deref(),
+            &req.fields.clone().unwrap_or(Value::Null),
         )
         .await?;
     client.issue(&key).await
@@ -2502,6 +2570,8 @@ pub struct NewJiraTask {
     pub project_ids: Vec<String>,
     #[serde(default)]
     pub branch_suffix: Option<String>,
+    #[serde(default)]
+    pub fields: Option<Value>,
 }
 
 /// File the ticket and open the worktrees in one step.
@@ -2541,6 +2611,7 @@ pub async fn jira_create_task(state: State<'_, AppState>, req: NewJiraTask) -> R
             &req.description,
             &req.issue_type,
             req.parent_key.as_deref(),
+            &req.fields.clone().unwrap_or(Value::Null),
         )
         .await?;
     let url = format!("{}/browse/{key}", cfg.base_url.trim_end_matches('/'));

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api } from "../lib/api";
 import { groupByEpic, useStore } from "../store";
-import type { JiraIssue, JiraPage, JiraTransition } from "../lib/types";
+import type { CreateField, JiraIssue, JiraPage, JiraTransition } from "../lib/types";
 import { ContextMenu, Field, Modal, Spinner, type MenuItem } from "./ui";
 import { RepoPicker } from "./RepoPicker";
 import { IssueTypeIcon, hierarchyAccent, isEpicType, typeMap } from "./IssueType";
@@ -51,6 +51,10 @@ export function TicketsView() {
   const [newDesc, setNewDesc] = useState("");
   const [newType, setNewType] = useState("");
   const [filingBusy, setFilingBusy] = useState(false);
+  // What this project insists on, asked of Jira rather than assumed.
+  const [needed, setNeeded] = useState<CreateField[]>([]);
+  const [neededLoading, setNeededLoading] = useState(false);
+  const [extra, setExtra] = useState<Record<string, string[]>>({});
 
   const installed = agents.filter((a) => a.installed);
   const jiraBase = settings?.jira?.base_url.replace(/\/+$/, "") ?? "";
@@ -102,6 +106,48 @@ export function TicketsView() {
     setNewType((creatable.find((t) => t.name.toLowerCase() === "task") ?? creatable[0])?.name ?? "");
   }, [creatable, newType]);
 
+  useEffect(() => {
+    const project = filing?.key.split("-")[0];
+    const typeId = creatable.find((t) => t.name === newType)?.id;
+    if (!project || !typeId) { setNeeded([]); return; }
+    setNeededLoading(true);
+    setExtra({});
+    api.jiraCreateFields(project, typeId)
+      .then((f) => setNeeded(f.filter((x) => x.required)))
+      // A site that will not describe its own form is no reason to block the
+      // dialog: Jira still says what is missing if the create is refused.
+      .catch(() => setNeeded([]))
+      .finally(() => setNeededLoading(false));
+  }, [filing, newType, creatable]);
+
+  /// Shaped the way Jira wants each field, from the metadata it gave us.
+  function extraFields(): Record<string, unknown> {
+    const out: Record<string, unknown> = {};
+    for (const field of needed) {
+      const picked = extra[field.id] ?? [];
+      if (picked.length === 0) continue;
+      out[field.id] =
+        field.kind === "array" ? picked.map((id) => ({ id })) : { id: picked[0] };
+    }
+    return out;
+  }
+
+  // Fields the dialog fills itself, whether or not Jira calls them required.
+  const OWN = ["summary", "description", "issuetype", "project", "parent", "reporter"];
+  // Required, and a closed set of values, so it can be offered as a choice.
+  const pickable = needed.filter((f) => !OWN.includes(f.id) && f.allowed.length > 0);
+  // Required, free-form, and not something this dialog asks for. Nothing
+  // sensible can be invented for these, so say so rather than failing at Jira.
+  const unsupported = needed.filter((f) => !OWN.includes(f.id) && f.allowed.length === 0);
+  const descriptionRequired = needed.some((f) => f.id === "description");
+
+  const missing = [
+    ...pickable.filter((f) => (extra[f.id] ?? []).length === 0),
+    ...(descriptionRequired && !newDesc.trim()
+      ? [{ id: "description", name: "Description" }]
+      : []),
+  ];
+
   async function fileIssue() {
     if (!filing || !newSummary.trim() || !newType) return;
     setFilingBusy(true);
@@ -112,6 +158,7 @@ export function TicketsView() {
         issue_type: newType,
         project_key: null,
         parent_key: filing.key,
+        fields: extraFields(),
       });
       toast("success", `Filed ${issue.key} under ${filing.key}`);
       setFiling(null);
@@ -649,7 +696,12 @@ export function TicketsView() {
               <button className="btn" onClick={() => setFiling(null)}>Cancel</button>
               <button
                 className="btn btn-primary"
-                disabled={filingBusy || !newSummary.trim() || !newType}
+                disabled={filingBusy || !newSummary.trim() || !newType || missing.length > 0}
+                title={
+                  missing.length > 0
+                    ? `${missing.map((f) => f.name).join(", ")} required by this project`
+                    : undefined
+                }
                 onClick={() => void fileIssue()}
               >
                 {filingBusy ? "Filing…" : "File ticket"}
@@ -688,7 +740,62 @@ export function TicketsView() {
             </div>
           </Field>
 
-          <Field label="Description" hint="Optional. Becomes the ticket body and an agent's briefing.">
+          {neededLoading && (
+            <div className="muted" style={{ marginBottom: 10 }}>
+              Asking Jira what this project requires…
+            </div>
+          )}
+          {unsupported.length > 0 && (
+            <div className="confirm-detail" style={{ marginBottom: 12 }}>
+              This project also requires {unsupported.map((f) => f.name).join(", ")},
+              which this dialog cannot fill in. Jira will refuse the ticket — file it
+              in Jira instead, and it will show up here on the next refresh.
+            </div>
+          )}
+          {pickable.map((field) => {
+            const picked = extra[field.id] ?? [];
+            const many = field.kind === "array";
+            return (
+              <Field
+                key={field.id}
+                label={field.name}
+                hint={`Required by this project${many ? " — pick one or more" : ""}.`}
+              >
+                <div className="type-row">
+                  {field.allowed.map((v) => {
+                    const on = picked.includes(v.id);
+                    return (
+                      <button
+                        key={v.id}
+                        className={`type-pick${on ? " active" : ""}`}
+                        onClick={() =>
+                          setExtra((c) => ({
+                            ...c,
+                            [field.id]: on
+                              ? picked.filter((x) => x !== v.id)
+                              : many
+                                ? [...picked, v.id]
+                                : [v.id],
+                          }))
+                        }
+                      >
+                        {v.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              </Field>
+            );
+          })}
+
+          <Field
+            label="Description"
+            hint={
+              descriptionRequired
+                ? "Required by this project. Becomes the ticket body and an agent's briefing."
+                : "Optional. Becomes the ticket body and an agent's briefing."
+            }
+          >
             <textarea
               rows={5}
               value={newDesc}

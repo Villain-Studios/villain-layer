@@ -136,6 +136,16 @@ export interface JiraIssue {
   url: string;
 }
 
+/** A field a project insists on before it will accept a new issue. */
+export interface CreateField {
+  id: string;
+  name: string;
+  required: boolean;
+  /** "array" when Jira expects several values. */
+  kind: string;
+  allowed: { id: string; name: string }[];
+}
+
 /** A repository added to a task, and how many running agents were told. */
 export interface AddedRepo extends Checkout {
   told: number;

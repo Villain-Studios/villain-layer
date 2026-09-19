@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
-  AddedRepo, AgentStatus, ChangedFile, CheckoutPr, FoundRepo, JiraIssue,
+  AddedRepo, AgentStatus, ChangedFile, CheckoutPr, CreateField, FoundRepo, JiraIssue,
   JiraIssueType, JiraPage, JiraTransition, MatchKind, PaneInfo, Project, RepoResult, RepoRule,
   Started,
   RepoSet,
@@ -119,12 +119,15 @@ export const api = {
   jiraSyncStatus: (key: string) => invoke<string | null>("jira_sync_status", { key }),
   jiraBrowse: (text: string, whose: string, includeDone: boolean, types: string[]) =>
     invoke<JiraPage>("jira_browse", { text: text || null, whose, includeDone, types }),
+  jiraCreateFields: (projectKey: string, issueTypeId: string) =>
+    invoke<CreateField[]>("jira_create_fields", { projectKey, issueTypeId }),
   jiraCreateIssue: (req: {
     summary: string;
     description: string;
     issue_type: string;
     project_key: string | null;
     parent_key: string | null;
+    fields: Record<string, unknown> | null;
   }) => invoke<JiraIssue>("jira_create_issue", { req }),
   jiraCreateTask: (req: {
     summary: string;

@@ -84,6 +84,11 @@ pub struct Checkout {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct JiraConfig {
+    /// The custom field this site keeps the Epic Link in, discovered on
+    /// connect. Only company-managed projects still use one; modern Cloud puts
+    /// the epic on `parent`, so None is both common and fine.
+    #[serde(default)]
+    pub epic_field: Option<String>,
     /// e.g. https://your-site.atlassian.net
     pub base_url: String,
     pub email: String,

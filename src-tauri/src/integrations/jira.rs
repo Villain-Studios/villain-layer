@@ -13,6 +13,10 @@ pub struct Jira {
     base_url: String,
     auth: String,
     client: reqwest::Client,
+    /// This site's Epic Link field, when it has one. Ids are allocated per
+    /// site, so the same field is a different number on every Jira — it has to
+    /// be discovered rather than written down.
+    epic_field: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -75,6 +79,7 @@ impl Jira {
             base_url: cfg.base_url.trim_end_matches('/').to_string(),
             auth: format!("Basic {auth}"),
             client: http_client(),
+            epic_field: cfg.epic_field.clone(),
         }
     }
 
@@ -176,12 +181,16 @@ impl Jira {
     /// had results when the cap was reached, so a caller can tell the
     /// difference between "that is all of it" and "that is all you asked for".
     pub async fn search(&self, jql: &str, max: u32) -> Result<Page> {
-        let fields = json!([
+        let mut fields = json!([
             "summary", "description", "status", "issuetype",
             "priority", "assignee", "labels", "components", "parent",
-            // Company-managed projects may still expose the epic here.
-            "customfield_10014"
         ]);
+        // Asked for only when this site has one; its id differs per site.
+        if let Some(field) = &self.epic_field {
+            if let Some(list) = fields.as_array_mut() {
+                list.push(json!(field));
+            }
+        }
 
         let mut issues: Vec<Issue> = Vec::new();
         let mut token: Option<String> = None;
@@ -300,6 +309,7 @@ impl Jira {
         description: &str,
         issue_type: &str,
         parent_key: Option<&str>,
+        extra: &Value,
     ) -> Result<String> {
         let mut fields = json!({
             "project": { "key": project_key },
@@ -310,6 +320,14 @@ impl Jira {
         if let Some(parent) = parent_key.filter(|p| !p.is_empty()) {
             fields["parent"] = json!({ "key": parent });
         }
+        // Whatever else this project demands. Shaped by the caller from the
+        // metadata Jira itself reported, so nothing about any one site's
+        // required fields is written down here.
+        if let (Some(extra), Some(into)) = (extra.as_object(), fields.as_object_mut()) {
+            for (k, v) in extra {
+                into.insert(k.clone(), v.clone());
+            }
+        }
 
         let v = self
             .json(
@@ -318,6 +336,81 @@ impl Jira {
             )
             .await?;
         Ok(str_at(&v, "key"))
+    }
+
+    /// The id this site uses for the Epic Link field, if it still has one.
+    ///
+    /// Matched on the field's `schema.custom`, which is the same string on
+    /// every Jira; the numeric id after `customfield_` is not.
+    pub async fn epic_link_field(&self) -> Option<String> {
+        const EPIC_LINK: &str = "com.pyxis.greenhopper.jira:gh-epic-link";
+        let v = self
+            .json(self.req(reqwest::Method::GET, "/rest/api/3/field"))
+            .await
+            .ok()?;
+        v.as_array()?.iter().find_map(|f| {
+            (f.pointer("/schema/custom").and_then(|c| c.as_str()) == Some(EPIC_LINK))
+                .then(|| str_at(f, "id"))
+                .filter(|id| !id.is_empty())
+        })
+    }
+
+    /// What this project demands before it will create an issue of this type.
+    ///
+    /// Asked of Jira rather than assumed: one project makes components
+    /// mandatory, another a custom field, most neither. The only way to build a
+    /// form that works on every site is to be told what the form is.
+    pub async fn create_fields(
+        &self,
+        project_key: &str,
+        issue_type_id: &str,
+    ) -> Result<Vec<CreateField>> {
+        let v = self
+            .json(self.req(
+                reqwest::Method::GET,
+                &format!(
+                    "/rest/api/3/issue/createmeta/{project_key}/issuetypes/{issue_type_id}"
+                ),
+            ))
+            .await?;
+
+        let fields = v
+            .get("fields")
+            .and_then(|f| f.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        Ok(fields
+            .iter()
+            .map(|f| CreateField {
+                id: str_at(f, "fieldId"),
+                name: str_at(f, "name"),
+                required: f.get("required").and_then(Value::as_bool).unwrap_or(false),
+                kind: f
+                    .pointer("/schema/type")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                allowed: f
+                    .get("allowedValues")
+                    .and_then(|a| a.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .map(|v| AllowedValue {
+                                id: str_at(v, "id"),
+                                // Components use `name`, many custom fields use
+                                // `value`, versions use `name` too.
+                                name: match v.get("name").and_then(Value::as_str) {
+                                    Some(n) => n.to_string(),
+                                    None => str_at(v, "value"),
+                                },
+                            })
+                            .filter(|v| !v.id.is_empty())
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            })
+            .collect())
     }
 
     /// Move an issue into whatever this workflow calls "in progress".
@@ -414,7 +507,7 @@ impl Jira {
                         .collect()
                 })
                 .unwrap_or_default(),
-            epic_key: epic_key(&f),
+            epic_key: epic_key(&f, self.epic_field.as_deref()),
             epic_summary: f
                 .pointer("/parent/fields/summary")
                 .and_then(|s| s.as_str())
@@ -424,13 +517,13 @@ impl Jira {
 }
 
 /// Jira Cloud unified epics onto `parent`, but older company-managed projects
-/// still carry the Epic Link in a custom field.
-fn epic_key(fields: &Value) -> Option<String> {
+/// still carry the Epic Link in a custom field named per site.
+fn epic_key(fields: &Value, epic_field: Option<&str>) -> Option<String> {
     if let Some(key) = fields.pointer("/parent/key").and_then(|k| k.as_str()) {
         return Some(key.to_string());
     }
     fields
-        .get("customfield_10014")
+        .get(epic_field?)
         .and_then(|v| v.as_str())
         .filter(|s| s.contains('-'))
         .map(str::to_string)
@@ -519,6 +612,24 @@ fn children(node: &Value, out: &mut String) {
             walk(child, out);
         }
     }
+}
+
+/// A field a project insists on before it will accept a new issue.
+#[derive(Debug, Clone, Serialize)]
+pub struct CreateField {
+    pub id: String,
+    pub name: String,
+    pub required: bool,
+    /// "array" when Jira expects several values, otherwise the scalar type.
+    pub kind: String,
+    /// The values this field will accept, when it is a closed set.
+    pub allowed: Vec<AllowedValue>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AllowedValue {
+    pub id: String,
+    pub name: String,
 }
 
 /// A page of search results, and whether Jira had more to give.

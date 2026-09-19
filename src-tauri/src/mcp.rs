@@ -233,6 +233,26 @@ fn tools() -> Vec<Value> {
             vec!["key"],
         ),
         tool(
+            "jira_issue_types",
+            "The issue types this Jira defines, with their hierarchy level: 1 and \
+             above is epic-level, 0 a standard issue, -1 a sub-task. Names differ \
+             between sites, so ask rather than assuming one is called Task.",
+            json!({}),
+            vec![],
+        ),
+        tool(
+            "jira_create_fields",
+            "What a project demands before it will accept a new issue of a given \
+             type: the required fields and the values each will take. Ask this \
+             before jira_create_issue — many projects make components or a custom \
+             field mandatory, and the create is refused without them.",
+            json!({
+                "project_key": str_prop("Project key, e.g. the ACME in ACME-1234"),
+                "issue_type_id": str_prop("Issue type id; jira_issue_types lists them")
+            }),
+            vec!["project_key", "issue_type_id"],
+        ),
+        tool(
             "jira_create_issue",
             "File a new Jira issue. Returns the new key.",
             json!({
@@ -443,6 +463,22 @@ async fn call(app: &AppHandle, name: &str, args: Value) -> Result<Value> {
             Ok(serde_json::to_value(client.issue(&key).await?)?)
         }
 
+        "jira_issue_types" => Ok(serde_json::to_value(
+            commands::jira_issue_types_inner(&state, false).await?,
+        )?),
+
+        "jira_create_fields" => {
+            let (client, _) = commands::jira_client(&state)?;
+            Ok(serde_json::to_value(
+                client
+                    .create_fields(
+                        required(&args, "project_key")?,
+                        required(&args, "issue_type_id")?,
+                    )
+                    .await?,
+            )?)
+        }
+
         "jira_create_issue" => {
             let (client, cfg) = commands::jira_client(&state)?;
             let project = arg(&args, "project_key")
@@ -459,8 +495,13 @@ async fn call(app: &AppHandle, name: &str, args: Value) -> Result<Value> {
                     &project,
                     required(&args, "summary")?,
                     arg(&args, "description").unwrap_or_default(),
-                    arg(&args, "issue_type").unwrap_or("Task"),
+                    // Not "Task": that is one site's name for it.
+                    &match arg(&args, "issue_type") {
+                        Some(t) => t.to_string(),
+                        None => commands::default_issue_type(&state).await?,
+                    },
                     arg(&args, "parent_key"),
+                    &serde_json::Value::Null,
                 )
                 .await?;
             Ok(json!({ "key": key, "url": format!("{}/browse/{key}", cfg.base_url) }))

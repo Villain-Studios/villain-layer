@@ -4,6 +4,7 @@
 use serde::Serialize;
 use serde_json::{json, Value};
 
+use super::http_client;
 use crate::config::GithubConfig;
 use crate::error::{Error, Result};
 
@@ -39,7 +40,7 @@ impl GitHub {
         Self {
             api_url: cfg.api_url.trim_end_matches('/').to_string(),
             token: token.to_string(),
-            client: reqwest::Client::new(),
+            client: http_client(),
         }
     }
 

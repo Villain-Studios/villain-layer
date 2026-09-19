@@ -286,6 +286,13 @@ fn tools() -> Vec<Value> {
             vec!["issue_key", "repos"],
         ),
         tool(
+            "task_prs",
+            "Pull request state for every repository in a task: the open PR if \
+             there is one, its check runs, and how many files have changed.",
+            json!({ "task_id": str_prop("Task id from list_tasks") }),
+            vec!["task_id"],
+        ),
+        tool(
             "open_prs",
             "Push every repository in a task that has changes and open a pull \
              request for each, then post the links back to the Jira ticket.",
@@ -434,6 +441,13 @@ async fn call(app: &AppHandle, name: &str, args: Value) -> Result<Value> {
             )
             .await?;
             Ok(serde_json::to_value(task)?)
+        }
+
+        "task_prs" => {
+            let id = required(&args, "task_id")?.to_string();
+            Ok(serde_json::to_value(
+                commands::github_task_prs(state, id).await?,
+            )?)
         }
 
         "open_prs" => {

@@ -3,6 +3,7 @@
 
 use serde_json::json;
 
+use super::http_client;
 use crate::error::{Error, Result};
 
 pub struct Slack {
@@ -14,7 +15,7 @@ impl Slack {
     pub fn new(secret: &str) -> Self {
         Self {
             secret: secret.trim().to_string(),
-            client: reqwest::Client::new(),
+            client: http_client(),
         }
     }
 

@@ -5,6 +5,7 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use super::http_client;
 use crate::config::JiraConfig;
 use crate::error::{Error, Result};
 
@@ -68,7 +69,7 @@ impl Jira {
         Self {
             base_url: cfg.base_url.trim_end_matches('/').to_string(),
             auth: format!("Basic {auth}"),
-            client: reqwest::Client::new(),
+            client: http_client(),
         }
     }
 

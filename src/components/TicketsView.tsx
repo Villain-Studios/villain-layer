@@ -193,6 +193,8 @@ export function TicketsView() {
   /// One ticket, wherever it is being listed: your own epics or a search.
   function ticketCard(issue: JiraIssue) {
     const task = taskFor(issue.key);
+    // Jira's middle category: whatever this workflow calls being under way.
+    const moving = issue.status_category === "indeterminate";
     return (
       <div
         key={issue.key}
@@ -215,12 +217,15 @@ export function TicketsView() {
           <span className={`status-pill ${statusClass(issue.status_category)}`}>
             {issue.status}
           </span>
-          {task && issue.status_category === "indeterminate" && (
-            <span className="chip add">open task →</span>
-          )}
-          {task && issue.status_category !== "indeterminate" && (
+          {/*
+            Every ticket that is moving says where it stands here, because the
+            absence of a chip reads as "fine" rather than as "nothing set up".
+            Three states, each with the one action that resolves it.
+          */}
+          {task && moving && <span className="chip add">open task →</span>}
+          {task && !moving && (
             // A branch and an agent are running against a ticket the board
-            // still calls Open. Say so, and offer the one click that fixes it.
+            // still calls Open. Say so, and offer the click that fixes it.
             <button
               className="chip warn sync"
               disabled={syncing === issue.key}
@@ -228,6 +233,16 @@ export function TicketsView() {
               onClick={(e) => { e.stopPropagation(); void syncStatus(issue.key); }}
             >
               {syncing === issue.key ? "moving…" : "started here — sync ↑"}
+            </button>
+          )}
+          {!task && moving && (
+            // In progress on the board with nothing here to work in.
+            <button
+              className="chip sync open"
+              title={`Create worktrees and start work on ${issue.key}`}
+              onClick={(e) => { e.stopPropagation(); setOpen(issue); }}
+            >
+              no worktree — start ↓
             </button>
           )}
         </div>

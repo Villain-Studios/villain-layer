@@ -1237,3 +1237,7 @@ textarea { resize: vertical; font-family: var(--mono); }
 /* A ticket whose board status has fallen behind the work: the chip is the fix. */
 .chip.sync { cursor: pointer; font-family: var(--sans); }
 .chip.sync:hover:not(:disabled) { border-color: var(--amber); color: var(--amber); }
+
+/* In progress on the board, with nothing here to work in. */
+.chip.sync.open { color: var(--blue); border-color: #2a3a52; }
+.chip.sync.open:hover { border-color: var(--blue); }

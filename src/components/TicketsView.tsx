@@ -394,6 +394,9 @@ export function TicketsView() {
     tasks.map((t) => t.issue_key).filter((k): k is string => !!k),
   );
   const epics = groupByEpic(filtered, started);
+  // Collapsed is stored per epic, so "all" means every one currently listed —
+  // which is what a filter has narrowed things to, not the whole board.
+  const allShut = epics.length > 0 && epics.every((e) => shut[e.key] ?? false);
 
   return (
     <div className="wide">
@@ -428,6 +431,18 @@ export function TicketsView() {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
+            <button
+              className="btn btn-sm"
+              disabled={epics.length === 0}
+              title={allShut ? "Open every epic" : "Close every epic"}
+              onClick={() =>
+                setShut(
+                  allShut ? {} : Object.fromEntries(epics.map((e) => [e.key, true])),
+                )
+              }
+            >
+              {allShut ? "Expand all" : "Collapse all"}
+            </button>
             <button className="btn btn-sm" onClick={() => void refreshIssues()}>Refresh</button>
           </>
         ) : (

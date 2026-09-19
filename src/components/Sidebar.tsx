@@ -167,9 +167,10 @@ export function Sidebar() {
   async function addRepos(task: TaskView) {
     setBusy(true);
     const failed: string[] = [];
+    let told = 0;
     for (const id of adding) {
       try {
-        await api.addCheckout(task.id, id);
+        told = Math.max(told, (await api.addCheckout(task.id, id)).told);
       } catch (e) {
         failed.push(`${projects.find((p) => p.id === id)?.name ?? id}: ${errMessage(e)}`);
       }
@@ -181,7 +182,15 @@ export function Sidebar() {
     setExpanded((e) => ({ ...e, [task.id]: true }));
 
     const added = adding.length - failed.length;
-    if (added > 0) toast("success", `${added} worktree${added === 1 ? "" : "s"} on ${task.branch}`);
+    if (added > 0) {
+      toast(
+        "success",
+        `${added} worktree${added === 1 ? "" : "s"} on ${task.branch}` +
+          // Agents already running cannot see a new sibling folder, so they are
+          // told. Say so rather than reaching into their session invisibly.
+          (told > 0 ? ` · told ${told} running agent${told === 1 ? "" : "s"}` : ""),
+      );
+    }
     if (failed.length) toast("error", failed.join("\n"));
   }
 

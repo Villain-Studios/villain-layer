@@ -136,6 +136,11 @@ export interface JiraIssue {
   url: string;
 }
 
+/** A repository added to a task, and how many running agents were told. */
+export interface AddedRepo extends Checkout {
+  told: number;
+}
+
 /** A task, plus the status its ticket was moved to on the way. */
 export interface Started extends Task {
   moved: string | null;

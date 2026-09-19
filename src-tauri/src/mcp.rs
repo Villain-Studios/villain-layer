@@ -336,6 +336,19 @@ fn tools() -> Vec<Value> {
             vec!["task_id"],
         ),
         tool(
+            "add_repo",
+            "Add a repository to a task you are already working in, when the work \
+             turns out to need code that is not in front of you. A worktree on the \
+             task's branch is created beside the ones already there, and the path \
+             comes back. Prefer this to reading the original clone: that one is on \
+             its own branch and is not yours to change.",
+            json!({
+                "task_id": str_prop("Task id from list_tasks; match it by the directory you are working in"),
+                "repo": str_prop("Repository name from list_repos")
+            }),
+            vec!["task_id", "repo"],
+        ),
+        tool(
             "forget_repo",
             "Remove a repository from Villain Layer's list. The clone and any \
              worktrees stay on disk untouched; only the app forgets it.",
@@ -504,6 +517,29 @@ async fn call(app: &AppHandle, name: &str, args: Value) -> Result<Value> {
                 ));
             }
             Ok(json!({ "ok": true }))
+        }
+
+        "add_repo" => {
+            let task_id = required(&args, "task_id")?.to_string();
+            let wanted = required(&args, "repo")?;
+            let project = state
+                .config
+                .read()
+                .projects
+                .into_iter()
+                .find(|p| p.name.eq_ignore_ascii_case(wanted))
+                .ok_or_else(|| {
+                    crate::error::Error::NotFound(format!(
+                        "no repository named {wanted}; see list_repos"
+                    ))
+                })?;
+
+            let added = commands::add_repo(&state, &task_id, &project.id)?;
+            Ok(json!({
+                "repo": project.name,
+                "path": added.checkout.path,
+                "base": added.checkout.base,
+            }))
         }
 
         "forget_repo" => {

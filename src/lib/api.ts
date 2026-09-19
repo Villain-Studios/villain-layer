@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
-  AgentStatus, ChangedFile, Checkout, CheckoutPr, FoundRepo, JiraIssue,
+  AddedRepo, AgentStatus, ChangedFile, CheckoutPr, FoundRepo, JiraIssue,
   JiraIssueType, JiraPage, JiraTransition, MatchKind, PaneInfo, Project, RepoResult, RepoRule,
   Started,
   RepoSet,
@@ -34,7 +34,7 @@ export const api = {
   deleteTask: (id: string, force = false) =>
     invoke<RepoResult[]>("delete_task", { id, force }),
   addCheckout: (taskId: string, projectId: string) =>
-    invoke<Checkout>("add_checkout", { taskId, projectId }),
+    invoke<AddedRepo>("add_checkout", { taskId, projectId }),
   removeCheckout: (checkoutId: string, force = false) =>
     invoke<void>("remove_checkout", { checkoutId, force }),
   suggestRepos: (args: {

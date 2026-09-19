@@ -639,12 +639,74 @@ pub(crate) fn new_task(state: &AppState, req: NewTask) -> Result<Task> {
 }
 
 /// Add a repository to a task that is already in flight.
+/// Tell the agents working on a task that it gained a repository.
+///
+/// A worktree appearing beside a running agent is invisible to it: nothing
+/// prompts it to look at its surroundings again, so it carries on believing
+/// the repo it needs is not there. The note goes into the pane's input, which
+/// is the one channel an agent is actually listening on — a CLI queues it and
+/// picks it up when the current turn ends.
+///
+/// Returns how many were told, so the app can say so rather than doing it
+/// silently.
+fn tell_agents(state: &AppState, task_id: &str, text: &str) -> usize {
+    let mut told = 0;
+    for pane in state.ptys.list(Some(task_id)) {
+        if pane.kind != PaneKind::Agent || !pane.running {
+            continue;
+        }
+        if state.ptys.write(&pane.id, text).is_ok() && state.ptys.write(&pane.id, "\r").is_ok() {
+            told += 1;
+        }
+    }
+    told
+}
+
+/// A repository added to a task, and how many running agents were told.
+#[derive(Debug, Serialize)]
+pub struct AddedRepo {
+    #[serde(flatten)]
+    pub checkout: Checkout,
+    pub told: usize,
+}
+
+pub(crate) fn add_repo(state: &AppState, task_id: &str, project_id: &str) -> Result<AddedRepo> {
+    let checkout = add_checkout_inner(state, task_id, project_id)?;
+    let name = state
+        .config
+        .project(project_id)
+        .map(|p| p.name)
+        .unwrap_or_else(|_| "a repository".into());
+
+    let told = tell_agents(
+        state,
+        task_id,
+        &format!(
+            "[villain-layer] {name} has just been added to this task, checked out on the \
+             same branch at {}. It is there if the work needs it — read it before assuming \
+             anything about what is in it.",
+            checkout.path
+        ),
+    );
+    Ok(AddedRepo { checkout, told })
+}
+
 #[tauri::command]
 pub fn add_checkout(
     state: State<AppState>,
     task_id: String,
     project_id: String,
+) -> Result<AddedRepo> {
+    add_repo(&state, &task_id, &project_id)
+}
+
+fn add_checkout_inner(
+    state: &AppState,
+    task_id: &str,
+    project_id: &str,
 ) -> Result<Checkout> {
+    let task_id = task_id.to_string();
+    let project_id = project_id.to_string();
     let task = state.config.task(&task_id)?;
     let project = state.config.project(&project_id)?;
 

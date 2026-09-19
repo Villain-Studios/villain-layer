@@ -105,6 +105,7 @@ export const api = {
   jiraTransition: (key: string, transitionId: string) =>
     invoke<void>("jira_transition", { key, transitionId }),
   jiraComment: (key: string, text: string) => invoke<void>("jira_comment", { key, text }),
+  taskPrompt: (taskId: string) => invoke<string>("task_prompt", { taskId }),
   jiraStartWork: (
     key: string, projectIds: string[],
     agentId?: string | null, branchSuffix?: string | null,

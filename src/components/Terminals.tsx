@@ -18,12 +18,25 @@ export function Terminals({ task }: { task: TaskView }) {
   const [active, setActive] = useState<string | null>(null);
   const [launching, setLaunching] = useState<string | null>(null);
   const [prompt, setPrompt] = useState("");
+  const [promptLoading, setPromptLoading] = useState(false);
   /** null = the task root, where every repo is visible as a sibling folder. */
   const [scope, setScope] = useState<string | null>(null);
 
   const multi = task.checkouts.length > 1;
 
   useEffect(() => { setScope(null); }, [task.id]);
+
+  // Prefill the real prompt rather than showing one as placeholder text: what
+  // is on screen should be what gets sent. For a ticket-backed task this is the
+  // same briefing the first agent got, description and repo layout included.
+  useEffect(() => {
+    if (!launching) return;
+    setPromptLoading(true);
+    api.taskPrompt(task.id)
+      .then((p) => setPrompt((current) => (current.trim() ? current : p)))
+      .catch(() => {})
+      .finally(() => setPromptLoading(false));
+  }, [launching, task.id]);
 
   // Keep a sensible pane selected as panes come and go.
   useEffect(() => {
@@ -154,11 +167,20 @@ export function Terminals({ task }: { task: TaskView }) {
       {launching && (
         <Modal
           title={`Start ${agents.find((a) => a.id === launching)?.name ?? launching}`}
-          onClose={() => setLaunching(null)}
+          onClose={() => { setLaunching(null); setPrompt(""); }}
           footer={
             <>
-              <button className="btn" onClick={() => setLaunching(null)}>Cancel</button>
-              <button className="btn btn-primary" onClick={() => void launchAgent(launching)}>
+              <button
+                className="btn"
+                onClick={() => { setLaunching(null); setPrompt(""); }}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn btn-primary"
+                disabled={promptLoading}
+                onClick={() => void launchAgent(launching)}
+              >
                 Launch
               </button>
             </>
@@ -182,18 +204,18 @@ export function Terminals({ task }: { task: TaskView }) {
           )}
           <Field
             label="Opening prompt"
-            hint="Optional. Leave blank to drop into the agent with no instruction."
+            hint={
+              promptLoading
+                ? "Fetching the ticket…"
+                : "Sent to the agent as it starts. Edit it, or clear it to drop in with no instruction."
+            }
           >
             <textarea
-              rows={6}
+              rows={10}
               autoFocus
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
-              placeholder={
-                task.issue_key
-                  ? `Implement ${task.issue_key}: ${task.name}`
-                  : "What should this agent do?"
-              }
+              placeholder="What should this agent do?"
             />
           </Field>
           <div className="muted" style={{ fontSize: 11 }}>

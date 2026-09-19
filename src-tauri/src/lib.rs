@@ -95,6 +95,7 @@ pub fn run() {
             commands::jira_transition,
             commands::jira_comment,
             commands::jira_start_work,
+            commands::task_prompt,
             commands::github_connect,
             commands::github_task_prs,
             commands::github_open_prs,

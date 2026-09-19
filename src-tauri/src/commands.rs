@@ -1430,6 +1430,70 @@ fn ticket_prompt(issue: &jira::Issue, task: &Task, repos: &[(String, String)]) -
     prompt
 }
 
+/// The repos in a task, as (folder, origin path) pairs for the prompt.
+fn task_repos(state: &AppState, task: &Task) -> Vec<(String, String)> {
+    state
+        .config
+        .checkouts_of(&task.id)
+        .iter()
+        .map(|c| {
+            let folder = PathBuf::from(&c.path)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let origin = state
+                .config
+                .project(&c.project_id)
+                .map(|p| p.path)
+                .unwrap_or_default();
+            (folder, origin)
+        })
+        .collect()
+}
+
+/// The opening prompt for an agent started on an existing task.
+///
+/// Used to prefill the launch dialog, so the text on screen is the text that
+/// gets sent. When the task came from a ticket this refetches it, so an agent
+/// started later gets the same briefing as the first one rather than just the
+/// task's title.
+#[tauri::command]
+pub async fn task_prompt(state: State<'_, AppState>, task_id: String) -> Result<String> {
+    let task = state.config.task(&task_id)?;
+    let repos = task_repos(&state, &task);
+
+    if let Some(key) = task.issue_key.as_deref() {
+        if let Ok((client, _)) = jira_client(&state) {
+            if let Ok(issue) = client.issue(key).await {
+                return Ok(ticket_prompt(&issue, &task, &repos));
+            }
+        }
+    }
+
+    // No ticket, or Jira unreachable: describe what we do know.
+    let mut prompt = format!("Task: {}\n\n", task.name);
+    if let Some(url) = &task.issue_url {
+        prompt.push_str(&format!("Ticket: {url}\n\n"));
+    }
+    if repos.len() > 1 {
+        prompt.push_str(&format!(
+            "This task spans {} repositories, checked out as sibling folders in your \
+             working directory, all on branch `{}`:\n",
+            repos.len(),
+            task.branch,
+        ));
+        for (folder, origin) in &repos {
+            prompt.push_str(&format!("  {folder}/  — {origin}\n"));
+        }
+        prompt.push('\n');
+    }
+    prompt.push_str(
+        "Start by exploring the relevant code, then implement the change. Ask before \
+         making sweeping refactors.",
+    );
+    Ok(prompt)
+}
+
 /// The one-click path: ticket -> worktree per repo -> agent primed with both
 /// the ticket and the layout.
 #[tauri::command]
@@ -1441,6 +1505,25 @@ pub async fn jira_start_work(
     agent_id: Option<String>,
     branch_suffix: Option<String>,
 ) -> Result<Task> {
+    // A second task for the same ticket would try to check the same branch out
+    // twice and fail deep inside git. Unless a suffix asks for a distinct
+    // branch, point at what already exists.
+    if branch_suffix.as_deref().unwrap_or_default().trim().is_empty() {
+        if let Some(existing) = state
+            .config
+            .read()
+            .tasks
+            .iter()
+            .find(|t| t.issue_key.as_deref() == Some(key.as_str()))
+        {
+            return Err(Error::Other(format!(
+                "{key} already has a task on branch {}. Open that one, or pass a \
+                 branch_suffix to work on the ticket a second time.",
+                existing.branch
+            )));
+        }
+    }
+
     let (client, _) = jira_client(&state)?;
     let issue = client.issue(&key).await?;
 
@@ -1458,23 +1541,7 @@ pub async fn jira_start_work(
     )?;
 
     if let Some(agent_id) = agent_id {
-        let repos: Vec<(String, String)> = state
-            .config
-            .checkouts_of(&task.id)
-            .iter()
-            .map(|c| {
-                let folder = PathBuf::from(&c.path)
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                let origin = state
-                    .config
-                    .project(&c.project_id)
-                    .map(|p| p.path)
-                    .unwrap_or_default();
-                (folder, origin)
-            })
-            .collect();
+        let repos = task_repos(&state, &task);
 
         start_agent(
             &app,

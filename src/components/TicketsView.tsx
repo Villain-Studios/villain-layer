@@ -105,7 +105,7 @@ export function TicketsView() {
       )
     : issues;
   const epics = groupByEpic(filtered);
-  const started = (key: string) => tasks.some((t) => t.issue_key === key);
+  const taskFor = (key: string) => tasks.find((t) => t.issue_key === key);
 
   return (
     <div className="wide">
@@ -159,9 +159,14 @@ export function TicketsView() {
               {epic.issue && (
                 <button
                   className="btn btn-sm"
-                  onClick={(e) => { e.stopPropagation(); setOpen(epic.issue!); }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const task = taskFor(epic.issue!.key);
+                    if (task) select(task.id);
+                    else setOpen(epic.issue!);
+                  }}
                 >
-                  Open epic
+                  {taskFor(epic.issue.key) ? "Open task" : "Open epic"}
                 </button>
               )}
             </div>
@@ -172,11 +177,22 @@ export function TicketsView() {
                   <div
                     key={issue.key}
                     className={
-                      `ticket${started(issue.key) ? " started" : ""}` +
+                      `ticket${taskFor(issue.key) ? " started" : ""}` +
                       (isEpicType(types, issue.issue_type) ? " is-epic" : "")
                     }
                     style={{ borderLeftColor: hierarchyAccent(types, issue.issue_type) }}
-                    onClick={() => setOpen(issue)}
+                    title={
+                      taskFor(issue.key)
+                        ? "Open the task already running for this ticket"
+                        : undefined
+                    }
+                    onClick={() => {
+                      // Already being worked on: go there rather than offering to
+                      // start it a second time on the same branch.
+                      const task = taskFor(issue.key);
+                      if (task) select(task.id);
+                      else setOpen(issue);
+                    }}
                   >
                     <div className="top">
                       <IssueTypeIcon types={types} name={issue.issue_type} />
@@ -184,7 +200,9 @@ export function TicketsView() {
                       <span className={`status-pill ${statusClass(issue.status_category)}`}>
                         {issue.status}
                       </span>
-                      {started(issue.key) && <span className="chip add">started</span>}
+                      {taskFor(issue.key) && (
+                        <span className="chip add">in progress →</span>
+                      )}
                     </div>
                     <div className="summary">{issue.summary}</div>
                     <div className="bottom">

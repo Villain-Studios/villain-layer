@@ -132,6 +132,10 @@ struct PaneMeta {
 
 struct Pane {
     meta: Mutex<PaneMeta>,
+    /// The child's pid, which is also its process-group id: portable-pty calls
+    /// setsid() so the agent leads its own session. Signalling the group
+    /// reaches anything the agent spawned as well.
+    pid: Option<u32>,
     master: Mutex<Box<dyn MasterPty + Send>>,
     writer: Mutex<Box<dyn Write + Send>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
@@ -238,8 +242,10 @@ impl PtyManager {
             limit_reached: false,
         };
 
+        let pid = child.process_id();
         let pane = Arc::new(Pane {
             meta: Mutex::new(PaneMeta { info: info.clone() }),
+            pid,
             master: Mutex::new(pair.master),
             writer: Mutex::new(writer),
             killer: Mutex::new(killer),
@@ -379,17 +385,78 @@ impl PtyManager {
         Ok(self.get(id)?.meta.lock().info.clone())
     }
 
+    /// Ask the process group to stop, and only insist if it will not.
+    ///
+    /// This matters more than it looks: `ChildKiller::kill` is SIGKILL, which
+    /// an agent cannot catch, so it dies without writing its transcript — and
+    /// that transcript is the only thing that makes a session resumable later.
+    fn request_stop(pane: &Pane) {
+        if let Some(pid) = pane.pid {
+            // Negative pid signals the whole group, catching subprocesses too.
+            unsafe { libc::kill(-(pid as i32), libc::SIGTERM) };
+        } else {
+            let _ = pane.killer.lock().kill();
+        }
+    }
+
+    fn wait_for_exit(pane: &Pane, deadline: std::time::Instant) -> bool {
+        while std::time::Instant::now() < deadline {
+            if !pane.meta.lock().info.running {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        !pane.meta.lock().info.running
+    }
+
+    fn stop(pane: &Pane, grace: std::time::Duration) {
+        if !pane.meta.lock().info.running {
+            return;
+        }
+        Self::request_stop(pane);
+        if !Self::wait_for_exit(pane, std::time::Instant::now() + grace) {
+            let _ = pane.killer.lock().kill();
+        }
+    }
+
     pub fn kill(&self, id: &str) -> Result<()> {
         let pane = self.get(id)?;
-        let _ = pane.killer.lock().kill();
+        Self::stop(&pane, std::time::Duration::from_secs(5));
         Ok(())
     }
 
     pub fn close(&self, id: &str) -> Result<()> {
         if let Some(pane) = self.panes.lock().remove(id) {
-            let _ = pane.killer.lock().kill();
+            Self::stop(&pane, std::time::Duration::from_secs(5));
         }
         Ok(())
+    }
+
+    /// Stop every pane on the way out, giving agents a chance to save.
+    ///
+    /// Signals them all first and waits once, so quitting takes the grace
+    /// period rather than the grace period multiplied by the pane count.
+    pub fn shutdown(&self, grace: std::time::Duration) {
+        let panes: Vec<Arc<Pane>> = self.panes.lock().values().cloned().collect();
+        if panes.is_empty() {
+            return;
+        }
+
+        for pane in &panes {
+            if pane.meta.lock().info.running {
+                Self::request_stop(pane);
+            }
+        }
+
+        let deadline = std::time::Instant::now() + grace;
+        for pane in &panes {
+            Self::wait_for_exit(pane, deadline);
+        }
+        for pane in &panes {
+            if pane.meta.lock().info.running {
+                let _ = pane.killer.lock().kill();
+            }
+        }
     }
 
     pub fn list(&self, task_id: Option<&str>) -> Vec<PaneInfo> {

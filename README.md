@@ -148,6 +148,13 @@ appears the pane is flagged, the Work overview marks it, and a banner offers the
 handoff. It is best-effort pattern matching, deliberately specific enough not to
 fire when an agent merely reads code about rate limiting.
 
+Stopping an agent, closing a pane and quitting the app all signal the process
+group with SIGTERM and wait before insisting. This is not politeness for its own
+sake: `ChildKiller::kill` is SIGKILL, which an agent cannot catch, so it dies
+without writing the transcript that makes the session resumable at all. Quitting
+was worse still — with no exit handler the agent got SIGHUP from the closing
+terminal and went the same way.
+
 **Resuming.** Panes do not survive the app closing — they are processes, not
 records. But the CLIs keep transcripts per working directory, and every task has
 its own, so the conversation can be picked up even though the process is gone.

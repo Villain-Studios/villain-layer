@@ -115,6 +115,16 @@ pub fn run() {
             commands::set_ui_prefs,
             commands::disconnect,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running villain-layer");
+        .build(tauri::generate_context!())
+        .expect("error while building villain-layer")
+        .run(|app, event| {
+            // Quitting used to take the agents down with SIGHUP, so they never
+            // wrote their transcripts and nothing could be resumed next time.
+            // Ask them to stop and give them a moment to save.
+            if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
+                app.state::<AppState>()
+                    .ptys
+                    .shutdown(std::time::Duration::from_secs(5));
+            }
+        });
 }

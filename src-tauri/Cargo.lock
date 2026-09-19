@@ -5113,6 +5113,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "keyring",
+ "libc",
  "parking_lot",
  "portable-pty",
  "reqwest",

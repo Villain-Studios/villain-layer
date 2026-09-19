@@ -18,6 +18,7 @@ export function Sidebar() {
   const select = useStore((s) => s.select);
   const setView = useStore((s) => s.setView);
   const refreshTasks = useStore((s) => s.refreshTasks);
+  const refreshPanes = useStore((s) => s.refreshPanes);
   const toast = useStore((s) => s.toast);
   const fail = useStore((s) => s.fail);
 
@@ -173,7 +174,7 @@ export function Sidebar() {
         failed.push(`${projects.find((p) => p.id === id)?.name ?? id}: ${errMessage(e)}`);
       }
     }
-    await refreshTasks();
+    await Promise.all([refreshTasks(), refreshPanes()]);
     setBusy(false);
     setAddingRepoTo(null);
     setAdding([]);
@@ -190,7 +191,8 @@ export function Sidebar() {
     try {
       const results = await api.deleteTask(task.id, force);
       const stuck = results.filter((r) => !r.ok);
-      await refreshTasks();
+      // Deleting a task stops its panes too, so the pane list is stale as well.
+      await Promise.all([refreshTasks(), refreshPanes()]);
 
       if (stuck.length === 0) {
         if (selected === task.id) select(null);
@@ -229,6 +231,10 @@ export function Sidebar() {
       body: (
         <>
           Remove <b>{repoName}</b> from this task and delete its worktree?
+          <div className="muted" style={{ marginTop: 8 }}>
+            Any terminal running inside it is stopped. Panes started at the task
+            root, which see every repo, are left alone.
+          </div>
           {dirty > 0 && (
             <div className="confirm-detail">
               {dirty} uncommitted change{dirty === 1 ? "" : "s"} in that worktree will be
@@ -240,7 +246,9 @@ export function Sidebar() {
       run: async () => {
         try {
           await api.removeCheckout(checkoutId, dirty > 0);
-          await refreshTasks();
+          // Panes rooted in that worktree are stopped with it, so refresh both
+          // or the terminals stay on screen until the next poll happens to run.
+          await Promise.all([refreshTasks(), refreshPanes()]);
         } catch (e) {
           fail(e);
         }

@@ -110,7 +110,13 @@ pub fn list_worktrees(repo: &Path) -> Result<Vec<WorktreeEntry>> {
 
 /// Create a worktree at `path`. Creates `branch` from `base` when it does not
 /// already exist, otherwise checks the existing branch out.
-pub fn add_worktree(repo: &Path, path: &Path, branch: &str, base: &str) -> Result<()> {
+/// Returns the commit the worktree starts at, so the diff has a fixed point.
+pub fn add_worktree(
+    repo: &Path,
+    path: &Path,
+    branch: &str,
+    base: &str,
+) -> Result<String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -118,10 +124,18 @@ pub fn add_worktree(repo: &Path, path: &Path, branch: &str, base: &str) -> Resul
 
     if branch_exists(repo, branch) {
         run(repo, &["worktree", "add", &path_s, branch])?;
+        // An existing branch has its own history; what it forked from is the
+        // best available answer, not wherever the base happens to be today.
+        Ok(run(repo, &["merge-base", base, branch])
+            .or_else(|_| run(repo, &["rev-parse", branch]))
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default())
     } else {
         run(repo, &["worktree", "add", "-b", branch, &path_s, base])?;
+        Ok(run(path, &["rev-parse", "HEAD"])
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default())
     }
-    Ok(())
 }
 
 pub fn remove_worktree(repo: &Path, path: &str, force: bool) -> Result<()> {
@@ -201,12 +215,15 @@ pub struct ChangedFile {
 }
 
 /// Every file that differs from `base`, including uncommitted and untracked work.
-pub fn changed_files(dir: &Path, base: &str) -> Result<Vec<ChangedFile>> {
+pub fn changed_files(
+    dir: &Path,
+    base: &str,
+    base_commit: Option<&str>,
+    scope: Scope,
+) -> Result<Vec<ChangedFile>> {
     let mut files: Vec<ChangedFile> = Vec::new();
 
-    let merge_base = run(dir, &["merge-base", "HEAD", base])
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|_| base.to_string());
+    let merge_base = compare_against(dir, base, base_commit, scope);
 
     // Committed on this branch since the baseline, plus everything in the tree.
     let numstat = run(dir, &["diff", "--numstat", &merge_base])?;
@@ -248,10 +265,94 @@ pub fn changed_files(dir: &Path, base: &str) -> Result<Vec<ChangedFile>> {
 
 /// Unified patch for one file, against the baseline. Untracked files are
 /// rendered as an all-additions patch so the review UI has one code path.
-pub fn file_diff(dir: &Path, base: &str, path: &str) -> Result<String> {
-    let merge_base = run(dir, &["merge-base", "HEAD", base])
+/// What the diff is measured against.
+///
+/// Two honest answers to "what changed", and which one is wanted depends on
+/// why you are looking. Uncommitted is what you are holding right now and is
+/// what `git status` shows. Branch is everything since the worktree was made,
+/// which is what a reviewer eventually sees — and is only meaningful when the
+/// branch was actually cut for this work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Scope {
+    /// Everything not yet committed, plus untracked files.
+    Uncommitted,
+    /// Everything since the branch point, committed or not.
+    Branch,
+}
+
+impl Default for Scope {
+    fn default() -> Self {
+        Scope::Uncommitted
+    }
+}
+
+/// The revision a scope compares against: HEAD for uncommitted work, the
+/// branch point for the branch as a whole.
+pub fn compare_against(
+    dir: &Path,
+    base: &str,
+    base_commit: Option<&str>,
+    scope: Scope,
+) -> String {
+    match scope {
+        Scope::Uncommitted => "HEAD".to_string(),
+        Scope::Branch => baseline(dir, base, base_commit),
+    }
+}
+
+/// The commit a branch is measured against.
+///
+/// A recorded branch point is used as-is: it is the one answer that does not
+/// change when the base branch moves, when history is rebased onto something
+/// else, or when a merge brings in work from elsewhere — all of which
+/// otherwise turn up in the diff as though this branch had done them.
+///
+/// Without one — worktrees made before this was recorded — fall back to the
+/// merge base with the base branch, preferring the remote's copy.
+pub fn baseline(dir: &Path, base: &str, base_commit: Option<&str>) -> String {
+    if let Some(commit) = base_commit.map(str::trim).filter(|c| !c.is_empty()) {
+        // Only if this worktree actually has it; a rewritten history may not.
+        if run(dir, &["cat-file", "-e", &format!("{commit}^{{commit}}")]).is_ok() {
+            return commit.to_string();
+        }
+    }
+    run(dir, &["merge-base", &format!("origin/{base}"), "HEAD"])
+        .or_else(|_| run(dir, &["merge-base", base, "HEAD"]))
         .map(|s| s.trim().to_string())
-        .unwrap_or_else(|_| base.to_string());
+        .unwrap_or_else(|_| base.to_string())
+}
+
+/// How many files differ from the baseline, committed or not.
+///
+/// The same set `changed_files` lists, counted without building it: the Diff
+/// tab's badge is drawn on every poll, and a list of paths is not needed to
+/// say how many there are.
+pub fn changed_count(
+    dir: &Path,
+    base: &str,
+    base_commit: Option<&str>,
+    scope: Scope,
+) -> u32 {
+    let merge_base = compare_against(dir, base, base_commit, scope);
+
+    let tracked = run(dir, &["diff", "--name-only", &merge_base])
+        .map(|o| o.lines().filter(|l| !l.trim().is_empty()).count())
+        .unwrap_or(0);
+    let untracked = run(dir, &["ls-files", "--others", "--exclude-standard"])
+        .map(|o| o.lines().filter(|l| !l.trim().is_empty()).count())
+        .unwrap_or(0);
+    (tracked + untracked) as u32
+}
+
+pub fn file_diff(
+    dir: &Path,
+    base: &str,
+    base_commit: Option<&str>,
+    scope: Scope,
+    path: &str,
+) -> Result<String> {
+    let merge_base = compare_against(dir, base, base_commit, scope);
 
     // One call covers modified, staged, renamed and deleted files. Branching on
     // "is it in the index" instead would send deleted files down the untracked
@@ -387,7 +488,7 @@ mod tests {
         std::fs::write(wt.join("a.txt"), "one\nTWO\nthree\nfour\n").unwrap();
         std::fs::write(wt.join("b.txt"), "new file\n").unwrap();
 
-        let files = changed_files(&wt, "main").unwrap();
+        let files = changed_files(&wt, "main", None, Scope::Branch).unwrap();
         let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
         assert_eq!(paths, vec!["a.txt", "b.txt"]);
 
@@ -396,8 +497,8 @@ mod tests {
         assert_eq!(files.iter().find(|f| f.path == "b.txt").unwrap().origin, "untracked");
 
         // Tracked files diff through git; untracked ones are synthesised.
-        assert!(file_diff(&wt, "main", "a.txt").unwrap().contains("+four"));
-        assert!(file_diff(&wt, "main", "b.txt").unwrap().contains("+new file"));
+        assert!(file_diff(&wt, "main", None, Scope::Branch, "a.txt").unwrap().contains("+four"));
+        assert!(file_diff(&wt, "main", None, Scope::Branch, "b.txt").unwrap().contains("+new file"));
 
         let st = status(&wt).unwrap();
         assert_eq!(st.branch, "feature/y");
@@ -429,8 +530,8 @@ mod tests {
 
         // Changes in one repo are invisible to the other's diff.
         std::fs::write(task_root.join("api/a.txt"), "changed\n").unwrap();
-        assert_eq!(changed_files(&task_root.join("api"), "main").unwrap().len(), 1);
-        assert!(changed_files(&task_root.join("web"), "main").unwrap().is_empty());
+        assert_eq!(changed_files(&task_root.join("api"), "main", None, Scope::Branch).unwrap().len(), 1);
+        assert!(changed_files(&task_root.join("web"), "main", None, Scope::Branch).unwrap().is_empty());
 
         remove_worktree(&api, &task_root.join("api").to_string_lossy(), true).ok();
         remove_worktree(&web, &task_root.join("web").to_string_lossy(), true).ok();
@@ -448,12 +549,12 @@ mod tests {
         run(&wt, &["rm", "-q", "a.txt"]).unwrap();
 
         // It shows up as changed...
-        let files = changed_files(&wt, "main").unwrap();
+        let files = changed_files(&wt, "main", None, Scope::Branch).unwrap();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].path, "a.txt");
 
         // ...so asking for its patch must work, not error on a missing file.
-        let patch = file_diff(&wt, "main", "a.txt").unwrap();
+        let patch = file_diff(&wt, "main", None, Scope::Branch, "a.txt").unwrap();
         assert!(patch.contains("-one"), "expected a deletion patch, got: {patch}");
 
         remove_worktree(&repo, &wt.to_string_lossy(), true).ok();

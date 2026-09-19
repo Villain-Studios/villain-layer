@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../lib/api";
 import { useStore } from "../store";
-import type { ChangedFile, RepoResult, TaskView } from "../lib/types";
+import type { ChangedFile, DiffScope, RepoResult, TaskView } from "../lib/types";
 import { Field, Modal } from "./ui";
+import { read, write } from "../lib/persist";
 
 type LineKind = "meta" | "hunk" | "add" | "del" | "ctx";
 
@@ -42,6 +43,63 @@ function parseDiff(patch: string): DiffLine[] {
   return out;
 }
 
+
+/** A changed file, or a folder holding more of them. */
+interface Node {
+  name: string;
+  path: string;
+  file?: ChangedFile;
+  children: Node[];
+}
+
+/**
+ * Files arranged by directory, with runs of single-child folders joined into
+ * one row.
+ *
+ * A flat list of full paths is unreadable past a handful of files: every row is
+ * ellipsised in the middle, and the part that differs is the part that gets
+ * cut. Collapsing `src/app/auth/components` into a single row spends the width
+ * on the names instead.
+ */
+function toTree(files: ChangedFile[]): Node[] {
+  const root: Node = { name: "", path: "", children: [] };
+
+  for (const file of files) {
+    let at = root;
+    const parts = file.path.split("/");
+    parts.forEach((part, i) => {
+      const path = parts.slice(0, i + 1).join("/");
+      const leaf = i === parts.length - 1;
+      let next = at.children.find((c) => c.name === part && !c.file === !leaf);
+      if (!next) {
+        next = { name: part, path, children: [], ...(leaf ? { file } : {}) };
+        at.children.push(next);
+      }
+      at = next;
+    });
+  }
+
+  const squash = (node: Node): Node => {
+    let here = node;
+    while (!here.file && here.children.length === 1 && !here.children[0].file) {
+      const only = here.children[0];
+      here = { ...only, name: `${here.name}/${only.name}` };
+    }
+    return { ...here, children: here.children.map(squash) };
+  };
+
+  // Folders first, then files, each alphabetical — the order a file tree has
+  // everywhere else.
+  const sort = (nodes: Node[]): Node[] =>
+    nodes
+      .map((n) => ({ ...n, children: sort(n.children) }))
+      .sort((a, b) =>
+        !a.file === !b.file ? a.name.localeCompare(b.name) : a.file ? 1 : -1,
+      );
+
+  return sort(root.children.map(squash));
+}
+
 interface Draft {
   id: number;
   checkoutId: string;
@@ -55,6 +113,9 @@ interface Draft {
 let draftSeq = 0;
 
 const fileKey = (f: ChangedFile) => `${f.checkout_id}:${f.path}`;
+
+/** Lines drawn before the rest is held back behind a click. */
+const LINE_BUDGET = 3000;
 
 export function DiffView({ task }: { task: TaskView }) {
   const fail = useStore((s) => s.fail);
@@ -75,13 +136,20 @@ export function DiffView({ task }: { task: TaskView }) {
   const [committing, setCommitting] = useState(false);
   const [message, setMessage] = useState("");
   const [target, setTarget] = useState<string>("");
+  const [width, setWidth] = useState(() => read("diffWidth", 260));
+  const [shut, setShut] = useState<Record<string, boolean>>({});
+  // What "changed" means here. Uncommitted by default: it is what you are
+  // holding and what git status agrees with. The whole branch is a different
+  // and equally real question, and only worth asking when the branch was cut
+  // for this work — which is not true of every worktree.
+  const [scope, setScope] = useState<DiffScope>(() => read("diffScope", "uncommitted"));
 
   const multi = task.checkouts.length > 1;
   const current = files.find((f) => fileKey(f) === selected) ?? null;
 
   async function load() {
     try {
-      const list = await api.diffFiles(task.id);
+      const list = await api.diffFiles(task.id, scope);
       setFiles(list);
       setSelected((cur) =>
         cur && list.some((f) => fileKey(f) === cur) ? cur : (list[0] ? fileKey(list[0]) : null),
@@ -91,12 +159,12 @@ export function DiffView({ task }: { task: TaskView }) {
     }
   }
 
-  useEffect(() => { void load(); /* eslint-disable-next-line */ }, [task.id]);
+  useEffect(() => { void load(); /* eslint-disable-next-line */ }, [task.id, scope]);
 
   useEffect(() => {
     if (!current) { setPatch(""); return; }
-    api.diffFile(current.checkout_id, current.path).then(setPatch).catch(fail);
-  }, [current?.checkout_id, current?.path, fail]);
+    api.diffFile(current.checkout_id, current.path, scope).then(setPatch).catch(fail);
+  }, [current?.checkout_id, current?.path, scope, fail]);
 
   useEffect(() => {
     if (!target || !agentPanes.some((p) => p.id === target)) {
@@ -104,7 +172,14 @@ export function DiffView({ task }: { task: TaskView }) {
     }
   }, [agentPanes, target]);
 
-  const lines = useMemo(() => parseDiff(patch), [patch]);
+  const parsed = useMemo(() => parseDiff(patch), [patch]);
+  // Every line is a div, and a div per line of a generated file is what makes
+  // opening this tab stutter. Showing the first few thousand keeps it instant;
+  // anything past that is not being read line by line anyway.
+  const [wholeFile, setWholeFile] = useState(false);
+  useEffect(() => { setWholeFile(false); }, [selected]);
+  const lines = wholeFile ? parsed : parsed.slice(0, LINE_BUDGET);
+  const hidden = parsed.length - lines.length;
   const fileDrafts = drafts.filter((d) => selected && `${d.checkoutId}:${d.path}` === selected);
 
   // Files grouped by repo, in the order the task's repos are listed.
@@ -119,6 +194,43 @@ export function DiffView({ task }: { task: TaskView }) {
       .map((c) => ({ checkout: c, files: byRepo.get(c.id) ?? [] }))
       .filter((g) => g.files.length > 0);
   }, [files, task.checkouts]);
+
+  /// A tree row per node: folders fold away, files select.
+  function renderNodes(nodes: Node[], depth: number) {
+    return nodes.map((node) => {
+      const pad = { paddingLeft: 6 + depth * 11 };
+      if (!node.file) {
+        const closed = shut[node.path] ?? false;
+        return (
+          <div key={`d:${node.path}`}>
+            <div
+              className="diff-dir"
+              style={pad}
+              onClick={() => setShut((c) => ({ ...c, [node.path]: !closed }))}
+            >
+              <span className={`chev${closed ? "" : " open"}`}>▶</span>
+              <span className="p">{node.name}</span>
+            </div>
+            {!closed && renderNodes(node.children, depth + 1)}
+          </div>
+        );
+      }
+      const f = node.file;
+      return (
+        <div
+          key={fileKey(f)}
+          className={`diff-file${fileKey(f) === selected ? " active" : ""}`}
+          style={pad}
+          onClick={() => setSelected(fileKey(f))}
+          title={`${f.repo}/${f.path}`}
+        >
+          <span className="p">{node.name}</span>
+          <span className="n" style={{ color: "var(--green)" }}>+{f.additions}</span>
+          <span className="n" style={{ color: "var(--red)" }}>-{f.deletions}</span>
+        </div>
+      );
+    });
+  }
 
   function addDraft() {
     if (!composing || !current || !text.trim()) { setComposing(null); return; }
@@ -204,7 +316,7 @@ export function DiffView({ task }: { task: TaskView }) {
   return (
     <>
       <div className="diff">
-        <div className="diff-files">
+        <div className="diff-files" style={{ width }}>
           {groups.map((g) => (
             <div key={g.checkout.id}>
               {multi && (
@@ -213,23 +325,43 @@ export function DiffView({ task }: { task: TaskView }) {
                   <span style={{ color: "var(--dimmer)" }}> · {g.files.length}</span>
                 </div>
               )}
-              {g.files.map((f) => (
-                <div
-                  key={fileKey(f)}
-                  className={`diff-file${fileKey(f) === selected ? " active" : ""}`}
-                  onClick={() => setSelected(fileKey(f))}
-                  title={`${f.repo}/${f.path}`}
-                >
-                  <span className="p">{f.path}</span>
-                  <span className="n" style={{ color: "var(--green)" }}>+{f.additions}</span>
-                  <span className="n" style={{ color: "var(--red)" }}>-{f.deletions}</span>
-                </div>
-              ))}
+              {renderNodes(toTree(g.files), 0)}
             </div>
           ))}
         </div>
 
+        <div
+          className="diff-grip"
+          title="Drag to resize"
+          onMouseDown={(e) => {
+            e.preventDefault();
+            const startX = e.clientX;
+            const startWidth = width;
+            const move = (m: MouseEvent) => {
+              // Clamped so the list cannot be dragged away entirely or take
+              // the whole pane; the diff is still the point of this view.
+              const next = Math.min(640, Math.max(150, startWidth + m.clientX - startX));
+              setWidth(next);
+            };
+            const done = () => {
+              window.removeEventListener("mousemove", move);
+              window.removeEventListener("mouseup", done);
+              setWidth((w) => { write("diffWidth", w); return w; });
+            };
+            window.addEventListener("mousemove", move);
+            window.addEventListener("mouseup", done);
+          }}
+        />
+
         <div className="diff-body">
+          {hidden > 0 && (
+            <div className="diff-more">
+              Showing the first {LINE_BUDGET.toLocaleString()} lines.
+              <button className="btn btn-sm" onClick={() => setWholeFile(true)}>
+                Show all {parsed.length.toLocaleString()}
+              </button>
+            </div>
+          )}
           {multi && current && (
             <div className="diff-repo-banner">
               {current.repo} / {current.path}
@@ -308,6 +440,22 @@ export function DiffView({ task }: { task: TaskView }) {
       </div>
 
       <div className="review-tray">
+        <div className="subtabs">
+          {(["uncommitted", "branch"] as DiffScope[]).map((v) => (
+            <button
+              key={v}
+              className={scope === v ? "active" : ""}
+              title={
+                v === "uncommitted"
+                  ? "Everything not yet committed — what git status shows"
+                  : "Everything since this worktree was created, committed or not"
+              }
+              onClick={() => { setScope(v); write("diffScope", v); }}
+            >
+              {v === "uncommitted" ? "Uncommitted" : "Whole branch"}
+            </button>
+          ))}
+        </div>
         <span style={{ color: "var(--dim)" }}>
           {drafts.length === 0
             ? "Click a line number to leave a note for the agent."

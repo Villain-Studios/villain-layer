@@ -460,7 +460,13 @@ async fn call(app: &AppHandle, name: &str, args: Value) -> Result<Value> {
 
         "task_diff" => {
             let id = required(&args, "task_id")?.to_string();
-            Ok(serde_json::to_value(commands::diff_files(state, id)?)?)
+            // An agent asking what a task changed means the branch, not what
+            // happens to be uncommitted at this second.
+            Ok(serde_json::to_value(commands::diff_files(
+                state,
+                id,
+                Some(crate::git::Scope::Branch),
+            )?)?)
         }
 
         "jira_search" => {

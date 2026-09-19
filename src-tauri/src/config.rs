@@ -80,6 +80,14 @@ pub struct Checkout {
     pub path: String,
     /// The commit-ish this worktree branched from; the diff baseline.
     pub base: String,
+    /// The commit this worktree was branched from.
+    ///
+    /// The diff is "what this branch did", and that only has a fixed meaning
+    /// against a fixed point. Comparing to the base *branch* moves as the base
+    /// moves, and credits this branch with everything its history picked up
+    /// from anywhere else.
+    #[serde(default)]
+    pub base_commit: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -285,6 +293,9 @@ impl AppConfig {
                 project_id: w.project_id,
                 path: w.path,
                 base: w.base,
+                // Nothing recorded the branch point back then; the diff falls
+                // back to the merge base for these.
+                base_commit: None,
             });
         }
         self.version = SCHEMA_VERSION;

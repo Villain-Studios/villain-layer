@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
-  AddedRepo, AgentStatus, ChangedFile, CheckoutPr, CreateField, FoundRepo, JiraIssue,
+  AddedRepo, AgentStatus, ChangedFile, CheckoutPr, CreateField, DiffScope, FoundRepo, JiraIssue,
   JiraIssueType, JiraPage, JiraTransition, MatchKind, PaneInfo, Project, RepoResult, RepoRule,
   Started,
   RepoSet,
@@ -86,9 +86,10 @@ export const api = {
   killPane: (paneId: string) => invoke<void>("kill_pane", { paneId }),
 
   // diff + git
-  diffFiles: (taskId: string) => invoke<ChangedFile[]>("diff_files", { taskId }),
-  diffFile: (checkoutId: string, path: string) =>
-    invoke<string>("diff_file", { checkoutId, path }),
+  diffFiles: (taskId: string, scope: DiffScope) =>
+    invoke<ChangedFile[]>("diff_files", { taskId, scope }),
+  diffFile: (checkoutId: string, path: string, scope: DiffScope) =>
+    invoke<string>("diff_file", { checkoutId, path, scope }),
   sendReview: (paneId: string, comments: ReviewComment[]) =>
     invoke<string>("send_review", { paneId, comments }),
   commitTask: (taskId: string, message: string) =>

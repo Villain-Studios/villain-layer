@@ -61,6 +61,8 @@ export interface CheckoutView extends Checkout {
   project_name: string;
   status: WorktreeStatus | null;
   exists: boolean;
+  /** Files differing from the base branch — what the Diff tab lists. */
+  changed: number;
 }
 
 export interface TaskView extends Task {
@@ -102,6 +104,9 @@ export interface Resumable {
   /** Unix seconds of the newest transcript. */
   last_active: number | null;
 }
+
+/** Which comparison the Diff tab is showing. */
+export type DiffScope = "uncommitted" | "branch";
 
 export interface ChangedFile {
   path: string;

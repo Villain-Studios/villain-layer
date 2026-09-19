@@ -329,7 +329,16 @@ export function Terminals({ task }: { task: TaskView }) {
 
       <div className="pane-stack">
         {panes.map((p) => (
-          <TerminalPane key={p.id} pane={p} visible={p.id === active} />
+          // Visible also means this tab is the one on screen. Terminals stay
+          // mounted behind Diff and Pull requests, and a pane fitted while its
+          // container had no height keeps those rows: the process draws into a
+          // short terminal inside a tall one, which is the black band under a
+          // full-screen editor. Toggling this re-fits when the tab comes back.
+          <TerminalPane
+            key={p.id}
+            pane={p}
+            visible={p.id === active && tab === "terminals"}
+          />
         ))}
         {panes.length === 0 && (
           <div className="empty">

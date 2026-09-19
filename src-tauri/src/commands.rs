@@ -289,6 +289,9 @@ pub struct CheckoutView {
     pub project_name: String,
     pub status: Option<git::WorktreeStatus>,
     pub exists: bool,
+    /// Files that differ from the base branch — what the Diff tab lists.
+    /// Distinct from the status counts, which are only what is uncommitted.
+    pub changed: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -332,6 +335,16 @@ fn view_checkout(state: &AppState, checkout: Checkout) -> CheckoutView {
             .map(|p| p.name)
             .unwrap_or_else(|_| "(unknown repo)".into()),
         status: exists.then(|| git::status(&dir).ok()).flatten(),
+        changed: if exists {
+            git::changed_count(
+                &dir,
+                &checkout.base,
+                checkout.base_commit.as_deref(),
+                git::Scope::Uncommitted,
+            )
+        } else {
+            0
+        },
         exists,
         checkout,
     }
@@ -517,7 +530,7 @@ fn create_checkout(
             .unwrap_or_default(),
     );
 
-    git::add_worktree(
+    let base_commit = git::add_worktree(
         &PathBuf::from(&project.path),
         &path,
         &task.branch,
@@ -530,6 +543,7 @@ fn create_checkout(
         project_id: project.id.clone(),
         path: path.to_string_lossy().to_string(),
         base: project.default_branch.clone(),
+        base_commit: Some(base_commit).filter(|c| !c.is_empty()),
     };
     state
         .config
@@ -902,6 +916,12 @@ pub fn adopt_worktree(
         id: uuid::Uuid::new_v4().to_string(),
         task_id: task.id.clone(),
         project_id: project.id,
+        // An adopted worktree already existed; where it forked is the honest
+        // baseline, and the merge base is the only record of that.
+        base_commit: git::run(&dir, &["merge-base", &project.default_branch, "HEAD"])
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|c| !c.is_empty()),
         path,
         base: project.default_branch,
     };
@@ -1630,7 +1650,12 @@ pub struct ChangedFileView {
 
 /// Every change across every repository in the task, tagged with its repo.
 #[tauri::command]
-pub fn diff_files(state: State<AppState>, task_id: String) -> Result<Vec<ChangedFileView>> {
+pub fn diff_files(
+    state: State<AppState>,
+    task_id: String,
+    scope: Option<git::Scope>,
+) -> Result<Vec<ChangedFileView>> {
+    let scope = scope.unwrap_or_default();
     let mut out = Vec::new();
     for checkout in state.config.checkouts_of(&task_id) {
         let dir = PathBuf::from(&checkout.path);
@@ -1644,7 +1669,9 @@ pub fn diff_files(state: State<AppState>, task_id: String) -> Result<Vec<Changed
             .unwrap_or_else(|_| "(unknown)".into());
 
         // One broken repo should not hide the others' changes.
-        for file in git::changed_files(&dir, &checkout.base).unwrap_or_default() {
+        for file in git::changed_files(&dir, &checkout.base, checkout.base_commit.as_deref(), scope)
+            .unwrap_or_default()
+        {
             out.push(ChangedFileView {
                 file,
                 checkout_id: checkout.id.clone(),
@@ -1656,9 +1683,20 @@ pub fn diff_files(state: State<AppState>, task_id: String) -> Result<Vec<Changed
 }
 
 #[tauri::command]
-pub fn diff_file(state: State<AppState>, checkout_id: String, path: String) -> Result<String> {
+pub fn diff_file(
+    state: State<AppState>,
+    checkout_id: String,
+    path: String,
+    scope: Option<git::Scope>,
+) -> Result<String> {
     let checkout = state.config.checkout(&checkout_id)?;
-    git::file_diff(&PathBuf::from(&checkout.path), &checkout.base, &path)
+    git::file_diff(
+        &PathBuf::from(&checkout.path),
+        &checkout.base,
+        checkout.base_commit.as_deref(),
+        scope.unwrap_or_default(),
+        &path,
+    )
 }
 
 #[derive(Debug, Deserialize)]
@@ -1729,7 +1767,12 @@ pub fn commit_task(
         if !dir.is_dir() {
             continue;
         }
-        if git::changed_files(&dir, &checkout.base)
+        if git::changed_files(
+            &dir,
+            &checkout.base,
+            checkout.base_commit.as_deref(),
+            git::Scope::Branch,
+        )
             .map(|f| f.is_empty())
             .unwrap_or(true)
         {
@@ -2431,7 +2474,12 @@ pub async fn handoff_prompt(state: State<'_, AppState>, pane_id: String) -> Resu
             &["log", "--oneline", "--no-decorate", &format!("{}..HEAD", checkout.base)],
         )
         .unwrap_or_default();
-        let files = git::changed_files(&dir, &checkout.base).unwrap_or_default();
+        let files = git::changed_files(
+            &dir,
+            &checkout.base,
+            checkout.base_commit.as_deref(),
+            git::Scope::Branch,
+        ).unwrap_or_default();
 
         if commits.trim().is_empty() && files.is_empty() {
             continue;
@@ -2818,7 +2866,12 @@ pub async fn github_task_prs(
             .project(&checkout.project_id)
             .map(|p| p.name)
             .unwrap_or_else(|_| "(unknown)".into());
-        let changed = git::changed_files(&dir, &checkout.base)
+        let changed = git::changed_files(
+            &dir,
+            &checkout.base,
+            checkout.base_commit.as_deref(),
+            git::Scope::Branch,
+        )
             .map(|f| f.len())
             .unwrap_or(0);
 
@@ -2883,7 +2936,12 @@ pub async fn github_open_prs(
         let project = state.config.project(&checkout.project_id)?;
         let repo = project.name.clone();
 
-        let changed = git::changed_files(&dir, &checkout.base)
+        let changed = git::changed_files(
+            &dir,
+            &checkout.base,
+            checkout.base_commit.as_deref(),
+            git::Scope::Branch,
+        )
             .map(|f| f.len())
             .unwrap_or(0);
         if changed == 0 {

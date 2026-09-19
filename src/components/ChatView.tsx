@@ -81,9 +81,13 @@ export function ChatView() {
               ticket before it exists, or pulling context together from elsewhere.
             </p>
             <p style={{ color: "var(--dimmer)" }}>
-              It runs with your own CLI configuration, so whatever MCP servers you have
-              set up — Jira, Slack, GitHub — are available here too. Ask it to write a
-              ticket and it can file one directly.
+              It starts with a <code>CLAUDE.md</code> describing your repos, the tasks
+              in flight and which integrations the app is connected to — so it knows
+              what you are working on without being told.
+            </p>
+            <p style={{ color: "var(--dimmer)" }}>
+              Reaching Jira, Slack or GitHub is separate: it uses your own CLI's MCP
+              servers, not the app's stored credentials.
             </p>
             <div className="row">
               {installed.length === 0 && <span>No agent CLIs found on your PATH.</span>}

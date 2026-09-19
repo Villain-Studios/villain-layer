@@ -353,7 +353,12 @@ export function DiffView({ task }: { task: TaskView }) {
           }}
         />
 
-        <div className="diff-body">
+        <div className="diff-main">
+          {/*
+            The banners sit outside the scrolling region. Inside it they would
+            slide away sideways when a long line is scrolled, which is the one
+            direction a header has no business moving in.
+          */}
           {hidden > 0 && (
             <div className="diff-more">
               Showing the first {LINE_BUDGET.toLocaleString()} lines.
@@ -367,6 +372,8 @@ export function DiffView({ task }: { task: TaskView }) {
               {current.repo} / {current.path}
             </div>
           )}
+          <div className="diff-body">
+          <div className="diff-lines">
           {lines.map((l, i) => {
             const anchored = l.newLine !== null
               ? fileDrafts.filter((d) => d.line === l.newLine)
@@ -436,6 +443,8 @@ export function DiffView({ task }: { task: TaskView }) {
               </div>
             );
           })}
+          </div>
+          </div>
         </div>
       </div>
 

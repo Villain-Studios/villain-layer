@@ -334,7 +334,7 @@ textarea { resize: vertical; font-family: var(--mono); }
 .diff-grip:hover { border-right-color: var(--accent-dim); }
 /* min-width:0 or a flex child refuses to shrink below its content, which lets
    a long line push the whole pane wide instead of scrolling inside it. */
-.diff-body { flex: 1; min-width: 0; }
+.diff-main { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
 
 .diff-dir {
   display: flex;
@@ -361,9 +361,7 @@ textarea { resize: vertical; font-family: var(--mono); }
   font-family: var(--sans);
   font-size: 12.5px;
   color: var(--dim);
-  position: sticky;
-  top: 0;
-  z-index: 2;
+  flex: none;
 }
 .diff-file {
   display: flex;
@@ -380,16 +378,12 @@ textarea { resize: vertical; font-family: var(--mono); }
 .diff-file .p { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .diff-file .n { font-size: 11px; }
 
-.diff-body { overflow: auto; font-family: var(--mono); font-size: 13px; user-select: text; }
-/* Rows are as wide as the widest line so a highlight spans the whole scroll
-   width, not just as far as that row's own text. */
-.diff-line {
-  display: flex;
-  white-space: pre;
-  line-height: 1.55;
-  width: max-content;
-  min-width: 100%;
-}
+.diff-body { flex: 1; overflow: auto; font-family: var(--mono); font-size: 13px; user-select: text; }
+/* As wide as the longest line, and never narrower than the pane. Rows take
+   their width from this, so a highlight runs the whole way across instead of
+   stopping where that particular line's text happens to end. */
+.diff-lines { width: max-content; min-width: 100%; }
+.diff-line { display: flex; white-space: pre; line-height: 1.55; width: 100%; }
 .diff-line .ln {
   flex: none;
   width: 46px;
@@ -726,8 +720,7 @@ textarea { resize: vertical; font-family: var(--mono); }
   font-weight: 600;
 }
 .diff-repo-banner {
-  position: sticky;
-  top: 0;
+  flex: none;
   background: var(--panel-2);
   border-bottom: 1px solid var(--border);
   padding: 5px 12px;

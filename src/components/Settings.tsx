@@ -229,6 +229,12 @@ export function Settings() {
                 onChange={(v) => void saveUi({ ...settings.ui, restore_panes: v })}
               />
               <Switch
+                label="Move the ticket when work starts"
+                detail="Starting a task transitions its Jira issue into whatever your workflow calls in progress, so the board and this app do not disagree about what is being worked on."
+                checked={settings.ui.sync_jira_status}
+                onChange={(v) => void saveUi({ ...settings.ui, sync_jira_status: v })}
+              />
+              <Switch
                 label="Trust the folders this app creates"
                 detail="Claude Code asks whether it trusts a folder the first time it starts there, and does nothing until answered — once per task, per repo. This answers it in advance, and only for worktrees and chat folders the app made itself."
                 checked={settings.ui.trust_agent_dirs}

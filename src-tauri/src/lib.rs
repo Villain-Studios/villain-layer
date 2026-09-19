@@ -155,6 +155,7 @@ pub fn run() {
             commands::jira_browse,
             commands::jira_issue,
             commands::jira_transitions,
+            commands::jira_sync_status,
             commands::jira_transition,
             commands::jira_comment,
             commands::jira_create_task,

@@ -2203,7 +2203,7 @@ pub struct NewJiraTask {
 /// be worse than the orphan — and the error says so, naming the key, so the
 /// work can be picked up with "start work" once the repositories are sorted.
 #[tauri::command]
-pub async fn jira_create_task(state: State<'_, AppState>, req: NewJiraTask) -> Result<Task> {
+pub async fn jira_create_task(state: State<'_, AppState>, req: NewJiraTask) -> Result<Started> {
     if req.project_ids.is_empty() {
         return Err(Error::Other("pick at least one repository".into()));
     }
@@ -2235,7 +2235,7 @@ pub async fn jira_create_task(state: State<'_, AppState>, req: NewJiraTask) -> R
         .await?;
     let url = format!("{}/browse/{key}", cfg.base_url.trim_end_matches('/'));
 
-    new_task(
+    let task = new_task(
         &state,
         NewTask {
             name: format!("{key} {summary}"),
@@ -2252,7 +2252,51 @@ pub async fn jira_create_task(state: State<'_, AppState>, req: NewJiraTask) -> R
             "{key} was filed in Jira, but its worktrees were not created: {e}. The ticket \
              is still there — start work on it from Tickets once that is sorted."
         ))
-    })
+    })?;
+
+    let moved = sync_started(&state, &key).await;
+    Ok(Started { task, moved })
+}
+
+/// Move a ticket into progress alongside the worktrees, if that is wanted.
+///
+/// Starting work in two places and telling Jira about neither is how a board
+/// ends up disagreeing with the app: the ticket reads Open while a branch,
+/// a worktree and an agent are all running against it. Best effort — a
+/// workflow that will not allow the move, or an account that may not make it,
+/// is not a reason to undo a task that was created successfully.
+async fn sync_started(state: &AppState, key: &str) -> Option<String> {
+    if !state.config.read().ui.sync_jira_status {
+        return None;
+    }
+    let (client, _) = jira_client(state).ok()?;
+    match client.start_progress(key).await {
+        Ok(moved) => moved,
+        Err(e) => {
+            eprintln!("could not move {key} into progress: {e}");
+            None
+        }
+    }
+}
+
+/// Move a ticket into progress on request, for one that fell out of step.
+///
+/// Tasks created before this app moved tickets — or while the setting was off,
+/// or when the workflow refused — leave a board saying Open next to a branch
+/// that is clearly being worked on. This is the one-click way back into step.
+#[tauri::command]
+pub async fn jira_sync_status(state: State<'_, AppState>, key: String) -> Result<Option<String>> {
+    let (client, _) = jira_client(&state)?;
+    client.start_progress(&key).await
+}
+
+/// A task, and the status its ticket was moved to on the way.
+#[derive(Debug, Serialize)]
+pub struct Started {
+    #[serde(flatten)]
+    pub task: Task,
+    /// The status Jira was moved to, when it was moved.
+    pub moved: Option<String>,
 }
 
 /// The one-click path: ticket -> worktree per repo -> agent primed with both
@@ -2265,7 +2309,7 @@ pub async fn jira_start_work(
     project_ids: Vec<String>,
     agent_id: Option<String>,
     branch_suffix: Option<String>,
-) -> Result<Task> {
+) -> Result<Started> {
     // A second task for the same ticket would try to check the same branch out
     // twice and fail deep inside git. Unless a suffix asks for a distinct
     // branch, point at what already exists.
@@ -2317,7 +2361,8 @@ pub async fn jira_start_work(
         )?;
     }
 
-    Ok(task)
+    let moved = sync_started(&state, &issue.key).await;
+    Ok(Started { task, moved })
 }
 
 // ------------------------------------------------------------------ github
@@ -2790,6 +2835,7 @@ pub fn set_ui_prefs(state: State<AppState>, ui: UiPrefs) -> Result<()> {
         terminal_font_size: ui.terminal_font_size.clamp(9, 24),
         restore_panes: ui.restore_panes,
         trust_agent_dirs: ui.trust_agent_dirs,
+        sync_jira_status: ui.sync_jira_status,
     };
     state.config.update(|c| c.ui = ui)
 }

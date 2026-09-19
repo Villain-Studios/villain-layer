@@ -136,6 +136,11 @@ export interface JiraIssue {
   url: string;
 }
 
+/** A task, plus the status its ticket was moved to on the way. */
+export interface Started extends Task {
+  moved: string | null;
+}
+
 /** A page of search results, and whether Jira still had more to give. */
 export interface JiraPage {
   issues: JiraIssue[];
@@ -211,6 +216,7 @@ export interface UiPrefs {
   terminal_font_size: number;
   restore_panes: boolean;
   trust_agent_dirs: boolean;
+  sync_jira_status: boolean;
 }
 
 export interface Settings {

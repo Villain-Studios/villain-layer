@@ -40,6 +40,7 @@ export function TicketsView() {
   const [searching, setSearching] = useState(false);
   // Shared by both tabs: your own list filters in place, a search asks Jira.
   const [kinds, setKinds] = useState<string[]>([]);
+  const [syncing, setSyncing] = useState<string | null>(null);
 
   const installed = agents.filter((a) => a.installed);
   const types = useMemo(() => typeMap(issueTypes), [issueTypes]);
@@ -78,6 +79,24 @@ export function TicketsView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sub]);
 
+  /// Bring a ticket back into step with the work already happening here.
+  async function syncStatus(key: string) {
+    setSyncing(key);
+    try {
+      const moved = await api.jiraSyncStatus(key);
+      if (moved) {
+        toast("success", `${key} → ${moved}`);
+        await refreshIssues();
+      } else {
+        toast("info", `${key} offers no transition into progress.`);
+      }
+    } catch (e) {
+      fail(e);
+    } finally {
+      setSyncing(null);
+    }
+  }
+
   async function browse() {
     setSearching(true);
     try {
@@ -95,12 +114,15 @@ export function TicketsView() {
     setStarting(true);
     try {
       const task = await api.jiraStartWork(open.key, picked, agentId || null, suffix || null);
-      await Promise.all([refreshTasks(), refreshPanes()]);
+      // Refresh the issues too: the ticket has usually just moved, and the
+      // status on the card is the thing the move was meant to correct.
+      await Promise.all([refreshTasks(), refreshPanes(), refreshIssues()]);
       select(task.id);
       setOpen(null);
       toast(
         "success",
-        `${picked.length} worktree${picked.length === 1 ? "" : "s"} ready on ${task.branch}`,
+        `${picked.length} worktree${picked.length === 1 ? "" : "s"} ready on ${task.branch}` +
+          (task.moved ? ` · ${open.key} → ${task.moved}` : ""),
       );
     } catch (e) {
       fail(e);
@@ -193,7 +215,21 @@ export function TicketsView() {
           <span className={`status-pill ${statusClass(issue.status_category)}`}>
             {issue.status}
           </span>
-          {task && <span className="chip add">in progress →</span>}
+          {task && issue.status_category === "indeterminate" && (
+            <span className="chip add">open task →</span>
+          )}
+          {task && issue.status_category !== "indeterminate" && (
+            // A branch and an agent are running against a ticket the board
+            // still calls Open. Say so, and offer the one click that fixes it.
+            <button
+              className="chip warn sync"
+              disabled={syncing === issue.key}
+              title={`Move ${issue.key} into progress in Jira`}
+              onClick={(e) => { e.stopPropagation(); void syncStatus(issue.key); }}
+            >
+              {syncing === issue.key ? "moving…" : "started here — sync ↑"}
+            </button>
+          )}
         </div>
         <div className="summary">{issue.summary}</div>
         <div className="bottom">

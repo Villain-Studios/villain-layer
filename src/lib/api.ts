@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AgentStatus, ChangedFile, Checkout, CheckoutPr, FoundRepo, JiraIssue,
   JiraIssueType, JiraPage, JiraTransition, MatchKind, PaneInfo, Project, RepoResult, RepoRule,
+  Started,
   RepoSet,
   RepoSuggestion, Resumable, ReviewComment, Settings, SlackConfig, Task, TaskView,
   UiPrefs, WorktreeEntry,
@@ -115,6 +116,7 @@ export const api = {
     invoke<string>("request_pr_description", { taskId, paneId }),
   takePrDescription: (taskId: string) =>
     invoke<string | null>("take_pr_description", { taskId }),
+  jiraSyncStatus: (key: string) => invoke<string | null>("jira_sync_status", { key }),
   jiraBrowse: (text: string, whose: string, includeDone: boolean, types: string[]) =>
     invoke<JiraPage>("jira_browse", { text: text || null, whose, includeDone, types }),
   jiraCreateTask: (req: {
@@ -125,11 +127,11 @@ export const api = {
     parent_key: string | null;
     project_ids: string[];
     branch_suffix: string | null;
-  }) => invoke<Task>("jira_create_task", { req }),
+  }) => invoke<Started>("jira_create_task", { req }),
   jiraStartWork: (
     key: string, projectIds: string[],
     agentId?: string | null, branchSuffix?: string | null,
-  ) => invoke<Task>("jira_start_work", {
+  ) => invoke<Started>("jira_start_work", {
     key, projectIds, agentId: agentId ?? null, branchSuffix: branchSuffix ?? null,
   }),
 

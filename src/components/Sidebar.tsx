@@ -116,7 +116,12 @@ export function Sidebar() {
           });
       await refreshTasks();
       if (withJira) {
-        toast("success", `Filed ${task.issue_key} and opened ${picked.length} worktree${picked.length === 1 ? "" : "s"}`);
+        toast(
+          "success",
+          `Filed ${task.issue_key} and opened ${picked.length} worktree${
+            picked.length === 1 ? "" : "s"
+          }` + ("moved" in task && task.moved ? ` · ${task.moved}` : ""),
+        );
         void refreshIssues();
       }
       select(task.id);

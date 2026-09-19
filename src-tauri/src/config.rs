@@ -185,6 +185,10 @@ pub struct UiPrefs {
     /// so a new task or chat starts working instead of waiting on a question.
     #[serde(default = "yes")]
     pub trust_agent_dirs: bool,
+    /// Move the ticket into progress when a task is started for it, so the
+    /// board and this app do not disagree about what is being worked on.
+    #[serde(default = "yes")]
+    pub sync_jira_status: bool,
 }
 
 impl Default for UiPrefs {
@@ -194,6 +198,7 @@ impl Default for UiPrefs {
             terminal_font_size: 13,
             restore_panes: true,
             trust_agent_dirs: true,
+            sync_jira_status: true,
         }
     }
 }

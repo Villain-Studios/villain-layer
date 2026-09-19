@@ -54,6 +54,11 @@ pub struct Transition {
     pub id: String,
     pub name: String,
     pub to_status: String,
+    /// The category the target status sits in: "new", "indeterminate" or
+    /// "done". Status *names* differ between sites and workflows; the three
+    /// categories are Jira's own and mean the same everywhere, which is what
+    /// makes it safe to pick a transition without being told which one.
+    pub to_category: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -263,6 +268,11 @@ impl Jira {
                             .and_then(|s| s.as_str())
                             .unwrap_or_default()
                             .to_string(),
+                        to_category: t
+                            .pointer("/to/statusCategory/key")
+                            .and_then(|s| s.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
                     })
                     .collect()
             })
@@ -308,6 +318,29 @@ impl Jira {
             )
             .await?;
         Ok(str_at(&v, "key"))
+    }
+
+    /// Move an issue into whatever this workflow calls "in progress".
+    ///
+    /// Picked by status category rather than by name: "In Progress", "Doing",
+    /// "In Bearbeitung" and whatever else a team has called it all share the
+    /// `indeterminate` category, so nothing here has to be told about a
+    /// particular Jira.
+    ///
+    /// Returns the status it moved to, or None when there was nothing to do —
+    /// already in progress, or no transition offered.
+    pub async fn start_progress(&self, key: &str) -> Result<Option<String>> {
+        let issue = self.issue(key).await?;
+        if issue.status_category == "indeterminate" {
+            return Ok(None);
+        }
+
+        let available = self.transitions(key).await?;
+        let Some(wanted) = available.iter().find(|t| t.to_category == "indeterminate") else {
+            return Ok(None);
+        };
+        self.transition(key, &wanted.id).await?;
+        Ok(Some(wanted.to_status.clone()))
     }
 
     pub async fn comment(&self, key: &str, text: &str) -> Result<()> {

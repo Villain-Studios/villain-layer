@@ -1233,3 +1233,7 @@ textarea { resize: vertical; font-family: var(--mono); }
 .type-filter .type-pick { padding: 4px 9px; font-size: 12.5px; }
 .type-pick.clear { color: var(--dimmer); }
 .type-pick.clear:hover { color: var(--red); border-color: var(--red); }
+
+/* A ticket whose board status has fallen behind the work: the chip is the fix. */
+.chip.sync { cursor: pointer; font-family: var(--sans); }
+.chip.sync:hover:not(:disabled) { border-color: var(--amber); color: var(--amber); }

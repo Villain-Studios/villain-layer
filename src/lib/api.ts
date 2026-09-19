@@ -115,6 +115,15 @@ export const api = {
     invoke<string>("request_pr_description", { taskId, paneId }),
   takePrDescription: (taskId: string) =>
     invoke<string | null>("take_pr_description", { taskId }),
+  jiraCreateTask: (req: {
+    summary: string;
+    description: string;
+    issue_type: string;
+    project_key: string | null;
+    parent_key: string | null;
+    project_ids: string[];
+    branch_suffix: string | null;
+  }) => invoke<Task>("jira_create_task", { req }),
   jiraStartWork: (
     key: string, projectIds: string[],
     agentId?: string | null, branchSuffix?: string | null,

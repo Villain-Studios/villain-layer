@@ -3,11 +3,17 @@ import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { api } from "../lib/api";
 import { paneState, taskTotals, useStore } from "../store";
 import type { TaskView } from "../lib/types";
-import { Confirm, ContextMenu, Field, Modal, type MenuItem } from "./ui";
+import { Confirm, ContextMenu, Field, Modal, Switch, type MenuItem } from "./ui";
 import { RepoPicker } from "./RepoPicker";
+import { read, write } from "../lib/persist";
+import { IssueTypeIcon, isEpicType, typeMap } from "./IssueType";
 
 export function Sidebar() {
   const { projects, tasks, panes } = useStore();
+  const settings = useStore((s) => s.settings);
+  const issues = useStore((s) => s.issues);
+  const issueTypes = useStore((s) => s.issueTypes);
+  const refreshIssues = useStore((s) => s.refreshIssues);
   const selected = useStore((s) => s.selectedTask);
   const select = useStore((s) => s.select);
   const setView = useStore((s) => s.setView);
@@ -18,6 +24,13 @@ export function Sidebar() {
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
   const [branch, setBranch] = useState("");
+  // Filing the ticket and opening the worktrees are the same act often enough
+  // that they belong in one dialog rather than two views.
+  const [withJira, setWithJira] = useState(false);
+  const [jiraType, setJiraType] = useState("");
+  const [jiraProject, setJiraProject] = useState(() => read("jiraProject", ""));
+  const [jiraParent, setJiraParent] = useState("");
+  const [jiraDesc, setJiraDesc] = useState("");
   const [picked, setPicked] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -31,6 +44,28 @@ export function Sidebar() {
     run: () => void;
   } | null>(null);
 
+  const tm = typeMap(issueTypes);
+  // Most sites never set a default project, so rather than disable the whole
+  // feature the dialog asks — offering the keys already visible on the board.
+  const boardKeys = [...new Set(issues.map((i) => i.key.split("-")[0]).filter(Boolean))];
+  const defaultProject = settings?.jira?.project_key ?? boardKeys[0] ?? "";
+  // A task is a normal issue: epics group work rather than being work, and a
+  // sub-task needs a parent this dialog does not ask for.
+  const creatable = issueTypes.filter((t) => t.hierarchy_level === 0 && !t.subtask);
+  const epics = issues.filter((i) => isEpicType(tm, i.issue_type));
+
+  // Default to whatever the site calls a plain issue, without assuming it is
+  // named "Task" — it often is not.
+  useEffect(() => {
+    if (jiraType && creatable.some((t) => t.name === jiraType)) return;
+    const preferred = creatable.find((t) => t.name.toLowerCase() === "task") ?? creatable[0];
+    setJiraType(preferred?.name ?? "");
+  }, [creatable, jiraType]);
+
+  useEffect(() => {
+    if (creating && !jiraProject && defaultProject) setJiraProject(defaultProject);
+  }, [creating, jiraProject, defaultProject]);
+
   useEffect(() => {
     if (!creating) { setReason(null); return; }
     api.suggestRepos({})
@@ -38,20 +73,42 @@ export function Sidebar() {
       .catch(() => setPicked([]));
   }, [creating]);
 
+  function closeCreate() {
+    setCreating(false);
+    setName("");
+    setBranch("");
+    setJiraDesc("");
+    setJiraParent("");
+  }
+
   async function createTask() {
     if (!name.trim() || picked.length === 0) return;
     setBusy(true);
     try {
-      const task = await api.createTask({
-        name: name.trim(),
-        project_ids: picked,
-        branch: branch.trim() || null,
-      });
+      // With a ticket, the key it comes back with names the branch and the
+      // folder, so the task cannot be built until Jira has answered.
+      const task = withJira
+        ? await api.jiraCreateTask({
+            summary: name.trim(),
+            description: jiraDesc.trim(),
+            issue_type: jiraType,
+            project_key: jiraProject.trim() || null,
+            parent_key: jiraParent || null,
+            project_ids: picked,
+            branch_suffix: branch.trim() || null,
+          })
+        : await api.createTask({
+            name: name.trim(),
+            project_ids: picked,
+            branch: branch.trim() || null,
+          });
       await refreshTasks();
+      if (withJira) {
+        toast("success", `Filed ${task.issue_key} and opened ${picked.length} worktree${picked.length === 1 ? "" : "s"}`);
+        void refreshIssues();
+      }
       select(task.id);
-      setCreating(false);
-      setName("");
-      setBranch("");
+      closeCreate();
     } catch (e) {
       fail(e);
     } finally {
@@ -341,21 +398,28 @@ export function Sidebar() {
       {creating && (
         <Modal
           title="New task"
-          onClose={() => setCreating(false)}
+          onClose={closeCreate}
           footer={
             <>
-              <button className="btn" onClick={() => setCreating(false)}>Cancel</button>
+              <button className="btn" onClick={closeCreate}>Cancel</button>
               <button
                 className="btn btn-primary"
-                disabled={busy || !name.trim() || picked.length === 0}
+                disabled={
+                  busy || !name.trim() || picked.length === 0 ||
+                  (withJira && (!jiraType || !jiraProject.trim()))
+                }
                 onClick={() => void createTask()}
               >
-                {busy ? "Creating…" : `Create ${picked.length} worktree${picked.length === 1 ? "" : "s"}`}
+                {busy
+                  ? withJira ? "Filing…" : "Creating…"
+                  : withJira
+                    ? `File ticket + ${picked.length} worktree${picked.length === 1 ? "" : "s"}`
+                    : `Create ${picked.length} worktree${picked.length === 1 ? "" : "s"}`}
               </button>
             </>
           }
         >
-          <Field label="Task name">
+          <Field label={withJira ? "Summary" : "Task name"}>
             <input
               autoFocus
               value={name}
@@ -363,6 +427,77 @@ export function Sidebar() {
               placeholder="fix checkout rounding"
             />
           </Field>
+
+          <Switch
+            label="File a Jira ticket for this"
+            detail={
+              settings?.jira_connected
+                ? "Files the issue first, then names the branch and folder after its key."
+                : "Connect Jira in Settings to file from here."
+            }
+            checked={withJira}
+            disabled={!settings?.jira_connected}
+            onChange={setWithJira}
+          />
+
+          {withJira && (
+            <div className="jira-fields">
+              <Field label="Project" hint="The key the ticket is filed under.">
+                <input
+                  value={jiraProject}
+                  onChange={(e) => {
+                    const v = e.target.value.trim().toUpperCase();
+                    setJiraProject(v);
+                    write("jiraProject", v);
+                  }}
+                  list="jira-project-keys"
+                  placeholder="ACME"
+                />
+                <datalist id="jira-project-keys">
+                  {boardKeys.map((k) => <option key={k} value={k} />)}
+                </datalist>
+              </Field>
+
+              <Field label="Type">
+                <div className="type-row">
+                  {creatable.map((t) => (
+                    <button
+                      key={t.id}
+                      className={`type-pick${jiraType === t.name ? " active" : ""}`}
+                      onClick={() => setJiraType(t.name)}
+                    >
+                      <IssueTypeIcon types={tm} name={t.name} size={15} />
+                      {t.name}
+                    </button>
+                  ))}
+                  {creatable.length === 0 && (
+                    <span className="muted">Jira reported no issue types.</span>
+                  )}
+                </div>
+              </Field>
+
+              {epics.length > 0 && (
+                <Field label="Epic" hint="Optional. Only epics already on your board are listed.">
+                  <select value={jiraParent} onChange={(e) => setJiraParent(e.target.value)}>
+                    <option value="">No epic</option>
+                    {epics.map((e) => (
+                      <option key={e.key} value={e.key}>{e.key} — {e.summary}</option>
+                    ))}
+                  </select>
+                </Field>
+              )}
+
+              <Field label="Description" hint="Optional. Becomes the ticket body and the agent's briefing.">
+                <textarea
+                  rows={4}
+                  value={jiraDesc}
+                  onChange={(e) => setJiraDesc(e.target.value)}
+                  placeholder="What needs doing, and how you would know it is done."
+                />
+              </Field>
+            </div>
+          )}
+
           <Field
             label="Repositories"
             hint="One worktree per repo, all on the same branch, side by side in one task folder."
@@ -374,11 +509,19 @@ export function Sidebar() {
               reason={reason}
             />
           </Field>
-          <Field label="Branch" hint="Defaults to a slug of the task name. Used in every repo.">
+
+          <Field
+            label={withJira ? "Branch suffix" : "Branch"}
+            hint={
+              withJira
+                ? `Optional. The branch is the ticket key — ${jiraProject || "KEY"}-123, or ${jiraProject || "KEY"}-123-your-suffix.`
+                : "Defaults to a slug of the task name. Used in every repo."
+            }
+          >
             <input
               value={branch}
               onChange={(e) => setBranch(e.target.value)}
-              placeholder="(auto)"
+              placeholder={withJira ? "(none)" : "(auto)"}
             />
           </Field>
         </Modal>

@@ -102,6 +102,7 @@ pub fn run() {
             commands::jira_transitions,
             commands::jira_transition,
             commands::jira_comment,
+            commands::jira_create_task,
             commands::jira_start_work,
             commands::task_prompt,
             commands::handoff_prompt,

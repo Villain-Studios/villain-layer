@@ -1028,6 +1028,17 @@ pub(crate) fn chat_dir(state: &AppState) -> Result<PathBuf> {
     Ok(dir)
 }
 
+/// One chat's own folder under the chat root.
+///
+/// The agent CLIs key their saved conversations by working directory, so two
+/// chats sharing a folder would both pick up whichever ran last. The folder is
+/// what gives a chat its identity across a restart.
+fn chat_room(state: &AppState, id: &str) -> Result<PathBuf> {
+    let dir = chat_dir(state)?.join(id);
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
 /// Where generated agent files (`.mcp.json`, context) may safely be written.
 ///
 /// Never inside a worktree: a generated file there is an untracked change that
@@ -1135,27 +1146,56 @@ pub fn spawn_chat(
     agent_id: String,
     prompt: Option<String>,
 ) -> Result<PaneInfo> {
+    let pane = open_chat(&app, &state, agent_id, prompt, None, false)?;
+    remember_pane(&state, &pane);
+    Ok(pane)
+}
+
+fn open_chat(
+    app: &AppHandle,
+    state: &AppState,
+    agent_id: String,
+    prompt: Option<String>,
+    // An existing chat folder to reopen, or None to start a new one.
+    room: Option<PathBuf>,
+    resume: bool,
+) -> Result<PaneInfo> {
     let def = agents::find(&agent_id)
         .ok_or_else(|| Error::NotFound(format!("agent {agent_id}")))?;
     let program = shellenv::which(def.program)
         .ok_or_else(|| Error::NotFound(format!("{} is not on your PATH", def.program)))?;
-    let (args, initial_input) = agents::launch_args(def, prompt.as_deref());
+
+    let dir = match room {
+        Some(dir) => {
+            std::fs::create_dir_all(&dir)?;
+            dir
+        }
+        None => chat_room(state, &uuid::Uuid::new_v4().to_string()[..8])?,
+    };
+    // Best effort: a context file that cannot be written is not a reason to
+    // refuse to start the agent.
+    let _ = write_chat_context(state, &dir);
+    let _ = crate::mcp::write_config(&dir);
+
+    // Resuming hands the conversation back to the CLI, so an opening prompt
+    // would only talk over it.
+    let (args, initial_input) = if resume {
+        let flags = def.resume_args.ok_or_else(|| {
+            Error::Other(format!("{} cannot resume a previous session", def.name))
+        })?;
+        (flags.iter().map(|f| f.to_string()).collect::<Vec<_>>(), None)
+    } else {
+        agents::launch_args(def, prompt.as_deref())
+    };
 
     state.ptys.spawn(
-        &app,
+        app,
         SpawnOptions {
             task_id: CHAT_TASK_ID.to_string(),
             checkout_id: None,
-            cwd: {
-                let dir = chat_dir(&state)?;
-                // Best effort: a context file that cannot be written is not a
-                // reason to refuse to start the agent.
-                let _ = write_chat_context(&state, &dir);
-                let _ = crate::mcp::write_config(&dir);
-                dir.to_string_lossy().to_string()
-            },
+            cwd: dir.to_string_lossy().to_string(),
             kind: PaneKind::Agent,
-            title: def.name.to_string(),
+            title: format!("{}{}", def.name, if resume { " (resumed)" } else { "" }),
             program,
             args,
             agent_id: Some(agent_id),
@@ -1192,6 +1232,7 @@ fn remember_pane(state: &AppState, pane: &PaneInfo) {
             PaneKind::Shell => "shell".into(),
         },
         agent_id: pane.agent_id.clone(),
+        cwd: Some(pane.cwd.clone()),
     };
     let _ = state.config.update(|c| c.saved_panes.push(saved));
 }
@@ -1222,6 +1263,29 @@ pub fn restore_panes(app: &AppHandle) {
     let _ = state.config.update(|c| c.saved_panes.clear());
 
     for pane in saved {
+        // Chats belong to no task: they live in their own folder, so they are
+        // restored on the agent's own transcript rather than a worktree.
+        if pane.task_id == CHAT_TASK_ID {
+            let Some(agent_id) = pane.agent_id.clone() else {
+                continue;
+            };
+            let room = pane.cwd.clone().map(PathBuf::from);
+            // Only resume where there is a conversation to resume: a chat
+            // saved before folders were per-chat has nothing of its own.
+            let resume = room
+                .as_deref()
+                .map(|d| {
+                    agents::resumable(&d.to_string_lossy())
+                        .iter()
+                        .any(|r| r.agent_id == agent_id)
+                })
+                .unwrap_or(false);
+            match open_chat(app, &state, agent_id, None, room, resume) {
+                Ok(info) => remember_pane(&state, &info),
+                Err(e) => eprintln!("could not restore a chat: {e}"),
+            }
+            continue;
+        }
         if state.config.task(&pane.task_id).is_err() {
             continue;
         }
@@ -1951,6 +2015,83 @@ pub async fn handoff_prompt(state: State<'_, AppState>, pane_id: String) -> Resu
         "changing anything.",
     ));
     Ok(out)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct NewJiraTask {
+    pub summary: String,
+    #[serde(default)]
+    pub description: String,
+    pub issue_type: String,
+    /// Falls back to the project configured in Settings.
+    #[serde(default)]
+    pub project_key: Option<String>,
+    /// The epic, or any parent the issue type allows.
+    #[serde(default)]
+    pub parent_key: Option<String>,
+    pub project_ids: Vec<String>,
+    #[serde(default)]
+    pub branch_suffix: Option<String>,
+}
+
+/// File the ticket and open the worktrees in one step.
+///
+/// The ticket goes first because the key it comes back with is what names the
+/// branch, the folder and the task. If the worktrees then fail, the ticket is
+/// left standing — deleting someone's issue to tidy up after a git error would
+/// be worse than the orphan — and the error says so, naming the key, so the
+/// work can be picked up with "start work" once the repositories are sorted.
+#[tauri::command]
+pub async fn jira_create_task(state: State<'_, AppState>, req: NewJiraTask) -> Result<Task> {
+    if req.project_ids.is_empty() {
+        return Err(Error::Other("pick at least one repository".into()));
+    }
+    let summary = req.summary.trim().to_string();
+    if summary.is_empty() {
+        return Err(Error::Other("the ticket needs a summary".into()));
+    }
+
+    let (client, cfg) = jira_client(&state)?;
+    let project_key = req
+        .project_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| cfg.project_key.clone())
+        .ok_or_else(|| {
+            Error::Other("no Jira project to file into — set a project key in Settings".into())
+        })?;
+
+    let key = client
+        .create_issue(
+            &project_key,
+            &summary,
+            &req.description,
+            &req.issue_type,
+            req.parent_key.as_deref(),
+        )
+        .await?;
+    let url = format!("{}/browse/{key}", cfg.base_url.trim_end_matches('/'));
+
+    new_task(
+        &state,
+        NewTask {
+            name: format!("{key} {summary}"),
+            project_ids: req.project_ids,
+            branch: None,
+            branch_suffix: req.branch_suffix,
+            issue_key: Some(key.clone()),
+            issue_url: Some(url),
+            epic_key: req.parent_key.clone(),
+        },
+    )
+    .map_err(|e| {
+        Error::Other(format!(
+            "{key} was filed in Jira, but its worktrees were not created: {e}. The ticket \
+             is still there — start work on it from Tickets once that is sorted."
+        ))
+    })
 }
 
 /// The one-click path: ticket -> worktree per repo -> agent primed with both

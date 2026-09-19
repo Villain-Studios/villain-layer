@@ -106,12 +106,17 @@ export default function App() {
 
   const totals = task ? taskTotals(task) : null;
   const changed = totals ? totals.dirty + totals.staged : 0;
-  const running = panes.filter((p) => p.kind === "agent" && p.running).length;
+  // Chats have their own badge, so they must not be counted as work as well.
+  const running = panes.filter(
+    (p) => p.kind === "agent" && p.running && p.task_id !== CHAT_TASK_ID,
+  ).length;
+
+  const chats = panes.filter((p) => p.task_id === CHAT_TASK_ID).length;
 
   const tabs: { id: View; label: string; badge?: number }[] = [
     { id: "work", label: "Work", badge: running || undefined },
     { id: "tickets", label: "Tickets", badge: issues.length || undefined },
-    { id: "chat", label: "Chat" },
+    { id: "chat", label: "Chat", badge: chats || undefined },
     { id: "repos", label: "Repos", badge: projects.length || undefined },
   ];
 

@@ -164,6 +164,11 @@ pub struct SavedPane {
     pub kind: String,
     #[serde(default)]
     pub agent_id: Option<String>,
+    /// Where it was running. Task panes derive this from their checkout, but a
+    /// chat belongs to no task and its folder is the only thing that ties it
+    /// back to its saved conversation.
+    #[serde(default)]
+    pub cwd: Option<String>,
 }
 
 /// Presentation preferences. Terminal text scales separately from the chrome,

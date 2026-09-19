@@ -176,6 +176,15 @@ pub struct SpawnOptions {
     pub initial_input: Option<String>,
 }
 
+/// The most panes that may exist at once.
+///
+/// A backstop, not a feature. Every pane is a real process — usually an agent
+/// CLI, which is not a cheap one — and every way of opening one, from a click
+/// to a restore to a tool an agent calls on the app's own MCP server, comes
+/// through here. A bug upstream of this that asks for hundreds gets an error
+/// instead of the machine.
+pub(crate) const MAX_PANES: usize = 32;
+
 #[derive(Default)]
 pub struct PtyManager {
     panes: Mutex<HashMap<String, Arc<Pane>>>,
@@ -201,6 +210,16 @@ struct ExitEvent<'a> {
 
 impl PtyManager {
     pub fn spawn(&self, app: &AppHandle, opts: SpawnOptions) -> Result<PaneInfo> {
+        // Checked before anything is allocated, so refusing costs nothing.
+        let live = self.panes.lock().len();
+        if live >= MAX_PANES {
+            return Err(Error::Pty(format!(
+                "{live} terminals are already open, which is the limit. Close some \
+                 before starting another — and if you did not open this many, \
+                 something is starting them on its own."
+            )));
+        }
+
         let system = portable_pty::native_pty_system();
         let size = PtySize {
             rows: opts.rows.unwrap_or(30),

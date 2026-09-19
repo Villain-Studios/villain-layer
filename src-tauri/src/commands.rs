@@ -1447,8 +1447,22 @@ fn remember_pane(state: &AppState, pane: &PaneInfo) {
         // every launch.
         c.saved_panes.retain(|p| p.id != saved.id);
         c.saved_panes.push(saved);
+        // Panes that exited are never removed from here — only closing one on
+        // purpose does that — so without a bound this grows for as long as the
+        // app is used. Oldest first, since the newest are what you had open.
+        let over = c.saved_panes.len().saturating_sub(SAVED_PANE_LIMIT);
+        if over > 0 {
+            c.saved_panes.drain(..over);
+        }
     });
 }
+
+/// How many panes are remembered between launches.
+///
+/// Larger than what a restore will actually open, so the record survives a
+/// session with a lot of churn, and still bounded: this file is written every
+/// time a pane starts.
+const SAVED_PANE_LIMIT: usize = 40;
 
 /// The most panes a restore will ever open.
 ///
@@ -3292,6 +3306,19 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert_eq!(out[0].kind, "agent");
         assert_eq!(out[1].kind, "shell");
+    }
+
+    #[test]
+    fn a_restore_can_never_ask_for_more_panes_than_are_allowed() {
+        // Raising the restore limit past what the manager will open would make
+        // a restore fail part-way through, which is the confusing version of
+        // the bug rather than the dangerous one. Kept honest here.
+        assert!(
+            RESTORE_LIMIT < crate::pty::MAX_PANES,
+            "restore limit {RESTORE_LIMIT} must stay under the pane cap {}",
+            crate::pty::MAX_PANES,
+        );
+        assert!(RESTORE_LIMIT <= SAVED_PANE_LIMIT);
     }
 
     #[test]

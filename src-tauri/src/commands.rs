@@ -635,6 +635,10 @@ pub(crate) fn new_task(state: &AppState, req: NewTask) -> Result<Task> {
         c.last_repos.insert(key, ids);
     })?;
 
+    // The folder describes itself from the moment it exists, so an agent
+    // started by hand in it is no worse off than one the app launched.
+    let _ = write_task_context(state, &task);
+
     Ok(task)
 }
 
@@ -1437,7 +1441,43 @@ fn remember_pane(state: &AppState, pane: &PaneInfo) {
         agent_id: pane.agent_id.clone(),
         cwd: Some(pane.cwd.clone()),
     };
-    let _ = state.config.update(|c| c.saved_panes.push(saved));
+    let _ = state.config.update(|c| {
+        // Replace rather than append: recording the same pane twice is how a
+        // restore that also recorded what it restored doubled this list on
+        // every launch.
+        c.saved_panes.retain(|p| p.id != saved.id);
+        c.saved_panes.push(saved);
+    });
+}
+
+/// The most panes a restore will ever open.
+///
+/// A ceiling, not a preference. Restoring is the one path that turns a number
+/// in a config file into that many processes, so it must not be able to take
+/// the machine down however the file got that way.
+const RESTORE_LIMIT: usize = 12;
+
+/// What to put back: at most one pane per distinct thing, and never more than
+/// the machine should be asked to start at once.
+fn panes_to_restore(saved: Vec<SavedPane>, limit: usize) -> Vec<SavedPane> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for pane in saved {
+        let key = (
+            pane.task_id.clone(),
+            pane.kind.clone(),
+            pane.agent_id.clone(),
+            pane.cwd.clone(),
+        );
+        if !seen.insert(key) {
+            continue;
+        }
+        out.push(pane);
+        if out.len() == limit {
+            break;
+        }
+    }
+    out
 }
 
 #[tauri::command]
@@ -1459,8 +1499,16 @@ pub fn restore_panes(app: &AppHandle) {
     }
 
     let saved = state.config.read().saved_panes;
+    let wanted = saved.len();
+    let saved = panes_to_restore(saved, RESTORE_LIMIT);
     if saved.is_empty() {
         return;
+    }
+    if wanted > saved.len() {
+        eprintln!(
+            "restoring {} of {wanted} saved panes (duplicates dropped, {RESTORE_LIMIT} at most)",
+            saved.len(),
+        );
     }
     // The list is rebuilt as each pane comes back with a new id, and only then
     // written. Clearing it up front meant a restore that failed — or an app
@@ -1485,9 +1533,9 @@ pub fn restore_panes(app: &AppHandle) {
                         .any(|r| r.agent_id == agent_id)
                 })
                 .unwrap_or(false);
-            match open_chat(app, &state, agent_id, None, room, resume) {
-                Ok(info) => remember_pane(&state, &info),
-                Err(e) => eprintln!("could not restore a chat: {e}"),
+            // No remember_pane here: spawning records the pane itself.
+            if let Err(e) = open_chat(app, &state, agent_id, None, room, resume) {
+                eprintln!("could not restore a chat: {e}");
             }
             continue;
         }
@@ -1526,9 +1574,10 @@ pub fn restore_panes(app: &AppHandle) {
             _ => open_shell(app, &state, pane.task_id.clone(), pane.checkout_id.clone(), None, None),
         };
 
-        match restored {
-            Ok(info) => remember_pane(&state, &info),
-            Err(e) => eprintln!("could not restore a pane: {e}"),
+        // Likewise: the spawn recorded it, so recording it again here is what
+        // made every restart double the list.
+        if let Err(e) = restored {
+            eprintln!("could not restore a pane: {e}");
         }
     }
 }
@@ -3216,5 +3265,52 @@ mod tests {
         let s = suggest_from(&cfg(), Some("ACME-1"), None, &[], &[]);
         assert!(s.project_ids.is_empty());
         assert!(s.reason.is_none());
+    }
+    fn saved(id: &str, task: &str, kind: &str, cwd: &str) -> SavedPane {
+        SavedPane {
+            id: id.into(),
+            task_id: task.into(),
+            checkout_id: None,
+            kind: kind.into(),
+            agent_id: if kind == "agent" { Some("claude".into()) } else { None },
+            cwd: Some(cwd.into()),
+        }
+    }
+
+    #[test]
+    fn a_pane_recorded_twice_is_only_restored_once() {
+        // Restoring recorded what it had just restored, while spawning already
+        // recorded it — so the list doubled on every launch, and a config that
+        // had been through ten restarts asked for hundreds of processes.
+        let doubled = vec![
+            saved("1", "t", "agent", "/w"),
+            saved("2", "t", "agent", "/w"),
+            saved("3", "t", "shell", "/w"),
+            saved("4", "t", "shell", "/w"),
+        ];
+        let out = panes_to_restore(doubled, RESTORE_LIMIT);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].kind, "agent");
+        assert_eq!(out[1].kind, "shell");
+    }
+
+    #[test]
+    fn restoring_is_capped_however_the_config_got_that_way() {
+        // The ceiling is the thing that keeps a bad config from being able to
+        // take the machine down, so it holds even when every entry is distinct.
+        let many: Vec<SavedPane> = (0..500)
+            .map(|i| saved(&i.to_string(), &format!("task{i}"), "shell", &format!("/w{i}")))
+            .collect();
+        assert_eq!(panes_to_restore(many, RESTORE_LIMIT).len(), RESTORE_LIMIT);
+    }
+
+    #[test]
+    fn panes_in_different_places_are_all_kept() {
+        let distinct = vec![
+            saved("1", "t", "agent", "/a"),
+            saved("2", "t", "agent", "/b"),
+            saved("3", "chat", "agent", "/c"),
+        ];
+        assert_eq!(panes_to_restore(distinct, RESTORE_LIMIT).len(), 3);
     }
 }

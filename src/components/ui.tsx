@@ -1,6 +1,8 @@
 import type { ReactNode, RefObject } from "react";
 import { useEffect, useRef, useState } from "react";
 
+import { useStore } from "../store";
+
 export function Modal({
   title, children, footer, toolbar, onClose, wide, tall,
 }: {
@@ -81,24 +83,41 @@ export function GearIcon({ size = 18 }: { size?: number }) {
   );
 }
 
-/** A panel with its left column marked, for showing and hiding the task list. */
-export function PanelIcon({ size = 17, open = true }: { size?: number; open?: boolean }) {
+/**
+ * Show or hide the task list.
+ *
+ * It lives at the left edge of the main panel rather than in the title bar:
+ * that is where the sidebar's own edge is, so the control sits against the
+ * thing it moves, and it stays in the same place whether or not the list is
+ * showing.
+ */
+export function SidebarToggle() {
+  const hidden = useStore((s) => s.sidebarHidden);
+  const toggle = useStore((s) => s.toggleSidebar);
   return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinejoin="round"
-      style={{ display: "block" }}
-      aria-hidden="true"
+    <button
+      className="icon-btn flat"
+      title={hidden ? "Show tasks" : "Hide tasks"}
+      onClick={toggle}
     >
-      <rect x="3" y="4" width="18" height="16" rx="2.5" />
-      <line x1="9.5" y1="4" x2="9.5" y2="20" />
-      {open && <rect x="3" y="4" width="6.5" height="16" rx="2.5" fill="currentColor" opacity="0.35" stroke="none" />}
-    </svg>
+      <svg
+        width="17"
+        height="17"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinejoin="round"
+        style={{ display: "block" }}
+        aria-hidden="true"
+      >
+        <rect x="3" y="4" width="18" height="16" rx="2.5" />
+        <line x1="9.5" y1="4" x2="9.5" y2="20" />
+        {!hidden && (
+          <rect x="3" y="4" width="6.5" height="16" fill="currentColor" opacity="0.35" stroke="none" />
+        )}
+      </svg>
+    </button>
   );
 }
 

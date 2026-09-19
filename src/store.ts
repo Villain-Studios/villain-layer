@@ -35,12 +35,14 @@ interface State {
   selectedTask: string | null;
   view: View;
   tab: Tab;
+  sidebarHidden: boolean;
   settingsOpen: boolean;
   toasts: Toast[];
 
   select: (id: string | null) => void;
   setView: (v: View) => void;
   setTab: (t: Tab) => void;
+  toggleSidebar: () => void;
   toggleSettings: (open?: boolean) => void;
 
   toast: (kind: Toast["kind"], text: string) => void;
@@ -86,6 +88,7 @@ export const useStore = create<State>((set, get) => ({
   selectedTask: read<string | null>("selectedTask", null),
   view: readOneOf("view", VIEWS, "work"),
   tab: readOneOf("tab", TABS, "terminals"),
+  sidebarHidden: read("sidebarHidden", false),
   settingsOpen: false,
   toasts: [],
 
@@ -93,6 +96,7 @@ export const useStore = create<State>((set, get) => ({
   select: (id) => set({ selectedTask: id, tab: "terminals", view: "work" }),
   setView: (view) => set({ view }),
   setTab: (tab) => set({ tab }),
+  toggleSidebar: () => set((s) => ({ sidebarHidden: !s.sidebarHidden })),
   toggleSettings: (open) => set((s) => ({ settingsOpen: open ?? !s.settingsOpen })),
 
   toast: (kind, text) => {
@@ -256,10 +260,11 @@ export function taskTotals(task: TaskView) {
 // are restored whatever moved the selection, and this should be too.
 let lastLayout = "";
 useStore.subscribe((s) => {
-  const now = JSON.stringify([s.selectedTask, s.view, s.tab]);
+  const now = JSON.stringify([s.selectedTask, s.view, s.tab, s.sidebarHidden]);
   if (now === lastLayout) return;
   lastLayout = now;
   write("selectedTask", s.selectedTask);
   write("view", s.view);
   write("tab", s.tab);
+  write("sidebarHidden", s.sidebarHidden);
 });

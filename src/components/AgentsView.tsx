@@ -1,5 +1,6 @@
 import { api } from "../lib/api";
 import { CHAT_TASK_ID, paneState, useStore } from "../store";
+import { SidebarToggle } from "./ui";
 
 function ago(iso: string): string {
   const s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
@@ -24,6 +25,7 @@ export function AgentsView() {
   return (
     <div className="wide">
       <div className="wide-head">
+        <SidebarToggle />
         <h2>Agents</h2>
         <span className="sub">
           {live.length} running · {working.length - live.length} finished — pick a task

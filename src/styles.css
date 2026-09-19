@@ -1105,6 +1105,17 @@ textarea { resize: vertical; font-family: var(--mono); }
 .switch-detail { font-size: 12px; color: var(--dim); line-height: 1.45; }
 
 /* An icon-only button needs a real target; the old ⚙ glyph was ~11px of ink. */
+/* Inside a header the control should read as part of the bar, not as a button
+   competing with the title beside it. */
+.icon-btn.flat {
+  width: 26px;
+  height: 26px;
+  border-color: transparent;
+  background: transparent;
+  margin-left: -4px;
+}
+.icon-btn.flat:hover:not(:disabled) { background: var(--panel-2); color: var(--text); }
+
 .icon-btn {
   display: flex;
   align-items: center;

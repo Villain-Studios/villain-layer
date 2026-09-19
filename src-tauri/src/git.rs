@@ -460,6 +460,29 @@ mod tests {
         std::fs::remove_dir_all(repo.parent().unwrap()).ok();
     }
 
+    /// The bug behind orphaned worktrees: git refuses to remove a worktree that
+    /// has untracked files, and the failure used to be swallowed.
+    #[test]
+    fn removing_a_dirty_worktree_needs_force() {
+        let repo = fixture();
+        let wt = repo.parent().unwrap().join("wt");
+        add_worktree(&repo, &wt, "feature/dirty", "main").unwrap();
+
+        // An untracked file is enough; it does not take uncommitted edits.
+        std::fs::write(wt.join("scratch.log"), "noise\n").unwrap();
+
+        let refused = remove_worktree(&repo, &wt.to_string_lossy(), false);
+        assert!(refused.is_err(), "expected git to refuse while the worktree is dirty");
+        assert!(wt.exists(), "the worktree must still be on disk after a refusal");
+        assert_eq!(list_worktrees(&repo).unwrap().len(), 2);
+
+        remove_worktree(&repo, &wt.to_string_lossy(), true).unwrap();
+        assert!(!wt.exists());
+        assert_eq!(list_worktrees(&repo).unwrap().len(), 1);
+
+        std::fs::remove_dir_all(repo.parent().unwrap()).ok();
+    }
+
     #[test]
     fn a_deleted_worktree_says_so() {
         let gone = std::env::temp_dir().join(format!("vl-gone-{}", uuid::Uuid::new_v4()));

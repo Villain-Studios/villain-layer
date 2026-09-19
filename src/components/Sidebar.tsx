@@ -81,15 +81,7 @@ export function Sidebar() {
           )}
         </>
       ),
-      run: async () => {
-        try {
-          await api.deleteTask(task.id, dirty > 0);
-          if (selected === task.id) select(null);
-          await refreshTasks();
-        } catch (e) {
-          fail(e);
-        }
-      },
+      run: () => void runDelete(task, dirty > 0),
     });
   }
 
@@ -99,6 +91,44 @@ export function Sidebar() {
       await refreshTasks();
       setAddingRepoTo(null);
       setExpanded((e) => ({ ...e, [task.id]: true }));
+    } catch (e) {
+      fail(e);
+    }
+  }
+
+  /// git refuses to remove a worktree with uncommitted or untracked files. Say
+  /// so and offer to force, rather than leaving an orphan nobody can see.
+  async function runDelete(task: TaskView, force: boolean) {
+    try {
+      const results = await api.deleteTask(task.id, force);
+      const stuck = results.filter((r) => !r.ok);
+      await refreshTasks();
+
+      if (stuck.length === 0) {
+        if (selected === task.id) select(null);
+        return;
+      }
+      setConfirming({
+        title: "Some worktrees could not be removed",
+        label: "Force delete",
+        body: (
+          <>
+            git refused to remove {stuck.length} worktree{stuck.length === 1 ? "" : "s"},
+            so the task has been kept rather than leaving them orphaned:
+            <div className="confirm-detail">
+              {stuck.map((r) => (
+                <div key={r.checkout_id}>
+                  <b>{r.repo}</b> — {r.detail}
+                </div>
+              ))}
+            </div>
+            <div style={{ marginTop: 10 }}>
+              Forcing deletes those worktrees and anything uncommitted in them.
+            </div>
+          </>
+        ),
+        run: () => void runDelete(task, true),
+      });
     } catch (e) {
       fail(e);
     }

@@ -702,24 +702,70 @@ pub fn remove_checkout(state: State<AppState>, checkout_id: String, force: bool)
         .update(|c| c.checkouts.retain(|ch| ch.id != checkout_id))
 }
 
+/// Delete a task and every worktree it owns.
+///
+/// Reports per repository rather than swallowing failures: `git worktree
+/// remove` refuses while a worktree has uncommitted or untracked files, and
+/// ignoring that left the worktree on disk with no task pointing at it — an
+/// orphan the app could not see and the user had to clean up by hand.
 #[tauri::command]
-pub fn delete_task(state: State<AppState>, id: String, force: bool) -> Result<()> {
+pub fn delete_task(state: State<AppState>, id: String, force: bool) -> Result<Vec<RepoResult>> {
     let task = state.config.task(&id)?;
     state.ptys.close_task(&id);
 
+    let mut results = Vec::new();
     for checkout in state.config.checkouts_of(&id) {
-        if let Ok(project) = state.config.project(&checkout.project_id) {
-            // A missing worktree is fine; we still want the record gone.
-            let _ = git::remove_worktree(&PathBuf::from(&project.path), &checkout.path, force);
-        }
+        let project = match state.config.project(&checkout.project_id) {
+            Ok(p) => p,
+            // The repo is gone from the app, so there is no worktree admin to
+            // clean up; drop the record.
+            Err(_) => continue,
+        };
+
+        let path = PathBuf::from(&checkout.path);
+        let (ok, detail) = if !path.exists() {
+            // Already removed by hand; just tidy the admin files.
+            let _ = git::run(&PathBuf::from(&project.path), &["worktree", "prune"]);
+            (true, "already gone".to_string())
+        } else {
+            match git::remove_worktree(&PathBuf::from(&project.path), &checkout.path, force) {
+                Ok(()) => (true, "removed".to_string()),
+                Err(e) => (false, e.to_string()),
+            }
+        };
+
+        results.push(RepoResult {
+            checkout_id: checkout.id,
+            repo: project.name,
+            ok,
+            detail,
+        });
     }
-    // Only tidies up the task directory if nothing else lives there.
+
+    let stuck: Vec<String> = results
+        .iter()
+        .filter(|r| !r.ok)
+        .map(|r| r.checkout_id.clone())
+        .collect();
+
+    if !stuck.is_empty() {
+        // Keep the task so the worktrees stay reachable and the user can retry
+        // with force, rather than stranding them.
+        state.config.update(|c| {
+            c.checkouts
+                .retain(|ch| ch.task_id != id || stuck.contains(&ch.id));
+        })?;
+        return Ok(results);
+    }
+
+    // Only tidies the task directory if nothing else lives there.
     let _ = std::fs::remove_dir(&task.root);
 
     state.config.update(|c| {
         c.tasks.retain(|t| t.id != id);
         c.checkouts.retain(|ch| ch.task_id != id);
-    })
+    })?;
+    Ok(results)
 }
 
 /// Worktrees that exist on disk but are not part of any task yet.
@@ -1638,9 +1684,7 @@ pub async fn github_open_prs(
             }
         }
 
-        if let (Some(cfg), Ok(Some(secret))) =
-            (state.config.read().slack, secrets::get(secrets::SLACK))
-        {
+        if let Ok(Some((client, cfg))) = slack_for(&state, "prs") {
             let text = format!(
                 "*{title}* — {} PR{} opened",
                 opened.len(),
@@ -1651,10 +1695,7 @@ pub async fn github_open_prs(
                 .map(|p| format!("<{}|{} #{}>", p.url, p.repo, p.number))
                 .collect::<Vec<_>>()
                 .join("  ·  ");
-            if let Ok(posted) = Slack::new(&secret)
-                .post(&cfg.channel, &text, Some(&context))
-                .await
-            {
+            if let Ok(posted) = client.post(&cfg.channel, &text, Some(&context)).await {
                 record_post(&state, posted);
             }
         }
@@ -1678,6 +1719,25 @@ fn record_post(state: &AppState, posted: Option<crate::integrations::slack::Post
             c.slack_posted.drain(..len - 100);
         }
     });
+}
+
+/// What a Slack message is for, so it can be muted on its own.
+fn slack_allows(cfg: &SlackConfig, kind: &str) -> bool {
+    cfg.enabled
+        && match kind {
+            "agent_done" => cfg.notify_on_done,
+            "prs" => cfg.notify_on_prs,
+            "agent_tool" => cfg.allow_agent_posts,
+            // Explicit user actions, such as the connection test, are never muted.
+            _ => true,
+        }
+}
+
+/// The client, or None when this kind of message is switched off. Gating lives
+/// here rather than in the UI so nothing can route around it.
+fn slack_for(state: &AppState, kind: &str) -> Result<Option<(Slack, SlackConfig)>> {
+    let (client, cfg) = slack_client(state)?;
+    Ok(slack_allows(&cfg, kind).then_some((client, cfg)))
 }
 
 fn slack_client(state: &AppState) -> Result<(Slack, SlackConfig)> {
@@ -1820,8 +1880,7 @@ pub async fn slack_connect(
 ) -> Result<()> {
     let cfg = SlackConfig {
         channel: channel.clone(),
-        notify_on_done: true,
-        notify_on_attention: true,
+        ..SlackConfig::default()
     };
     let posted = Slack::new(&secret)
         .post(&channel, "Villain Layer connected. :white_check_mark:", None)
@@ -1837,11 +1896,28 @@ pub async fn slack_notify(
     state: State<'_, AppState>,
     text: String,
     context: Option<String>,
-) -> Result<()> {
-    let (client, cfg) = slack_client(&state)?;
+    kind: Option<String>,
+) -> Result<bool> {
+    // Muting is not an error: the caller carries on, it just stays quiet.
+    let Some((client, cfg)) = slack_for(&state, kind.as_deref().unwrap_or("manual"))? else {
+        return Ok(false);
+    };
     let posted = client.post(&cfg.channel, &text, context.as_deref()).await?;
     record_post(&state, posted);
-    Ok(())
+    Ok(true)
+}
+
+#[tauri::command]
+pub fn set_slack_prefs(state: State<AppState>, prefs: SlackConfig) -> Result<()> {
+    state.config.update(|c| {
+        if let Some(existing) = c.slack.as_mut() {
+            // The channel is changed through the connect form, not here.
+            existing.enabled = prefs.enabled;
+            existing.notify_on_done = prefs.notify_on_done;
+            existing.notify_on_prs = prefs.notify_on_prs;
+            existing.allow_agent_posts = prefs.allow_agent_posts;
+        }
+    })
 }
 
 // ---------------------------------------------------------------- settings

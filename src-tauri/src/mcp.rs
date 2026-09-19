@@ -466,7 +466,20 @@ async fn call(app: &AppHandle, name: &str, args: Value) -> Result<Value> {
         "slack_post" => {
             let text = required(&args, "text")?.to_string();
             let context = arg(&args, "context").map(str::to_string);
-            commands::slack_notify(state, text, context).await?;
+            let sent = commands::slack_notify(
+                state,
+                text,
+                context,
+                Some("agent_tool".to_string()),
+            )
+            .await?;
+            if !sent {
+                return Err(crate::error::Error::Other(
+                    "Slack posting from agents is switched off in the app's settings; \
+                     nothing was sent."
+                        .into(),
+                ));
+            }
             Ok(json!({ "ok": true }))
         }
 

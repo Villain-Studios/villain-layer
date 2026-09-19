@@ -3,7 +3,8 @@ import type {
   AgentStatus, ChangedFile, Checkout, CheckoutPr, FoundRepo, JiraIssue,
   JiraIssueType, JiraTransition, MatchKind, PaneInfo, Project, RepoResult, RepoRule,
   RepoSet,
-  RepoSuggestion, ReviewComment, Settings, Task, TaskView, UiPrefs, WorktreeEntry,
+  RepoSuggestion, ReviewComment, Settings, SlackConfig, Task, TaskView, UiPrefs,
+  WorktreeEntry,
 } from "./types";
 
 export const api = {
@@ -29,7 +30,8 @@ export const api = {
     issue_key?: string | null;
     issue_url?: string | null;
   }) => invoke<Task>("create_task", { req }),
-  deleteTask: (id: string, force = false) => invoke<void>("delete_task", { id, force }),
+  deleteTask: (id: string, force = false) =>
+    invoke<RepoResult[]>("delete_task", { id, force }),
   addCheckout: (taskId: string, projectId: string) =>
     invoke<Checkout>("add_checkout", { taskId, projectId }),
   removeCheckout: (checkoutId: string, force = false) =>
@@ -120,8 +122,9 @@ export const api = {
   // slack
   slackConnect: (secret: string, channel: string) =>
     invoke<void>("slack_connect", { secret, channel }),
-  slackNotify: (text: string, context?: string) =>
-    invoke<void>("slack_notify", { text, context }),
+  slackNotify: (text: string, context?: string, kind?: string) =>
+    invoke<boolean>("slack_notify", { text, context, kind: kind ?? null }),
+  setSlackPrefs: (prefs: SlackConfig) => invoke<void>("set_slack_prefs", { prefs }),
 
   // settings
   getSettings: () => invoke<Settings>("get_settings"),

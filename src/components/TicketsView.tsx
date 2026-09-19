@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../lib/api";
 import { groupByEpic, useStore } from "../store";
 import type { JiraIssue, JiraTransition } from "../lib/types";
 import { Field, Modal, Spinner } from "./ui";
 import { RepoPicker } from "./RepoPicker";
+import { IssueTypeIcon, hierarchyAccent, isEpicType, typeMap } from "./IssueType";
 
 function statusClass(category: string) {
   if (category === "done") return "done";
@@ -12,7 +13,7 @@ function statusClass(category: string) {
 }
 
 export function TicketsView() {
-  const { issues, issuesLoading, settings, projects, agents, tasks } = useStore();
+  const { issues, issueTypes, issuesLoading, settings, projects, agents, tasks } = useStore();
   const refreshIssues = useStore((s) => s.refreshIssues);
   const refreshTasks = useStore((s) => s.refreshTasks);
   const refreshPanes = useStore((s) => s.refreshPanes);
@@ -32,6 +33,7 @@ export function TicketsView() {
   const [query, setQuery] = useState("");
 
   const installed = agents.filter((a) => a.installed);
+  const types = useMemo(() => typeMap(issueTypes), [issueTypes]);
 
   useEffect(() => {
     if (!agentId && installed.length) setAgentId(installed[0].id);
@@ -135,6 +137,12 @@ export function TicketsView() {
 
       {epics.map((epic) => {
         const closed = shut[epic.key] ?? false;
+        // Name the epic's own type from the site rather than assuming "Epic":
+        // some Jiras rename the level-1 type.
+        const epicTypeName =
+          issues.find((i) => i.key === epic.key)?.issue_type ??
+          issueTypes.find((t) => t.hierarchy_level >= 1)?.name ??
+          "Epic";
         return (
           <div key={epic.key || "_none"} className="epic">
             <div
@@ -142,9 +150,20 @@ export function TicketsView() {
               onClick={() => setShut((c) => ({ ...c, [epic.key]: !closed }))}
             >
               <span className={`chev${closed ? "" : " open"}`}>▶</span>
+              {epic.key && <IssueTypeIcon types={types} name={epicTypeName} size={18} />}
               {epic.key ? <span className="key-chip">{epic.key}</span> : null}
               <span className="title">{epic.summary || (epic.key ? epic.key : "No epic")}</span>
               <span className="count">{epic.issues.length}</span>
+              <div className="spacer" />
+              {/* The epic is only openable when it is assigned to you too. */}
+              {epic.issue && (
+                <button
+                  className="btn btn-sm"
+                  onClick={(e) => { e.stopPropagation(); setOpen(epic.issue!); }}
+                >
+                  Open epic
+                </button>
+              )}
             </div>
 
             {!closed && (
@@ -152,10 +171,15 @@ export function TicketsView() {
                 {epic.issues.map((issue) => (
                   <div
                     key={issue.key}
-                    className={`ticket${started(issue.key) ? " started" : ""}`}
+                    className={
+                      `ticket${started(issue.key) ? " started" : ""}` +
+                      (isEpicType(types, issue.issue_type) ? " is-epic" : "")
+                    }
+                    style={{ borderLeftColor: hierarchyAccent(types, issue.issue_type) }}
                     onClick={() => setOpen(issue)}
                   >
                     <div className="top">
+                      <IssueTypeIcon types={types} name={issue.issue_type} />
                       <span className="key-chip">{issue.key}</span>
                       <span className={`status-pill ${statusClass(issue.status_category)}`}>
                         {issue.status}
@@ -201,7 +225,10 @@ export function TicketsView() {
           <h3 style={{ margin: "0 0 10px", fontSize: 15, lineHeight: 1.4 }}>{open.summary}</h3>
 
           <div className="row" style={{ marginBottom: 14, flexWrap: "wrap" }}>
-            <span className="chip">{open.issue_type}</span>
+            <span className="chip chip-type">
+              <IssueTypeIcon types={types} name={open.issue_type} size={13} />
+              {open.issue_type}
+            </span>
             {open.priority && <span className="chip">{open.priority}</span>}
             {open.assignee && <span className="chip">{open.assignee}</span>}
             {open.epic_key && (

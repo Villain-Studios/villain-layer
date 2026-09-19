@@ -126,6 +126,16 @@ export interface JiraIssue {
   url: string;
 }
 
+export interface JiraIssueType {
+  id: string;
+  name: string;
+  subtask: boolean;
+  /** 1+ is epic-level, 0 a standard issue, -1 a sub-task. */
+  hierarchy_level: number;
+  /** Jira's own icon, inlined as a data URI by the backend. */
+  icon: string | null;
+}
+
 export interface JiraTransition {
   id: string;
   name: string;

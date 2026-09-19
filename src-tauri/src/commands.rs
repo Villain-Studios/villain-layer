@@ -25,6 +25,9 @@ use crate::shellenv;
 pub struct AppState {
     pub config: ConfigStore,
     pub ptys: PtyManager,
+    /// Issue types are per-site and change about never, but each icon is a
+    /// separate authenticated fetch, so they are pulled once per run.
+    pub jira_types: parking_lot::Mutex<Option<Vec<jira::IssueType>>>,
 }
 
 // ---------------------------------------------------------------- projects
@@ -1167,6 +1170,24 @@ pub async fn jira_connect(
     secrets::set(secrets::JIRA, &token)?;
     state.config.update(|c| c.jira = Some(cfg))?;
     Ok(who.display_name)
+}
+
+/// Every issue type this Jira defines, with its own icon. Nothing about types
+/// is hardcoded — a site with custom types renders exactly as it does in Jira.
+#[tauri::command]
+pub async fn jira_issue_types(
+    state: State<'_, AppState>,
+    refresh: Option<bool>,
+) -> Result<Vec<jira::IssueType>> {
+    if refresh != Some(true) {
+        if let Some(cached) = state.jira_types.lock().clone() {
+            return Ok(cached);
+        }
+    }
+    let (client, _) = jira_client(&state)?;
+    let types = client.issue_types().await?;
+    *state.jira_types.lock() = Some(types.clone());
+    Ok(types)
 }
 
 #[tauri::command]

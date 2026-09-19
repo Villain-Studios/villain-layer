@@ -23,6 +23,7 @@ pub fn run() {
             let state = AppState {
                 config: ConfigStore::load(handle)?,
                 ptys: PtyManager::default(),
+                jira_types: Default::default(),
             };
             app.manage(state);
             // Resolve the login shell's PATH once, off the startup path.
@@ -69,6 +70,7 @@ pub fn run() {
             commands::push_task,
             commands::jira_connect,
             commands::jira_issues,
+            commands::jira_issue_types,
             commands::jira_issue,
             commands::jira_transitions,
             commands::jira_transition,

@@ -950,3 +950,22 @@ textarea { resize: vertical; font-family: var(--mono); }
   font-family: var(--mono);
 }
 .branch-compose input:focus { border: none; outline: none; }
+
+/* Issue-type accent. The stripe reflects hierarchy, which means the same in
+   every Jira; the icon beside it is the site's own, so type identity never
+   depends on us guessing a palette. */
+.ticket {
+  border-left: 3px solid var(--border-soft);
+}
+.ticket.is-epic {
+  background: linear-gradient(90deg, rgba(167, 139, 250, 0.07), transparent 60%);
+}
+.ticket .top { gap: 7px; }
+
+.chip-type {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.epic-head .title { display: flex; align-items: center; gap: 7px; }

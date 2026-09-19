@@ -1,7 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AgentStatus, ChangedFile, Checkout, CheckoutPr, FoundRepo, JiraIssue,
-  JiraTransition, MatchKind, PaneInfo, Project, RepoResult, RepoRule, RepoSet,
+  JiraIssueType, JiraTransition, MatchKind, PaneInfo, Project, RepoResult, RepoRule,
+  RepoSet,
   RepoSuggestion, ReviewComment, Settings, Task, TaskView, UiPrefs, WorktreeEntry,
 } from "./types";
 
@@ -95,6 +96,8 @@ export const api = {
     projectKey?: string | null, jql?: string | null,
   ) => invoke<string>("jira_connect", { baseUrl, email, token, projectKey, jql }),
   jiraIssues: () => invoke<JiraIssue[]>("jira_issues"),
+  jiraIssueTypes: (refresh = false) =>
+    invoke<JiraIssueType[]>("jira_issue_types", { refresh }),
   jiraIssue: (key: string) => invoke<JiraIssue>("jira_issue", { key }),
   jiraTransitions: (key: string) => invoke<JiraTransition[]>("jira_transitions", { key }),
   jiraTransition: (key: string, transitionId: string) =>

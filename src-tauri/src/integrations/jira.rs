@@ -32,6 +32,22 @@ pub struct Issue {
     pub url: String,
 }
 
+/// An issue type exactly as this Jira defines it. Nothing about types is
+/// assumed: the names, the icons and the hierarchy all come from the site, so
+/// a project with custom types renders as correctly as a stock one.
+#[derive(Debug, Clone, Serialize)]
+pub struct IssueType {
+    pub id: String,
+    pub name: String,
+    pub subtask: bool,
+    /// 1 and above is epic-level, 0 is a standard issue, -1 is a sub-task.
+    /// This is the one structural fact that holds across every Jira.
+    pub hierarchy_level: i32,
+    /// Jira's own icon as a data URI. Avatar URLs need authentication, so the
+    /// image is fetched here rather than by an <img> tag in the web view.
+    pub icon: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Transition {
     pub id: String,
@@ -79,6 +95,71 @@ impl Jira {
     pub async fn myself(&self) -> Result<Myself> {
         let v = self.json(self.req(reqwest::Method::GET, "/rest/api/3/myself")).await?;
         Ok(serde_json::from_value(v)?)
+    }
+
+    /// Every issue type this site defines, with its icon inlined.
+    pub async fn issue_types(&self) -> Result<Vec<IssueType>> {
+        let v = self
+            .json(self.req(reqwest::Method::GET, "/rest/api/3/issuetype"))
+            .await?;
+        let raw = v.as_array().cloned().unwrap_or_default();
+
+        let mut out: Vec<IssueType> = Vec::new();
+        for t in raw {
+            let name = str_at(&t, "name");
+            // A site repeats a type per project scheme; one entry each is enough.
+            if name.is_empty() || out.iter().any(|e| e.name.eq_ignore_ascii_case(&name)) {
+                continue;
+            }
+            let icon_url = t.get("iconUrl").and_then(|u| u.as_str()).unwrap_or_default();
+            out.push(IssueType {
+                id: str_at(&t, "id"),
+                subtask: t.get("subtask").and_then(|b| b.as_bool()).unwrap_or(false),
+                hierarchy_level: t
+                    .get("hierarchyLevel")
+                    .and_then(|h| h.as_i64())
+                    .unwrap_or(0) as i32,
+                icon: self.fetch_icon(icon_url).await,
+                name,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Best-effort: a missing icon degrades to a generated badge, it is never
+    /// worth failing the whole list over.
+    async fn fetch_icon(&self, url: &str) -> Option<String> {
+        if url.is_empty() {
+            return None;
+        }
+        let res = self
+            .client
+            .get(url)
+            .header("Authorization", &self.auth)
+            .send()
+            .await
+            .ok()?;
+        if !res.status().is_success() {
+            return None;
+        }
+
+        let mime = res
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("image/png")
+            .split(';')
+            .next()
+            .unwrap_or("image/png")
+            .to_string();
+
+        let bytes = res.bytes().await.ok()?;
+        // Guard against anything that is obviously not an icon.
+        if bytes.is_empty() || bytes.len() > 256 * 1024 {
+            return None;
+        }
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+        Some(format!("data:{mime};base64,{b64}"))
     }
 
     pub async fn search(&self, jql: &str, max: u32) -> Result<Vec<Issue>> {

@@ -1,7 +1,8 @@
 import { create } from "zustand";
 import { api, errMessage } from "./lib/api";
 import type {
-  AgentStatus, JiraIssue, PaneInfo, Project, RepoRule, RepoSet, Settings, TaskView,
+  AgentStatus, JiraIssue, JiraIssueType, PaneInfo, Project, RepoRule, RepoSet, Settings,
+  TaskView,
 } from "./lib/types";
 
 export type Tab = "terminals" | "diff" | "pr";
@@ -25,6 +26,7 @@ interface State {
   agents: AgentStatus[];
   settings: Settings | null;
   issues: JiraIssue[];
+  issueTypes: JiraIssueType[];
   issuesLoading: boolean;
 
   selectedTask: string | null;
@@ -61,6 +63,7 @@ export const useStore = create<State>((set, get) => ({
   agents: [],
   settings: null,
   issues: [],
+  issueTypes: [],
   issuesLoading: false,
 
   selectedTask: null,
@@ -114,7 +117,13 @@ export const useStore = create<State>((set, get) => ({
     if (!get().settings?.jira_connected) return;
     set({ issuesLoading: true });
     try {
-      set({ issues: await api.jiraIssues() });
+      const [issues, issueTypes] = await Promise.all([
+        api.jiraIssues(),
+        // Types rarely change and are cached in the backend; a failure here
+        // must not stop the issues themselves from showing.
+        api.jiraIssueTypes().catch(() => get().issueTypes),
+      ]);
+      set({ issues, issueTypes });
     } catch (e) {
       get().fail(e);
     } finally {
@@ -142,9 +151,19 @@ export function paneState(pane: PaneInfo): { label: string; dot: string } {
   return { label: "working", dot: "live" };
 }
 
-/** Issues bucketed by epic, epics in first-seen order, orphans last. */
+/** Issues bucketed by epic, epics in key order, orphans last. */
 export function groupByEpic(issues: JiraIssue[]) {
-  const buckets = new Map<string, { key: string; summary: string; issues: JiraIssue[] }>();
+  // An epic that heads a group is represented by that header. Listing it again
+  // as a card in the orphan bucket would show the same ticket twice.
+  const heads = new Set(
+    issues.map((i) => i.epic_key).filter((k): k is string => !!k),
+  );
+
+  const buckets = new Map<
+    string,
+    { key: string; summary: string; issue?: JiraIssue; issues: JiraIssue[] }
+  >();
+
   for (const issue of issues) {
     const key = issue.epic_key ?? "";
     const bucket = buckets.get(key) ?? {
@@ -152,19 +171,24 @@ export function groupByEpic(issues: JiraIssue[]) {
       summary: issue.epic_summary ?? "",
       issues: [],
     };
-    // An epic listed as an issue in its own right names itself best.
     if (!bucket.summary && issue.epic_summary) bucket.summary = issue.epic_summary;
-    bucket.issues.push(issue);
+    if (!(key === "" && heads.has(issue.key))) bucket.issues.push(issue);
     buckets.set(key, bucket);
   }
-  // An epic that is itself in the list supplies its own title.
+
+  // An epic that is itself assigned to you supplies its own title and, from the
+  // header, a way to open it.
   for (const issue of issues) {
-    const b = buckets.get(issue.key);
-    if (b && !b.summary) b.summary = issue.summary;
+    const own = buckets.get(issue.key);
+    if (own) {
+      own.issue = issue;
+      if (!own.summary) own.summary = issue.summary;
+    }
   }
-  return [...buckets.values()].sort((a, b) =>
-    a.key === "" ? 1 : b.key === "" ? -1 : a.key.localeCompare(b.key),
-  );
+
+  return [...buckets.values()]
+    .filter((b) => b.issues.length > 0)
+    .sort((a, b) => (a.key === "" ? 1 : b.key === "" ? -1 : a.key.localeCompare(b.key)));
 }
 
 /** Repos bucketed by group, groups alphabetical, ungrouped last. */

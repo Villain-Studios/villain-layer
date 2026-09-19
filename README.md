@@ -57,7 +57,7 @@ Four top-level views:
 | | |
 |---|---|
 | **Work** | your tasks. With one selected: its terminals, diff and pull requests. With none selected: every agent across every task — what it is doing, how long since it last printed, and whether it has gone quiet waiting for you |
-| **Tickets** | your Jira backlog, grouped by epic |
+| **Tickets** | your Jira backlog, grouped by epic, with each issue's own Jira type icon |
 | **Chat** | a standing agent with no worktree |
 | **Repos** | the repositories Villain Layer knows about, their groups, saved sets and Jira rules |
 
@@ -162,6 +162,19 @@ never in `config.json`.
 The default Jira query is `assignee = currentUser() AND statusCategory != Done`,
 scoped to your project key if you set one. Override it with your own JQL in
 Settings.
+
+### Issue types
+
+Type badges come from the Jira site, not from a table in this repo: the backend
+reads `/rest/api/3/issuetype` and inlines each icon as a data URI (the avatar
+URLs need authentication, so an `<img>` tag could not fetch them itself). A
+project with custom types renders exactly as it does in Jira.
+
+The only thing assumed is `hierarchyLevel`, which is structural in Jira itself —
+1 and above is epic-level, 0 a standard issue, -1 a sub-task. That drives the
+card's left accent, so epics stand out even before you read the icon. Types
+whose icon cannot be fetched fall back to a generated badge keyed to the same
+hierarchy rather than vanishing.
 
 ### Where tokens live
 

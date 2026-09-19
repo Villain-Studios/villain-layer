@@ -320,6 +320,13 @@ fn tools() -> Vec<Value> {
             vec!["task_id"],
         ),
         tool(
+            "forget_repo",
+            "Remove a repository from Villain Layer's list. The clone and any \
+             worktrees stay on disk untouched; only the app forgets it.",
+            json!({ "repo": str_prop("Repository name, or its exact path when two share a name") }),
+            vec!["repo"],
+        ),
+        tool(
             "create_task",
             "Create a task with no Jira ticket behind it: a worktree in each named \
              repository, all on one branch.",
@@ -481,6 +488,29 @@ async fn call(app: &AppHandle, name: &str, args: Value) -> Result<Value> {
                 ));
             }
             Ok(json!({ "ok": true }))
+        }
+
+        "forget_repo" => {
+            let wanted = required(&args, "repo")?;
+            let projects = state.config.read().projects;
+            // Names are not unique across clones, so a path wins when given.
+            let found = projects
+                .iter()
+                .find(|p| p.path == wanted)
+                .or_else(|| {
+                    let mut byname = projects.iter().filter(|p| p.name.eq_ignore_ascii_case(wanted));
+                    let first = byname.next();
+                    if byname.next().is_some() { None } else { first }
+                })
+                .ok_or_else(|| {
+                    crate::error::Error::NotFound(format!(
+                        "no single repository matches {wanted}; give the exact path"
+                    ))
+                })?
+                .clone();
+
+            commands::remove_project(state, found.id.clone())?;
+            Ok(json!({ "forgot": found.name, "path": found.path }))
         }
 
         "create_task" => {

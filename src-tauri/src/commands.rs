@@ -2121,6 +2121,33 @@ mod tests {
     }
 
     #[test]
+    fn slack_switches_gate_each_kind_of_message() {
+        let all_on = SlackConfig::default();
+        assert!(slack_allows(&all_on, "agent_done"));
+        assert!(slack_allows(&all_on, "prs"));
+        assert!(slack_allows(&all_on, "agent_tool"));
+
+        // The master switch silences everything, including explicit actions.
+        let muted = SlackConfig { enabled: false, ..SlackConfig::default() };
+        for kind in ["agent_done", "prs", "agent_tool", "manual"] {
+            assert!(!slack_allows(&muted, kind), "{kind} should be muted");
+        }
+
+        // Each switch is independent of the others.
+        let no_agents = SlackConfig { allow_agent_posts: false, ..SlackConfig::default() };
+        assert!(!slack_allows(&no_agents, "agent_tool"));
+        assert!(slack_allows(&no_agents, "agent_done"));
+        assert!(slack_allows(&no_agents, "prs"));
+
+        let no_prs = SlackConfig { notify_on_prs: false, ..SlackConfig::default() };
+        assert!(!slack_allows(&no_prs, "prs"));
+        assert!(slack_allows(&no_prs, "agent_done"));
+
+        // A connection test is an explicit user action, never an event.
+        assert!(slack_allows(&no_prs, "manual"));
+    }
+
+    #[test]
     fn suggests_nothing_when_there_is_no_signal() {
         let s = suggest_from(&cfg(), Some("ACME-1"), None, &[], &[]);
         assert!(s.project_ids.is_empty());

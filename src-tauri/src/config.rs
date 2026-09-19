@@ -181,6 +181,10 @@ pub struct UiPrefs {
     /// each agent's conversation where its CLI can.
     #[serde(default = "yes")]
     pub restore_panes: bool,
+    /// Answer Claude Code's workspace-trust dialog for folders this app made,
+    /// so a new task or chat starts working instead of waiting on a question.
+    #[serde(default = "yes")]
+    pub trust_agent_dirs: bool,
 }
 
 impl Default for UiPrefs {
@@ -189,6 +193,7 @@ impl Default for UiPrefs {
             scale: 1.0,
             terminal_font_size: 13,
             restore_panes: true,
+            trust_agent_dirs: true,
         }
     }
 }

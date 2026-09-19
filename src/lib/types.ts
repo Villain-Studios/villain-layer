@@ -204,6 +204,7 @@ export interface UiPrefs {
   scale: number;
   terminal_font_size: number;
   restore_panes: boolean;
+  trust_agent_dirs: boolean;
 }
 
 export interface Settings {

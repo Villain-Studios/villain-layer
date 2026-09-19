@@ -1,6 +1,8 @@
 //! The catalogue of coding-agent CLIs we know how to launch, and how each one
 //! wants its opening prompt.
 
+use std::path::{Path, PathBuf};
+
 use serde::Serialize;
 
 use crate::shellenv;
@@ -32,6 +34,80 @@ pub struct AgentDef {
     /// directory. Needed when the cwd is a git worktree, where dropping a
     /// generated `.mcp.json` would show up as an untracked change.
     pub mcp_config_flag: Option<&'static str>,
+}
+
+/// Accept Claude Code's workspace-trust dialog for a directory up front.
+///
+/// Claude Code asks whether you trust a folder the first time it starts there,
+/// and nothing runs until it is answered. That is a sensible question to ask a
+/// person opening an unfamiliar checkout; it is noise when the app just made
+/// the folder itself, from the user's own repository, for the task they asked
+/// for. So the app answers it, for its own folders only.
+///
+/// The record lives in `~/.claude.json`, which Claude Code owns, so this is
+/// deliberately conservative: it never creates the file, never touches it if
+/// it cannot be parsed, sets exactly one key, and writes through a temporary
+/// file so a crash mid-write cannot leave Claude Code without a config.
+///
+/// Returns whether anything was written.
+pub fn pretrust(agent_id: &str, dir: &Path) -> bool {
+    if agent_id != "claude" {
+        return false;
+    }
+    let Some(home) = std::env::var_os("HOME") else {
+        return false;
+    };
+    trust_in(&PathBuf::from(home).join(".claude.json"), dir)
+}
+
+/// The part of [`pretrust`] that does not depend on where home is.
+fn trust_in(config: &Path, dir: &Path) -> bool {
+    let Ok(text) = std::fs::read_to_string(config) else {
+        return false;
+    };
+    let Ok(mut root) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return false;
+    };
+    if !root.is_object() {
+        return false;
+    }
+
+    let key = dir.to_string_lossy().to_string();
+    let projects = root
+        .as_object_mut()
+        .and_then(|o| {
+            o.entry("projects")
+                .or_insert_with(|| serde_json::json!({}))
+                .as_object_mut()
+        });
+    let Some(projects) = projects else {
+        return false;
+    };
+
+    let entry = projects
+        .entry(key)
+        .or_insert_with(|| serde_json::json!({}));
+    let Some(entry) = entry.as_object_mut() else {
+        return false;
+    };
+    if entry.get("hasTrustDialogAccepted") == Some(&serde_json::Value::Bool(true)) {
+        return false;
+    }
+    entry.insert("hasTrustDialogAccepted".into(), serde_json::Value::Bool(true));
+
+    let Ok(out) = serde_json::to_string(&root) else {
+        return false;
+    };
+    // Same directory, so the rename is atomic on the same filesystem.
+    let tmp = config.with_extension("json.villain-tmp");
+    if std::fs::write(&tmp, out).is_err() {
+        return false;
+    }
+    if std::fs::rename(&tmp, &config).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+        return false;
+    }
+    true
 }
 
 /// How to find an agent's saved conversations for a working directory.
@@ -262,5 +338,69 @@ mod tests {
     #[test]
     fn a_directory_with_no_history_offers_nothing() {
         assert!(resumable("/nonexistent/path/that/has/never/been/used").is_empty());
+    }
+
+    /// Its own sandbox per test: these write files, and a shared path would
+    /// let one failure poison the next run.
+    fn sandbox(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("villain-trust-{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn accepting_for_a_folder_leaves_the_rest_of_the_config_alone() {
+        let dir = sandbox("adds");
+        let config = dir.join(".claude.json");
+        std::fs::write(
+            &config,
+            r#"{"autoUpdates":true,"projects":{"/other":{"hasTrustDialogAccepted":true,"lastCost":7}}}"#,
+        )
+        .unwrap();
+
+        assert!(trust_in(&config, Path::new("/work/new-task")));
+
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+        assert_eq!(v["projects"]["/work/new-task"]["hasTrustDialogAccepted"], true);
+        // Everything already there survives, untouched.
+        assert_eq!(v["autoUpdates"], true);
+        assert_eq!(v["projects"]["/other"]["lastCost"], 7);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_folder_already_accepted_is_not_rewritten() {
+        let dir = sandbox("noop");
+        let config = dir.join(".claude.json");
+        let before = r#"{"projects":{"/work":{"hasTrustDialogAccepted":true}}}"#;
+        std::fs::write(&config, before).unwrap();
+
+        assert!(!trust_in(&config, Path::new("/work")));
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), before);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_config_we_cannot_read_is_left_exactly_as_it_was() {
+        let dir = sandbox("hostile");
+
+        // Claude Code owns this file: if it is missing, do not invent one.
+        assert!(!trust_in(&dir.join("absent.json"), Path::new("/work")));
+        assert!(!dir.join("absent.json").exists());
+
+        // And if it is there but not JSON, do not overwrite it.
+        let broken = dir.join("broken.json");
+        std::fs::write(&broken, "{not json at all").unwrap();
+        assert!(!trust_in(&broken, Path::new("/work")));
+        assert_eq!(std::fs::read_to_string(&broken).unwrap(), "{not json at all");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn no_other_cli_keeps_its_state_in_that_file() {
+        assert!(!pretrust("codex", Path::new("/work")));
+        assert!(!pretrust("gemini", Path::new("/work")));
     }
 }

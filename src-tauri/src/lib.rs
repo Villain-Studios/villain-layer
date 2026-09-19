@@ -14,8 +14,58 @@ use config::ConfigStore;
 use pty::PtyManager;
 use tauri::Manager;
 
+/// Where a crash is written down, so a packaged app leaves evidence too.
+fn panic_log() -> std::path::PathBuf {
+    std::env::var_os("HOME")
+        .map(|h| std::path::PathBuf::from(h).join("Library/Logs/villain-layer"))
+        .unwrap_or_else(std::env::temp_dir)
+        .join("panic.log")
+}
+
+/// Say why, before the process dies.
+///
+/// A panic that crosses an `extern "C"` frame — anything reached from the
+/// webview or from AppKit — aborts instead of unwinding, and all the default
+/// handler prints is "panic in a function that cannot unwind", with no file,
+/// no line and no trace. The hook still runs first, so this is the only
+/// chance to record where it actually happened.
+///
+/// Nothing in here may panic: a panic inside the hook aborts immediately and
+/// takes the report with it.
+fn report_panics() {
+    std::panic::set_hook(Box::new(|info| {
+        let at = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "an unknown location".into());
+        let what = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| (*s).to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "no message".into());
+
+        let text = format!(
+            "\n=== villain-layer panicked at {at} ===\n{what}\n{}\n",
+            std::backtrace::Backtrace::force_capture(),
+        );
+        eprintln!("{text}");
+
+        let path = panic_log();
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+            use std::io::Write;
+            let _ = writeln!(f, "{} {text}", chrono::Utc::now().to_rfc3339());
+        }
+    }));
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    report_panics();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())

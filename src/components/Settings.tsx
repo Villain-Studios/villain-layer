@@ -228,6 +228,12 @@ export function Settings() {
                 checked={settings.ui.restore_panes}
                 onChange={(v) => void saveUi({ ...settings.ui, restore_panes: v })}
               />
+              <Switch
+                label="Trust the folders this app creates"
+                detail="Claude Code asks whether it trusts a folder the first time it starts there, and does nothing until answered — once per task, per repo. This answers it in advance, and only for worktrees and chat folders the app made itself."
+                checked={settings.ui.trust_agent_dirs}
+                onChange={(v) => void saveUi({ ...settings.ui, trust_agent_dirs: v })}
+              />
             </div>
           </Field>
 

@@ -955,6 +955,21 @@ pub fn resumable_agents(
     Ok(agents::resumable(&cwd))
 }
 
+/// Answer the trust dialog for a folder this app created, if that is wanted.
+///
+/// Scoped on purpose: only directories under the app's own worktree root are
+/// ever pre-trusted, so opening an agent somewhere else still asks.
+fn pretrust_own_dir(state: &AppState, agent_id: &str, cwd: &str) {
+    if !state.config.read().ui.trust_agent_dirs {
+        return;
+    }
+    let dir = Path::new(cwd);
+    if !dir.starts_with(state.config.worktree_root()) {
+        return;
+    }
+    agents::pretrust(agent_id, dir);
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn start_agent(
     app: &AppHandle,
@@ -998,6 +1013,8 @@ pub(crate) fn start_agent(
             }
         }
     }
+
+    pretrust_own_dir(state, &agent_id, &cwd);
 
     state.ptys.spawn(
         app,
@@ -1187,6 +1204,8 @@ fn open_chat(
     } else {
         agents::launch_args(def, prompt.as_deref())
     };
+
+    pretrust_own_dir(state, &agent_id, &dir.to_string_lossy());
 
     state.ptys.spawn(
         app,
@@ -1764,8 +1783,14 @@ fn review_context(state: &AppState, task: &Task) -> String {
 
     out.push_str("\n# Diff\n");
     if diff.len() > DIFF_BUDGET {
-        // Cut on a line boundary so the last hunk shown is readable.
-        let cut = diff[..DIFF_BUDGET].rfind('\n').unwrap_or(DIFF_BUDGET);
+        // Back off to a character boundary first — slicing into the middle of
+        // a multi-byte character panics, and a diff is full of them — then to
+        // a line boundary, so the last hunk shown is readable.
+        let mut end = DIFF_BUDGET;
+        while end > 0 && !diff.is_char_boundary(end) {
+            end -= 1;
+        }
+        let cut = diff[..end].rfind('\n').unwrap_or(end);
         out.push_str(&diff[..cut]);
         out.push_str(
             "\n\n(The diff was longer than fits here and is cut off. Describe what you\
@@ -2628,6 +2653,7 @@ pub fn set_ui_prefs(state: State<AppState>, ui: UiPrefs) -> Result<()> {
         scale: ui.scale.clamp(0.8, 1.6),
         terminal_font_size: ui.terminal_font_size.clamp(9, 24),
         restore_panes: ui.restore_panes,
+        trust_agent_dirs: ui.trust_agent_dirs,
     };
     state.config.update(|c| c.ui = ui)
 }

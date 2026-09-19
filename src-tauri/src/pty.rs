@@ -457,7 +457,12 @@ impl PtyManager {
     }
 
     pub fn close(&self, id: &str) -> Result<()> {
-        if let Some(pane) = self.panes.lock().remove(id) {
+        // Take the pane out under the lock, then stop it outside it. Stopping
+        // waits out the grace period, and an `if let` would hold the map for
+        // all of it — freezing every other pane operation, including the poll
+        // that keeps the window alive, on the thread the UI runs on.
+        let pane = self.panes.lock().remove(id);
+        if let Some(pane) = pane {
             Self::stop(&pane, std::time::Duration::from_secs(5));
         }
         Ok(())

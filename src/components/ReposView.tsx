@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { api } from "../lib/api";
 import { groupProjects, useStore } from "../store";
 import type { MatchKind, Project } from "../lib/types";
 import { AddRepos } from "./AddRepos";
+import { Confirm } from "./ui";
 import { RepoPicker } from "./RepoPicker";
 
 export function ReposView() {
@@ -18,6 +19,12 @@ export function ReposView() {
   const [ruleKind, setRuleKind] = useState<MatchKind>("component");
   const [ruleValue, setRuleValue] = useState("");
   const [rulePicked, setRulePicked] = useState<string[]>([]);
+  const [confirming, setConfirming] = useState<{
+    title: string;
+    body: ReactNode;
+    label: string;
+    run: () => void;
+  } | null>(null);
 
   const groups = groupProjects(projects);
   const names = (ids: string[]) =>
@@ -42,18 +49,32 @@ export function ReposView() {
     }
   }
 
-  async function remove(p: Project) {
+  function askRemove(p: Project) {
     const using = tasks.filter((t) => t.checkouts.some((c) => c.project_id === p.id));
-    const warning = using.length
-      ? `\n\n${using.length} task(s) have a worktree in it; those worktrees stay on disk.`
-      : "\n\nWorktrees on disk are left alone.";
-    if (!confirm(`Remove ${p.name} from Villain Layer?${warning}`)) return;
-    try {
-      await api.removeProject(p.id);
-      await refreshAll();
-    } catch (e) {
-      fail(e);
-    }
+    setConfirming({
+      title: "Remove repository",
+      label: "Remove",
+      body: (
+        <>
+          Remove <b>{p.name}</b> from Villain Layer? The clone at <code>{p.path}</code>{" "}
+          and any worktrees stay on disk untouched — only this app forgets about it.
+          {using.length > 0 && (
+            <div className="confirm-detail">
+              {using.length} task{using.length === 1 ? "" : "s"} currently use it. They
+              lose that repository, and any task left with none is removed.
+            </div>
+          )}
+        </>
+      ),
+      run: async () => {
+        try {
+          await api.removeProject(p.id);
+          await refreshAll();
+        } catch (e) {
+          fail(e);
+        }
+      },
+    });
   }
 
   async function addRule() {
@@ -153,7 +174,7 @@ export function ReposView() {
                   }}
                   onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
                 />
-                <button className="btn btn-sm btn-danger" onClick={() => void remove(p)}>
+                <button className="btn btn-sm btn-danger" onClick={() => askRemove(p)}>
                   Remove
                 </button>
               </div>
@@ -258,6 +279,16 @@ export function ReposView() {
       </div>
 
       {adding && <AddRepos onClose={() => setAdding(false)} />}
+
+      {confirming && (
+        <Confirm
+          title={confirming.title}
+          body={confirming.body}
+          confirmLabel={confirming.label}
+          onConfirm={confirming.run}
+          onCancel={() => setConfirming(null)}
+        />
+      )}
     </div>
   );
 }

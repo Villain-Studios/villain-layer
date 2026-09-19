@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { api } from "../lib/api";
 import { paneState, taskTotals, useStore } from "../store";
 import type { TaskView } from "../lib/types";
-import { Field, Modal } from "./ui";
+import { Confirm, ContextMenu, Field, Modal, type MenuItem } from "./ui";
 import { RepoPicker } from "./RepoPicker";
 
 export function Sidebar() {
@@ -11,6 +12,7 @@ export function Sidebar() {
   const select = useStore((s) => s.select);
   const setView = useStore((s) => s.setView);
   const refreshTasks = useStore((s) => s.refreshTasks);
+  const toast = useStore((s) => s.toast);
   const fail = useStore((s) => s.fail);
 
   const [creating, setCreating] = useState(false);
@@ -21,6 +23,13 @@ export function Sidebar() {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [addingRepoTo, setAddingRepoTo] = useState<TaskView | null>(null);
   const [reason, setReason] = useState<string | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; task: TaskView } | null>(null);
+  const [confirming, setConfirming] = useState<{
+    title: string;
+    body: ReactNode;
+    label: string;
+    run: () => void;
+  } | null>(null);
 
   useEffect(() => {
     if (!creating) { setReason(null); return; }
@@ -50,18 +59,38 @@ export function Sidebar() {
     }
   }
 
-  async function deleteTask(task: TaskView) {
+  function askDeleteTask(task: TaskView) {
     const { dirty } = taskTotals(task);
-    const warning = dirty > 0 ? `\n\n${dirty} uncommitted change(s) will be lost.` : "";
     const repos = task.checkouts.length;
-    if (!confirm(`Delete "${task.name}" and its ${repos} worktree(s)?${warning}`)) return;
-    try {
-      await api.deleteTask(task.id, dirty > 0);
-      if (selected === task.id) select(null);
-      await refreshTasks();
-    } catch (e) {
-      fail(e);
-    }
+    setConfirming({
+      title: "Delete task",
+      label: "Delete task",
+      body: (
+        <>
+          Delete <b>{task.name}</b> and remove {repos} worktree
+          {repos === 1 ? "" : "s"} from disk?
+          <div className="muted" style={{ marginTop: 8 }}>
+            Branch <code>{task.branch}</code> is left alone, in the repositories and on
+            any remote.
+          </div>
+          {dirty > 0 && (
+            <div className="confirm-detail">
+              {dirty} uncommitted change{dirty === 1 ? "" : "s"} will be lost. This cannot
+              be undone.
+            </div>
+          )}
+        </>
+      ),
+      run: async () => {
+        try {
+          await api.deleteTask(task.id, dirty > 0);
+          if (selected === task.id) select(null);
+          await refreshTasks();
+        } catch (e) {
+          fail(e);
+        }
+      },
+    });
   }
 
   async function addRepo(task: TaskView, projectId: string) {
@@ -75,17 +104,73 @@ export function Sidebar() {
     }
   }
 
-  async function removeRepo(checkoutId: string, repoName: string, dirty: number) {
-    const warning = dirty > 0 ? `\n\n${dirty} uncommitted change(s) will be lost.` : "";
-    if (!confirm(`Remove ${repoName} from this task?${warning}`)) return;
-    try {
-      await api.removeCheckout(checkoutId, dirty > 0);
-      await refreshTasks();
-    } catch (e) {
-      fail(e);
-    }
+  function askRemoveRepo(checkoutId: string, repoName: string, dirty: number) {
+    setConfirming({
+      title: "Remove repository from task",
+      label: "Remove",
+      body: (
+        <>
+          Remove <b>{repoName}</b> from this task and delete its worktree?
+          {dirty > 0 && (
+            <div className="confirm-detail">
+              {dirty} uncommitted change{dirty === 1 ? "" : "s"} in that worktree will be
+              lost.
+            </div>
+          )}
+        </>
+      ),
+      run: async () => {
+        try {
+          await api.removeCheckout(checkoutId, dirty > 0);
+          await refreshTasks();
+        } catch (e) {
+          fail(e);
+        }
+      },
+    });
   }
 
+
+  function taskMenu(task: TaskView): MenuItem[] {
+    const items: MenuItem[] = [
+      { label: "Open", onSelect: () => select(task.id) },
+    ];
+    if (task.issue_url) {
+      items.push({
+        label: `Open ${task.issue_key} in Jira`,
+        onSelect: () => void openUrl(task.issue_url!),
+      });
+    }
+    items.push(
+      {
+        label: "Copy branch name",
+        onSelect: () => {
+          navigator.clipboard
+            .writeText(task.branch)
+            .then(() => toast("success", `Copied ${task.branch}`))
+            .catch(() => toast("error", "Could not reach the clipboard"));
+        },
+      },
+      {
+        label: "Reveal task folder",
+        onSelect: () => void revealItemInDir(task.root).catch(fail),
+      },
+    );
+    if (available(task).length > 0) {
+      items.push({
+        label: "Add a repository…",
+        separated: true,
+        onSelect: () => setAddingRepoTo(task),
+      });
+    }
+    items.push({
+      label: "Delete task…",
+      danger: true,
+      separated: available(task).length === 0,
+      onSelect: () => askDeleteTask(task),
+    });
+    return items;
+  }
 
   const available = (task: TaskView) =>
     projects.filter((p) => !task.checkouts.some((c) => c.project_id === p.id));
@@ -141,8 +226,10 @@ export function Sidebar() {
               <div
                 className={`ws${task.id === selected ? " active" : ""}`}
                 onClick={() => select(task.id)}
-                onContextMenu={(e) => { e.preventDefault(); void deleteTask(task); }}
-                title="Right-click to delete"
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setMenu({ x: e.clientX, y: e.clientY, task });
+                }}
               >
                 <div className="ws-title">
                   {multi ? (
@@ -197,7 +284,7 @@ export function Sidebar() {
                       title="Remove repo from task"
                       onClick={(e) => {
                         e.stopPropagation();
-                        void removeRepo(c.id, c.project_name, d);
+                        askRemoveRepo(c.id, c.project_name, d);
                       }}
                     >
                       ✕
@@ -265,6 +352,25 @@ export function Sidebar() {
             />
           </Field>
         </Modal>
+      )}
+
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          onClose={() => setMenu(null)}
+          items={taskMenu(menu.task)}
+        />
+      )}
+
+      {confirming && (
+        <Confirm
+          title={confirming.title}
+          body={confirming.body}
+          confirmLabel={confirming.label}
+          onConfirm={confirming.run}
+          onCancel={() => setConfirming(null)}
+        />
       )}
 
       {addingRepoTo && (

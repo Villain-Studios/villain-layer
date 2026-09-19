@@ -140,7 +140,14 @@ app state and can act on it.
 | | |
 |---|---|
 | Read | `list_tasks`, `list_repos`, `task_diff`, `jira_search`, `jira_get_issue` |
-| Write | `jira_create_issue`, `jira_comment`, `jira_transition`, `slack_post`, `start_work`, `open_prs` |
+| Read | `task_prs`, `slack_diagnose` |
+| Write | `jira_create_issue`, `jira_comment`, `jira_transition`, `slack_post`, `slack_delete`, `slack_cleanup`, `create_task`, `start_work`, `open_prs` |
+
+Slack messages the app posts are recorded, because only a bot can delete a
+bot's messages — without that they are litter nobody can clear. `slack_delete`
+takes permalinks and needs only `chat:write`; `slack_cleanup` finds them itself
+but needs `channels:read` and `channels:history`, and says so when they are
+missing.
 
 The server binds an ephemeral port on loopback and is gated on a bearer token
 minted fresh each run. Writes are **not** confirmed — an agent can file a ticket

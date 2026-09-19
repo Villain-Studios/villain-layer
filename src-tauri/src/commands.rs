@@ -1732,19 +1732,43 @@ const GENERATED: &[&str] = &[
 /// request only gets slower, so the tail is dropped and the model is told.
 const DIFF_BUDGET: usize = 60_000;
 
+/// One repository's place in a task, resolved from config before any git runs.
+struct Reviewed {
+    repo: String,
+    dir: PathBuf,
+    base: String,
+}
+
+fn reviewed_repos(state: &AppState, task: &Task) -> Vec<Reviewed> {
+    state
+        .config
+        .checkouts_of(&task.id)
+        .into_iter()
+        .map(|c| Reviewed {
+            repo: state
+                .config
+                .project(&c.project_id)
+                .map(|p| p.name)
+                .unwrap_or_else(|_| "repo".into()),
+            dir: PathBuf::from(&c.path),
+            base: c.base,
+        })
+        .collect()
+}
+
 /// What the work looks like from outside: commit subjects, the file summary,
 /// and as much of the reviewable diff as fits in the budget.
-fn review_context(state: &AppState, task: &Task) -> String {
+///
+/// Takes resolved repositories rather than the config, so the git calls — a
+/// handful of subprocesses, and a slow one on a large tree — can be made off
+/// the async runtime instead of holding one of its workers.
+fn review_context(repos: &[Reviewed]) -> String {
     let mut out = String::new();
     let mut diff = String::new();
 
-    for checkout in state.config.checkouts_of(&task.id) {
-        let dir = PathBuf::from(&checkout.path);
-        let repo = state
-            .config
-            .project(&checkout.project_id)
-            .map(|p| p.name)
-            .unwrap_or_else(|_| "repo".into());
+    for checkout in repos {
+        let dir = checkout.dir.clone();
+        let repo = checkout.repo.clone();
         let base = format!("origin/{}", checkout.base);
         let merge_base = git::run(&dir, &["merge-base", &base, "HEAD"])
             .or_else(|_| git::run(&dir, &["merge-base", &checkout.base, "HEAD"]))
@@ -1802,6 +1826,12 @@ fn review_context(state: &AppState, task: &Task) -> String {
     out
 }
 
+#[derive(Clone, Serialize)]
+struct DraftChunk<'a> {
+    task_id: &'a str,
+    text: &'a str,
+}
+
 /// Draft the pull request description without disturbing the working agent.
 ///
 /// The obvious implementation — type the request into the agent that did the
@@ -1809,14 +1839,8 @@ fn review_context(state: &AppState, task: &Task) -> String {
 /// mid-turn or sitting on a permission prompt, and the answer has to travel
 /// back through a file. This asks a fresh, cheap, one-shot model instead and
 /// hands it the diff directly, so nothing has to be discovered and no tools
-/// have to run. `draft_pr_description_from_pane` remains for the case where the
-/// agent's own account of the work is worth the wait.
-#[derive(Clone, Serialize)]
-struct DraftChunk<'a> {
-    task_id: &'a str,
-    text: &'a str,
-}
-
+/// have to run. `request_pr_description` remains for the case where the agent's
+/// own account of the work is worth the wait.
 #[tauri::command]
 pub async fn draft_pr_description(
     app: AppHandle,
@@ -1827,7 +1851,16 @@ pub async fn draft_pr_description(
     let program = shellenv::which("claude")
         .ok_or_else(|| Error::NotFound("claude is not on your PATH".into()))?;
 
-    let prompt = format!(
+    let repos = reviewed_repos(&state, &task);
+    let branch = task.branch.clone();
+    let issue_key = task.issue_key.clone();
+
+    let env = shellenv::user_env().clone();
+    let out = tauri::async_runtime::spawn_blocking(move || -> Result<String> {
+        use std::io::{BufRead, BufReader, Write};
+        use std::process::{Command, Stdio};
+
+        let prompt = format!(
         concat!(
             "Write the body of a pull request description for the work on branch ",
             "`{branch}`{key}.\n\n",
@@ -1840,19 +1873,13 @@ pub async fn draft_pr_description(
             "remark, no code fence around the whole thing.\n\n",
             "# The change\n{context}\n",
         ),
-        branch = task.branch,
-        key = task
-            .issue_key
+        branch = branch,
+        key = issue_key
             .as_ref()
             .map(|k| format!(" for {k}"))
             .unwrap_or_default(),
-        context = review_context(&state, &task),
-    );
-
-    let env = shellenv::user_env().clone();
-    let out = tauri::async_runtime::spawn_blocking(move || -> Result<String> {
-        use std::io::{BufRead, BufReader, Write};
-        use std::process::{Command, Stdio};
+        context = review_context(&repos),
+        );
 
         let mut child = Command::new(&program)
             .args([

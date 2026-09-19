@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { api } from "../lib/api";
 import { paneState, taskTotals, useStore } from "../store";
@@ -44,15 +44,24 @@ export function Sidebar() {
     run: () => void;
   } | null>(null);
 
-  const tm = typeMap(issueTypes);
+  const tm = useMemo(() => typeMap(issueTypes), [issueTypes]);
   // Most sites never set a default project, so rather than disable the whole
   // feature the dialog asks — offering the keys already visible on the board.
-  const boardKeys = [...new Set(issues.map((i) => i.key.split("-")[0]).filter(Boolean))];
+  const boardKeys = useMemo(
+    () => [...new Set(issues.map((i) => i.key.split("-")[0]).filter(Boolean))],
+    [issues],
+  );
   const defaultProject = settings?.jira?.project_key ?? boardKeys[0] ?? "";
   // A task is a normal issue: epics group work rather than being work, and a
   // sub-task needs a parent this dialog does not ask for.
-  const creatable = issueTypes.filter((t) => t.hierarchy_level === 0 && !t.subtask);
-  const epics = issues.filter((i) => isEpicType(tm, i.issue_type));
+  const creatable = useMemo(
+    () => issueTypes.filter((t) => t.hierarchy_level === 0 && !t.subtask),
+    [issueTypes],
+  );
+  const epics = useMemo(
+    () => issues.filter((i) => isEpicType(tm, i.issue_type)),
+    [issues, tm],
+  );
 
   // Default to whatever the site calls a plain issue, without assuming it is
   // named "Task" — it often is not.
@@ -62,9 +71,12 @@ export function Sidebar() {
     setJiraType(preferred?.name ?? "");
   }, [creatable, jiraType]);
 
+  // Seeded when the dialog opens, and only then: refilling whenever the field
+  // is empty would make it impossible to clear or retype.
   useEffect(() => {
-    if (creating && !jiraProject && defaultProject) setJiraProject(defaultProject);
-  }, [creating, jiraProject, defaultProject]);
+    if (creating) setJiraProject((current) => current || defaultProject);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [creating]);
 
   useEffect(() => {
     if (!creating) { setReason(null); return; }

@@ -95,7 +95,9 @@ fn trust_in(config: &Path, dir: &Path) -> bool {
     }
     entry.insert("hasTrustDialogAccepted".into(), serde_json::Value::Bool(true));
 
-    let Ok(out) = serde_json::to_string(&root) else {
+    // Pretty, because that is how Claude Code writes it: a compact rewrite
+    // would flatten a 2,500-line file the user may well read themselves.
+    let Ok(out) = serde_json::to_string_pretty(&root) else {
         return false;
     };
     // Same directory, so the rename is atomic on the same filesystem.

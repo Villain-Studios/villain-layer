@@ -199,7 +199,9 @@ export function ContextMenu({
     const left = Math.max(8, Math.min(x, window.innerWidth - origin.width - 8));
     const top = Math.max(8, Math.min(y, window.innerHeight - origin.height - 8));
     setPos({ left: (left - origin.left) / sx, top: (top - origin.top) / sy });
-  }, [x, y]);
+    // Items can arrive after the menu opens — resumable agents are fetched —
+    // and a taller menu needs placing again or it runs off the bottom.
+  }, [x, y, items.length]);
 
   useEffect(() => {
     const close = (e: MouseEvent) => {

@@ -23,6 +23,7 @@ export function Terminals({ task }: { task: TaskView }) {
   );
   const agents = useStore((s) => s.agents);
   const refreshPanes = useStore((s) => s.refreshPanes);
+  const tab = useStore((s) => s.tab);
   const fail = useStore((s) => s.fail);
 
   const [active, setActive] = useState<string | null>(null);
@@ -86,9 +87,12 @@ export function Terminals({ task }: { task: TaskView }) {
 
   // Ctrl+Tab cycles panes the way a browser cycles tabs. It has to be caught in
   // the capture phase: the focused terminal would otherwise take the key and
-  // send a literal tab to the process.
+  // send a literal tab to the process. Bound only while the terminals are the
+  // thing on screen — this view stays mounted behind Diff and Pull requests,
+  // and switching a pane you cannot see is just a key that appears to do
+  // nothing.
   useEffect(() => {
-    if (panes.length < 2) return;
+    if (panes.length < 2 || tab !== "terminals") return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Tab" || !e.ctrlKey || e.metaKey || e.altKey) return;
       e.preventDefault();
@@ -100,7 +104,7 @@ export function Terminals({ task }: { task: TaskView }) {
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [panes, active]);
+  }, [panes, active, tab]);
 
   const installed = agents.filter((a) => a.installed);
   const offerResume = resumable.filter(

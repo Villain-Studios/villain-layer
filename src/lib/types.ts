@@ -136,6 +136,12 @@ export interface JiraIssue {
   url: string;
 }
 
+/** A page of search results, and whether Jira still had more to give. */
+export interface JiraPage {
+  issues: JiraIssue[];
+  more: boolean;
+}
+
 export interface JiraIssueType {
   id: string;
   name: string;

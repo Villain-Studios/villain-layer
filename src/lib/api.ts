@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AgentStatus, ChangedFile, Checkout, CheckoutPr, FoundRepo, JiraIssue,
-  JiraIssueType, JiraTransition, MatchKind, PaneInfo, Project, RepoResult, RepoRule,
+  JiraIssueType, JiraPage, JiraTransition, MatchKind, PaneInfo, Project, RepoResult, RepoRule,
   RepoSet,
   RepoSuggestion, Resumable, ReviewComment, Settings, SlackConfig, Task, TaskView,
   UiPrefs, WorktreeEntry,
@@ -99,7 +99,7 @@ export const api = {
     baseUrl: string, email: string, token: string,
     projectKey?: string | null, jql?: string | null,
   ) => invoke<string>("jira_connect", { baseUrl, email, token, projectKey, jql }),
-  jiraIssues: () => invoke<JiraIssue[]>("jira_issues"),
+  jiraIssues: () => invoke<JiraPage>("jira_issues"),
   jiraIssueTypes: (refresh = false) =>
     invoke<JiraIssueType[]>("jira_issue_types", { refresh }),
   jiraIssue: (key: string) => invoke<JiraIssue>("jira_issue", { key }),
@@ -116,7 +116,7 @@ export const api = {
   takePrDescription: (taskId: string) =>
     invoke<string | null>("take_pr_description", { taskId }),
   jiraBrowse: (text: string, whose: string, includeDone: boolean, types: string[]) =>
-    invoke<JiraIssue[]>("jira_browse", { text: text || null, whose, includeDone, types }),
+    invoke<JiraPage>("jira_browse", { text: text || null, whose, includeDone, types }),
   jiraCreateTask: (req: {
     summary: string;
     description: string;

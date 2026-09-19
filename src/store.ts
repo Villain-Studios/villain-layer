@@ -31,6 +31,8 @@ interface State {
   issues: JiraIssue[];
   issueTypes: JiraIssueType[];
   issuesLoading: boolean;
+  /** Jira had more than the app asked for, so the list below is not all of it. */
+  issuesTruncated: boolean;
 
   selectedTask: string | null;
   view: View;
@@ -82,6 +84,7 @@ export const useStore = create<State>((set, get) => ({
   issues: [],
   issueTypes: [],
   issuesLoading: false,
+  issuesTruncated: false,
 
   // Where the app was left. Restored so reopening lands on the work in
   // progress rather than on an empty shell, alongside the panes themselves.
@@ -144,13 +147,13 @@ export const useStore = create<State>((set, get) => ({
     if (!get().settings?.jira_connected) return;
     set({ issuesLoading: true });
     try {
-      const [issues, issueTypes] = await Promise.all([
+      const [page, issueTypes] = await Promise.all([
         api.jiraIssues(),
         // Types rarely change and are cached in the backend; a failure here
         // must not stop the issues themselves from showing.
         api.jiraIssueTypes().catch(() => get().issueTypes),
       ]);
-      set({ issues, issueTypes });
+      set({ issues: page.issues, issuesTruncated: page.more, issueTypes });
     } catch (e) {
       get().fail(e);
     } finally {

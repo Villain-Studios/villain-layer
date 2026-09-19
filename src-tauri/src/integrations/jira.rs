@@ -163,7 +163,14 @@ impl Jira {
         Some(format!("data:{mime};base64,{b64}"))
     }
 
-    pub async fn search(&self, jql: &str, max: u32) -> Result<Vec<Issue>> {
+    /// Issues matching `jql`, following Jira's paging up to `max`.
+    ///
+    /// Jira returns a page at a time whatever is asked for, so a single request
+    /// quietly truncates: a queue of seventy issues came back as fifty, with
+    /// nothing to say twenty were missing. `Page::more` says whether Jira still
+    /// had results when the cap was reached, so a caller can tell the
+    /// difference between "that is all of it" and "that is all you asked for".
+    pub async fn search(&self, jql: &str, max: u32) -> Result<Page> {
         let fields = json!([
             "summary", "description", "status", "issuetype",
             "priority", "assignee", "labels", "components", "parent",
@@ -171,32 +178,62 @@ impl Jira {
             "customfield_10014"
         ]);
 
-        // The modern endpoint; older Jira instances still serve /search.
-        let body = json!({ "jql": jql, "maxResults": max, "fields": fields });
-        let v = match self
-            .json(
-                self.req(reqwest::Method::POST, "/rest/api/3/search/jql")
-                    .json(&body),
-            )
-            .await
-        {
-            Ok(v) => v,
-            Err(_) => {
-                self.json(
-                    self.req(reqwest::Method::POST, "/rest/api/3/search")
+        let mut issues: Vec<Issue> = Vec::new();
+        let mut token: Option<String> = None;
+        let mut more = false;
+
+        while issues.len() < max as usize {
+            let want = (max as usize - issues.len()).min(100);
+            let mut body = json!({ "jql": jql, "maxResults": want, "fields": fields });
+            if let Some(t) = &token {
+                body["nextPageToken"] = json!(t);
+            }
+
+            // The modern endpoint; older Jira instances still serve /search,
+            // which has no page token — so those stop after one page, as before.
+            let v = match self
+                .json(
+                    self.req(reqwest::Method::POST, "/rest/api/3/search/jql")
                         .json(&body),
                 )
-                .await?
+                .await
+            {
+                Ok(v) => v,
+                Err(_) => {
+                    self.json(
+                        self.req(reqwest::Method::POST, "/rest/api/3/search")
+                            .json(&body),
+                    )
+                    .await?
+                }
+            };
+
+            let page = v
+                .get("issues")
+                .and_then(|i| i.as_array())
+                .cloned()
+                .unwrap_or_default();
+            // A token with an empty page would otherwise loop for ever.
+            if page.is_empty() {
+                break;
             }
-        };
+            issues.extend(page.iter().map(|i| self.to_issue(i)));
 
-        let issues = v
-            .get("issues")
-            .and_then(|i| i.as_array())
-            .cloned()
-            .unwrap_or_default();
+            token = v
+                .get("nextPageToken")
+                .and_then(|t| t.as_str())
+                .map(str::to_string);
+            if token.is_none() {
+                break;
+            }
+            more = true;
+        }
 
-        Ok(issues.iter().map(|i| self.to_issue(i)).collect())
+        // Only truthfully "more" if we stopped at the cap with a page to spare.
+        Ok(Page {
+            more: more && token.is_some() && issues.len() >= max as usize,
+            issues,
+        })
     }
 
     pub async fn issue(&self, key: &str) -> Result<Issue> {
@@ -449,6 +486,14 @@ fn children(node: &Value, out: &mut String) {
             walk(child, out);
         }
     }
+}
+
+/// A page of search results, and whether Jira had more to give.
+#[derive(Debug, Clone, Serialize)]
+pub struct Page {
+    pub issues: Vec<Issue>,
+    /// True when the cap was reached and Jira still had results.
+    pub more: bool,
 }
 
 /// The JQL used when the user has not written their own.

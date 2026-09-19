@@ -421,7 +421,7 @@ async fn call(app: &AppHandle, name: &str, args: Value) -> Result<Value> {
             let jql = required(&args, "jql")?.to_string();
             let max = args.get("max").and_then(|m| m.as_u64()).unwrap_or(25) as u32;
             let (client, _) = commands::jira_client(&state)?;
-            Ok(serde_json::to_value(client.search(&jql, max).await?)?)
+            Ok(serde_json::to_value(client.search(&jql, max).await?.issues)?)
         }
 
         "jira_get_issue" => {

@@ -1565,13 +1565,15 @@ pub async fn jira_issue_types(
 }
 
 #[tauri::command]
-pub async fn jira_issues(state: State<'_, AppState>) -> Result<Vec<jira::Issue>> {
+pub async fn jira_issues(state: State<'_, AppState>) -> Result<jira::Page> {
     let (client, cfg) = jira_client(&state)?;
     let jql = cfg
         .jql
         .clone()
         .unwrap_or_else(|| jira::default_jql(cfg.project_key.as_deref()));
-    client.search(&jql, 50).await
+    // Your own queue should be all of it: this is the list the app groups into
+    // epics and reasons about, and a silent cut makes that grouping wrong.
+    client.search(&jql, 500).await
 }
 
 /// Look past your own queue: unassigned work, or anyone else's.
@@ -1586,7 +1588,7 @@ pub async fn jira_browse(
     whose: String,
     include_done: Option<bool>,
     types: Option<Vec<String>>,
-) -> Result<Vec<jira::Issue>> {
+) -> Result<jira::Page> {
     let (client, cfg) = jira_client(&state)?;
     let jql = jira::browse_jql(
         cfg.project_key.as_deref(),
@@ -1595,7 +1597,9 @@ pub async fn jira_browse(
         include_done.unwrap_or(false),
         &types.unwrap_or_default(),
     );
-    client.search(&jql, 50).await
+    // A search is refined rather than read end to end, so it stays capped —
+    // but it now says when there was more.
+    client.search(&jql, 100).await
 }
 
 #[tauri::command]

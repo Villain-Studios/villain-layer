@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../lib/api";
 import { groupByEpic, useStore } from "../store";
-import type { JiraIssue, JiraTransition } from "../lib/types";
+import type { JiraIssue, JiraPage, JiraTransition } from "../lib/types";
 import { Field, Modal, Spinner } from "./ui";
 import { RepoPicker } from "./RepoPicker";
 import { IssueTypeIcon, hierarchyAccent, isEpicType, typeMap } from "./IssueType";
@@ -13,7 +13,8 @@ function statusClass(category: string) {
 }
 
 export function TicketsView() {
-  const { issues, issueTypes, issuesLoading, settings, projects, agents, tasks } = useStore();
+  const { issues, issueTypes, issuesLoading, issuesTruncated, settings, projects, agents, tasks } =
+    useStore();
   const refreshIssues = useStore((s) => s.refreshIssues);
   const refreshTasks = useStore((s) => s.refreshTasks);
   const refreshPanes = useStore((s) => s.refreshPanes);
@@ -35,7 +36,7 @@ export function TicketsView() {
   const [browseText, setBrowseText] = useState("");
   const [whose, setWhose] = useState("notmine");
   const [includeDone, setIncludeDone] = useState(false);
-  const [found, setFound] = useState<JiraIssue[] | null>(null);
+  const [found, setFound] = useState<JiraPage | null>(null);
   const [searching, setSearching] = useState(false);
   // Shared by both tabs: your own list filters in place, a search asks Jira.
   const [kinds, setKinds] = useState<string[]>([]);
@@ -82,7 +83,7 @@ export function TicketsView() {
     try {
       setFound(await api.jiraBrowse(browseText.trim(), whose, includeDone, kinds));
     } catch (e) {
-      setFound([]);
+      setFound({ issues: [], more: false });
       fail(e);
     } finally {
       setSearching(false);
@@ -263,7 +264,11 @@ export function TicketsView() {
           </>
         ) : (
           <span className="sub">
-            {found ? `${found.length} result${found.length === 1 ? "" : "s"}` : "Not searched yet"}
+            {found
+              ? `${found.issues.length}${found.more ? "+" : ""} result${
+                  found.issues.length === 1 ? "" : "s"
+                }`
+              : "Not searched yet"}
           </span>
         )}
       </div>
@@ -303,7 +308,7 @@ export function TicketsView() {
             </button>
           </div>
 
-          {found && found.length === 0 && !searching && (
+          {found && found.issues.length === 0 && !searching && (
             <div className="card">
               <div className="muted">
                 Nothing matched. "Not mine" covers unassigned work as well as other
@@ -312,13 +317,30 @@ export function TicketsView() {
               </div>
             </div>
           )}
-          {found && found.length > 0 && (
-            <div className="found">{found.map(ticketCard)}</div>
+          {found && found.issues.length > 0 && (
+            <>
+              <div className="found">{found.issues.map(ticketCard)}</div>
+              {found.more && (
+                <div className="muted" style={{ marginTop: 10, fontSize: 12.5 }}>
+                  Jira had more than these. Add a word to the search, or narrow it
+                  by type.
+                </div>
+              )}
+            </>
           )}
         </>
       )}
 
       {sub === "mine" && typeFilter()}
+
+      {sub === "mine" && issuesTruncated && (
+        <div className="card">
+          <div className="muted">
+            Your JQL matches more than the {issues.length} shown, so the epics below
+            are missing some of their tickets. Narrow it in Settings.
+          </div>
+        </div>
+      )}
 
       {sub === "mine" && epics.length === 0 && !issuesLoading && (
         <div className="card">

@@ -45,6 +45,12 @@ export function TicketsView() {
   // Held as built items rather than a subject, so an epic header and a ticket
   // card can each offer what makes sense for them.
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
+  // Filing under an epic: the parent is fixed, everything else is asked for.
+  const [filing, setFiling] = useState<{ key: string; summary: string } | null>(null);
+  const [newSummary, setNewSummary] = useState("");
+  const [newDesc, setNewDesc] = useState("");
+  const [newType, setNewType] = useState("");
+  const [filingBusy, setFilingBusy] = useState(false);
 
   const installed = agents.filter((a) => a.installed);
   const jiraBase = settings?.jira?.base_url.replace(/\/+$/, "") ?? "";
@@ -84,6 +90,44 @@ export function TicketsView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sub]);
 
+  // What a new ticket can be: a plain issue, never an epic or a sub-task —
+  // one would be a sibling of the parent, the other needs a parent of its own.
+  const creatable = useMemo(
+    () => issueTypes.filter((t) => t.hierarchy_level === 0 && !t.subtask),
+    [issueTypes],
+  );
+
+  useEffect(() => {
+    if (newType && creatable.some((t) => t.name === newType)) return;
+    setNewType((creatable.find((t) => t.name.toLowerCase() === "task") ?? creatable[0])?.name ?? "");
+  }, [creatable, newType]);
+
+  async function fileIssue() {
+    if (!filing || !newSummary.trim() || !newType) return;
+    setFilingBusy(true);
+    try {
+      const issue = await api.jiraCreateIssue({
+        summary: newSummary.trim(),
+        description: newDesc.trim(),
+        issue_type: newType,
+        project_key: null,
+        parent_key: filing.key,
+      });
+      toast("success", `Filed ${issue.key} under ${filing.key}`);
+      setFiling(null);
+      setNewSummary("");
+      setNewDesc("");
+      await refreshIssues();
+      // Straight into the start-work dialog: filing it is usually the first
+      // half of picking it up.
+      setOpen(issue);
+    } catch (e) {
+      fail(e);
+    } finally {
+      setFilingBusy(false);
+    }
+  }
+
   function copy(text: string, what: string) {
     navigator.clipboard
       .writeText(text)
@@ -93,6 +137,15 @@ export function TicketsView() {
 
   /// Opening it in Jira and taking its link are the same wherever it is shown,
   /// and an epic known only through its children still has both.
+  function epicItems(key: string, summary: string): MenuItem[] {
+    return [
+      {
+        label: "New ticket in this epic…",
+        onSelect: () => { setFiling({ key, summary }); setNewSummary(""); setNewDesc(""); },
+      },
+    ];
+  }
+
   function linkItems(key: string, summary: string, after = true): MenuItem[] {
     const link = `${jiraBase}/browse/${key}`;
     return [
@@ -112,6 +165,7 @@ export function TicketsView() {
         label: task ? "Open task" : "Start work…",
         onSelect: () => (task ? select(task.id) : setOpen(issue)),
       },
+      ...(isEpicType(types, issue.issue_type) ? epicItems(issue.key, issue.summary) : []),
       ...linkItems(issue.key, issue.summary),
     ];
     if (task && issue.status_category !== "indeterminate") {
@@ -284,7 +338,21 @@ export function TicketsView() {
               {syncing === issue.key ? "moving…" : "started here — sync ↑"}
             </button>
           )}
-          {!task && moving && (
+          {isEpicType(types, issue.issue_type) && (
+            <button
+              className="chip sync open"
+              title={`File a new ticket under ${issue.key}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                setFiling({ key: issue.key, summary: issue.summary });
+                setNewSummary("");
+                setNewDesc("");
+              }}
+            >
+              + ticket
+            </button>
+          )}
+          {!task && moving && !isEpicType(types, issue.issue_type) && (
             // In progress on the board with nothing here to work in.
             <button
               className="chip sync open"
@@ -480,7 +548,8 @@ export function TicketsView() {
                               : setOpen(own),
                         }]
                       : []),
-                    ...linkItems(epic.key, epic.summary, Boolean(own)),
+                    ...epicItems(epic.key, epic.summary),
+                    ...linkItems(epic.key, epic.summary, true),
                   ],
                 });
               }}
@@ -519,6 +588,20 @@ export function TicketsView() {
                 so every epic gets the same way out rather than some of them
                 appearing actionable and the rest not.
               */}
+              {epic.key && (
+                <button
+                  className="btn btn-sm"
+                  title={`File a new ticket under ${epic.key}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setFiling({ key: epic.key, summary: epic.summary });
+                    setNewSummary("");
+                    setNewDesc("");
+                  }}
+                >
+                  + ticket
+                </button>
+              )}
               {epic.key && jiraBase && (
                 <button
                   className="btn btn-sm"
@@ -541,6 +624,65 @@ export function TicketsView() {
           </div>
         );
       })}
+
+      {filing && (
+        <Modal
+          title={`New ticket in ${filing.key}`}
+          onClose={() => setFiling(null)}
+          footer={
+            <>
+              <button className="btn" onClick={() => setFiling(null)}>Cancel</button>
+              <button
+                className="btn btn-primary"
+                disabled={filingBusy || !newSummary.trim() || !newType}
+                onClick={() => void fileIssue()}
+              >
+                {filingBusy ? "Filing…" : "File ticket"}
+              </button>
+            </>
+          }
+        >
+          <div className="muted" style={{ marginBottom: 12, lineHeight: 1.6 }}>
+            Filed under <b>{filing.key}</b>
+            {filing.summary ? ` — ${filing.summary}` : ""}, in that epic's own project.
+            Nothing is checked out; the start-work dialog opens once it exists.
+          </div>
+
+          <Field label="Summary">
+            <input
+              autoFocus
+              value={newSummary}
+              onChange={(e) => setNewSummary(e.target.value)}
+              placeholder="What needs doing"
+              onKeyDown={(e) => { if (e.key === "Enter") void fileIssue(); }}
+            />
+          </Field>
+
+          <Field label="Type">
+            <div className="type-row">
+              {creatable.map((t) => (
+                <button
+                  key={t.id}
+                  className={`type-pick${newType === t.name ? " active" : ""}`}
+                  onClick={() => setNewType(t.name)}
+                >
+                  <IssueTypeIcon types={types} name={t.name} size={15} />
+                  {t.name}
+                </button>
+              ))}
+            </div>
+          </Field>
+
+          <Field label="Description" hint="Optional. Becomes the ticket body and an agent's briefing.">
+            <textarea
+              rows={5}
+              value={newDesc}
+              onChange={(e) => setNewDesc(e.target.value)}
+              placeholder="What needs doing, and how you would know it is done."
+            />
+          </Field>
+        </Modal>
+      )}
 
       {menu && (
         <ContextMenu

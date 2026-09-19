@@ -2429,6 +2429,65 @@ pub async fn handoff_prompt(state: State<'_, AppState>, pane_id: String) -> Resu
 }
 
 #[derive(Debug, Deserialize)]
+pub struct NewIssue {
+    pub summary: String,
+    #[serde(default)]
+    pub description: String,
+    pub issue_type: String,
+    /// Falls back to the parent's project, then to the one in Settings.
+    #[serde(default)]
+    pub project_key: Option<String>,
+    #[serde(default)]
+    pub parent_key: Option<String>,
+}
+
+/// The project a key belongs to: everything before the first dash.
+fn project_of(key: &str) -> Option<String> {
+    let (project, number) = key.split_once('-')?;
+    (!project.is_empty() && !number.is_empty() && number.chars().all(|c| c.is_ascii_digit()))
+        .then(|| project.to_uppercase())
+}
+
+/// File a ticket without starting work on it.
+///
+/// Separate from `jira_create_task` because filing under an epic and opening
+/// worktrees are different intentions: adding a ticket to a plan is not saying
+/// you will start it now.
+#[tauri::command]
+pub async fn jira_create_issue(state: State<'_, AppState>, req: NewIssue) -> Result<jira::Issue> {
+    let summary = req.summary.trim().to_string();
+    if summary.is_empty() {
+        return Err(Error::Other("the ticket needs a summary".into()));
+    }
+    let (client, cfg) = jira_client(&state)?;
+
+    // A sub-task has to be filed in its parent's project, and the parent's key
+    // says which that is — so an epic found by searching needs nothing else.
+    let project_key = req
+        .project_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_uppercase)
+        .or_else(|| req.parent_key.as_deref().and_then(project_of))
+        .or_else(|| cfg.project_key.clone())
+        .ok_or_else(|| {
+            Error::Other("no Jira project to file into — set a project key in Settings".into())
+        })?;
+
+    let key = client
+        .create_issue(
+            &project_key,
+            &summary,
+            &req.description,
+            &req.issue_type,
+            req.parent_key.as_deref(),
+        )
+        .await?;
+    client.issue(&key).await
+}
+
+#[derive(Debug, Deserialize)]
 pub struct NewJiraTask {
     pub summary: String,
     #[serde(default)]
@@ -2468,7 +2527,8 @@ pub async fn jira_create_task(state: State<'_, AppState>, req: NewJiraTask) -> R
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .map(str::to_string)
+        .map(str::to_uppercase)
+        .or_else(|| req.parent_key.as_deref().and_then(project_of))
         .or_else(|| cfg.project_key.clone())
         .ok_or_else(|| {
             Error::Other("no Jira project to file into — set a project key in Settings".into())
@@ -3289,6 +3349,18 @@ mod tests {
             agent_id: if kind == "agent" { Some("claude".into()) } else { None },
             cwd: Some(cwd.into()),
         }
+    }
+
+    #[test]
+    fn a_key_says_which_project_it_belongs_to() {
+        // An epic found by searching carries its project in its key, which is
+        // what lets a ticket be filed under it with nothing else configured.
+        assert_eq!(project_of("ACME-19335").as_deref(), Some("ACME"));
+        assert_eq!(project_of("sre-1189").as_deref(), Some("SRE"));
+        assert_eq!(project_of("ACME-19335-suffix"), None);
+        assert_eq!(project_of("ACME-"), None);
+        assert_eq!(project_of("-1"), None);
+        assert_eq!(project_of("nodash"), None);
     }
 
     #[test]

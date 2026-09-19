@@ -119,6 +119,13 @@ export const api = {
   jiraSyncStatus: (key: string) => invoke<string | null>("jira_sync_status", { key }),
   jiraBrowse: (text: string, whose: string, includeDone: boolean, types: string[]) =>
     invoke<JiraPage>("jira_browse", { text: text || null, whose, includeDone, types }),
+  jiraCreateIssue: (req: {
+    summary: string;
+    description: string;
+    issue_type: string;
+    project_key: string | null;
+    parent_key: string | null;
+  }) => invoke<JiraIssue>("jira_create_issue", { req }),
   jiraCreateTask: (req: {
     summary: string;
     description: string;

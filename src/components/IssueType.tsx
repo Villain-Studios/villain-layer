@@ -28,11 +28,11 @@ export function isEpicType(types: TypeMap, name: string): boolean {
  * Hierarchy is the one thing that means the same in every Jira, so it drives
  * the structural accent. Type identity is carried by the icon.
  */
-export function hierarchyAccent(types: TypeMap, name: string): string {
+export function hierarchyClass(types: TypeMap, name: string): string {
   const level = lookupType(types, name)?.hierarchy_level ?? 0;
-  if (level >= 1) return "var(--accent)";
-  if (level <= -1) return "var(--border)";
-  return "var(--border-soft)";
+  if (level >= 1) return "lvl-epic";
+  if (level <= -1) return "lvl-sub";
+  return "";
 }
 
 /** Used only when Jira gave us no icon — never in place of one it did. */

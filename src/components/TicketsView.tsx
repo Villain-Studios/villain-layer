@@ -5,7 +5,7 @@ import { groupByEpic, useStore } from "../store";
 import type { CreateField, JiraIssue, JiraPage, JiraTransition } from "../lib/types";
 import { ContextMenu, Field, Modal, Spinner, type MenuItem } from "./ui";
 import { RepoPicker } from "./RepoPicker";
-import { IssueTypeIcon, hierarchyAccent, isEpicType, typeMap } from "./IssueType";
+import { IssueTypeIcon, hierarchyClass, isEpicType, typeMap } from "./IssueType";
 
 function statusClass(category: string) {
   if (category === "done") return "done";
@@ -25,6 +25,9 @@ export function TicketsView() {
   const fail = useStore((s) => s.fail);
 
   const [open, setOpen] = useState<JiraIssue | null>(null);
+  // Reading a ticket is not starting one. Jira already sent the description
+  // with the rest of the issue, so this costs nothing but a dialog.
+  const [reading, setReading] = useState<JiraIssue | null>(null);
   const [transitions, setTransitions] = useState<JiraTransition[]>([]);
   const [picked, setPicked] = useState<string[]>([]);
   const [reason, setReason] = useState<string | null>(null);
@@ -212,6 +215,7 @@ export function TicketsView() {
         label: task ? "Open task" : "Start work…",
         onSelect: () => (task ? select(task.id) : setOpen(issue)),
       },
+      { label: "Read ticket", onSelect: () => setReading(issue) },
       ...(isEpicType(types, issue.issue_type) ? epicItems(issue.key, issue.summary) : []),
       ...linkItems(issue.key, issue.summary),
     ];
@@ -346,9 +350,9 @@ export function TicketsView() {
         key={issue.key}
         className={
           `ticket${task ? " started" : ""}` +
-          (isEpicType(types, issue.issue_type) ? " is-epic" : "")
+          (isEpicType(types, issue.issue_type) ? " is-epic" : "") +
+          ` ${hierarchyClass(types, issue.issue_type)}`
         }
-        style={{ borderLeftColor: hierarchyAccent(types, issue.issue_type) }}
         title={task ? "Open the task already running for this ticket" : undefined}
         onContextMenu={(e) => {
           e.preventDefault();
@@ -814,6 +818,69 @@ export function TicketsView() {
           items={menu.items}
           onClose={() => setMenu(null)}
         />
+      )}
+
+      {reading && (
+        <Modal
+          title={reading.key}
+          wide
+          onClose={() => setReading(null)}
+          footer={
+            <>
+              <button className="btn" onClick={() => setReading(null)}>Close</button>
+              <button
+                className="btn btn-sm"
+                onClick={() => void openUrl(reading.url)}
+                title="The same ticket, on the website"
+              >
+                Open in Jira ↗
+              </button>
+              <div className="spacer" />
+              {!taskFor(reading.key) && (
+                <button
+                  className="btn btn-primary"
+                  onClick={() => { setOpen(reading); setReading(null); }}
+                >
+                  Start work…
+                </button>
+              )}
+            </>
+          }
+        >
+          <h3 style={{ margin: "0 0 10px", fontSize: 15, lineHeight: 1.4 }}>
+            {reading.summary}
+          </h3>
+
+          <div className="row" style={{ marginBottom: 14, flexWrap: "wrap" }}>
+            <span className="chip chip-type">
+              <IssueTypeIcon types={types} name={reading.issue_type} size={13} />
+              {reading.issue_type}
+            </span>
+            <span className={`status-pill ${statusClass(reading.status_category)}`}>
+              {reading.status}
+            </span>
+            {reading.priority && <span className="chip">{reading.priority}</span>}
+            {reading.assignee && <span className="chip">{reading.assignee}</span>}
+            {reading.epic_key && (
+              <span className="chip" title={reading.epic_summary ?? undefined}>
+                epic {reading.epic_key}
+              </span>
+            )}
+            {reading.components.map((c) => <span key={c} className="chip">{c}</span>)}
+            {reading.labels.map((l) => <span key={l} className="chip">{l}</span>)}
+          </div>
+
+          {/*
+            Jira's own markup is reduced to text on the way in, so it is shown
+            as text: wrapped, spacing kept, and never pretending to be the
+            rendering the website would give it.
+          */}
+          {reading.description.trim() ? (
+            <div className="ticket-body">{reading.description}</div>
+          ) : (
+            <div className="muted">This ticket has no description.</div>
+          )}
+        </Modal>
       )}
 
       {open && (

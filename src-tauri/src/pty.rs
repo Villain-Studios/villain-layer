@@ -237,6 +237,11 @@ impl PtyManager {
             cmd.arg(arg);
         }
         cmd.cwd(&opts.cwd);
+        // Start from the login-shell env, not the GUI process env. CommandBuilder
+        // seeds itself from our process — which often carries FORCE_COLOR=0 /
+        // TERM=dumb from a non-TTY parent — and `env()` only overlays, it never
+        // removes. Clearing first is what lets shellenv's scrub stick.
+        cmd.env_clear();
         for (k, v) in shellenv::user_env() {
             cmd.env(k, v);
         }

@@ -34,6 +34,16 @@ pub fn user_env() -> &'static HashMap<String, String> {
             }
         }
 
+        // The scrape above is not a TTY (`zsh -ilc` pipes stdout), so shells
+        // and tools often export TERM=dumb, FORCE_COLOR=0 or NO_COLOR into what
+        // we just copied. A pane is a real terminal — those must not follow the
+        // child in, or every chalk/Ink CLI (Claude Code, Copilot, …) renders
+        // monochrome.
+        env.remove("NO_COLOR");
+        env.remove("FORCE_COLOR");
+        if env.get("CLICOLOR").is_some_and(|v| v == "0") {
+            env.remove("CLICOLOR");
+        }
         env.insert("TERM".into(), "xterm-256color".into());
         env.insert("COLORTERM".into(), "truecolor".into());
         env
@@ -59,4 +69,20 @@ pub fn which(program: &str) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_pane_env_looks_like_a_real_terminal() {
+        let env = user_env();
+        assert_eq!(env.get("TERM").map(String::as_str), Some("xterm-256color"));
+        assert_eq!(env.get("COLORTERM").map(String::as_str), Some("truecolor"));
+        assert!(!env.contains_key("NO_COLOR"));
+        // FORCE_COLOR=0 is the usual poison from a non-TTY scrape; any other
+        // value the user set on purpose is fine, but zero must not survive.
+        assert_ne!(env.get("FORCE_COLOR").map(String::as_str), Some("0"));
+    }
 }

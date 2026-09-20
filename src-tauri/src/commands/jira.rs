@@ -513,6 +513,7 @@ pub async fn draft_pr_description(
                 "WebSearch",
             ])
             .current_dir(&cwd)
+            .env_clear()
             .envs(&env)
             // Nothing here is worth thinking about first, and the thinking block
             // is dead time the reader spends watching a spinner.

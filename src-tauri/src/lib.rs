@@ -90,6 +90,7 @@ pub fn run() {
                 config: ConfigStore::load(handle)?,
                 ptys: PtyManager::default(),
                 jira_types: Default::default(),
+                pending_notices: Default::default(),
             };
             app.manage(state);
 
@@ -108,7 +109,19 @@ pub fn run() {
                         let _ = mcp::write_config(&dir);
                     }
                 }
-                Err(e) => eprintln!("villain-layer mcp unavailable: {e}"),
+                Err(e) => {
+                    eprintln!("villain-layer mcp unavailable: {e}");
+                    // Agents will start without the app's tools; say so once
+                    // rather than leaving a missing .mcp.json to discover later.
+                    // Queued, not emitted: the webview has not subscribed yet.
+                    commands::push_notice(
+                        &handle.state::<AppState>(),
+                        "error",
+                        format!(
+                            "MCP server unavailable ({e}). Agents will not get the app's Jira, GitHub or Slack tools this run."
+                        ),
+                    );
+                }
             }
             // Resolve the login shell's PATH once, off the startup path.
             std::thread::spawn(|| {
@@ -183,6 +196,7 @@ pub fn run() {
             commands::slack_cleanup,
             commands::slack_delete_posted,
             commands::get_settings,
+            commands::take_notices,
             commands::set_worktree_root,
             commands::set_ui_prefs,
             commands::disconnect,

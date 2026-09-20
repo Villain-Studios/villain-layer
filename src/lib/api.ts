@@ -25,6 +25,7 @@ import type {
   TaskPrs,
   TaskView,
   UiPrefs,
+  AppNotice,
 } from "./types";
 
 export const api = {
@@ -168,6 +169,7 @@ export const api = {
 
   // settings
   getSettings: () => invoke<Settings>("get_settings"),
+  takeNotices: () => invoke<AppNotice[]>("take_notices"),
   setWorktreeRoot: (path: string | null) => invoke<void>("set_worktree_root", { path }),
   setUiPrefs: (ui: UiPrefs) => invoke<void>("set_ui_prefs", { ui }),
   disconnect: (which: "jira" | "github" | "slack") => invoke<void>("disconnect", { which }),

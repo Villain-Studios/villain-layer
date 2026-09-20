@@ -6,6 +6,7 @@
 
 use crate::config::ConfigStore;
 use crate::pty::PtyManager;
+use serde::Serialize;
 
 pub struct AppState {
     pub config: ConfigStore,
@@ -13,6 +14,24 @@ pub struct AppState {
     /// Issue types are per-site and change about never, but each icon is a
     /// separate authenticated fetch, so they are pulled once per run.
     pub jira_types: parking_lot::Mutex<Option<Vec<crate::integrations::jira::IssueType>>>,
+    /// Notices raised before the UI is listening. Drained once on boot.
+    pub pending_notices: parking_lot::Mutex<Vec<AppNotice>>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct AppNotice {
+    pub kind: String,
+    pub text: String,
+}
+
+/// Queue a notice for the UI. Emitting at startup is useless — the webview has
+/// not subscribed yet — so everything goes through the pending list and the
+/// frontend drains it when it is ready.
+pub fn push_notice(state: &AppState, kind: &str, text: impl Into<String>) {
+    state.pending_notices.lock().push(AppNotice {
+        kind: kind.into(),
+        text: text.into(),
+    });
 }
 
 mod projects;

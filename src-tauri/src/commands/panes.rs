@@ -647,10 +647,14 @@ pub fn restore_panes(app: &AppHandle) {
         return;
     }
     if wanted > saved.len() {
-        eprintln!(
-            "restoring {} of {wanted} saved panes (duplicates dropped, {RESTORE_LIMIT} at most)",
+        let text = format!(
+            "Restored {} of {wanted} panes (duplicates dropped, {RESTORE_LIMIT} at most)",
             saved.len(),
         );
+        eprintln!("{text}");
+        // Queued for the UI: restore runs off the startup path and may finish
+        // before or after the webview is listening.
+        super::push_notice(&state, "info", text);
     }
     // The list is rebuilt as each pane comes back with a new id, and only then
     // written. Clearing it up front meant a restore that failed — or an app

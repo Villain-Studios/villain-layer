@@ -276,6 +276,12 @@ export interface Settings {
   slack_connected: boolean;
 }
 
+/** Queued before the UI was listening — drained once on boot. */
+export interface AppNotice {
+  kind: string;
+  text: string;
+}
+
 export interface ReviewComment {
   path: string;
   line: number;

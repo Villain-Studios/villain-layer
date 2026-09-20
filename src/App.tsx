@@ -144,6 +144,23 @@ export default function App() {
     return () => { void p.then((un) => un()); };
   }, [refreshPanes]);
 
+  // Startup notices the backend queued before the UI was listening (MCP bind
+  // failure, restore truncation). Drained on mount and once more after restore
+  // has usually finished — emitting at setup time is silent.
+  useEffect(() => {
+    const show = (notices: { kind: string; text: string }[]) => {
+      const toast = useStore.getState().toast;
+      for (const n of notices) {
+        toast(n.kind === "error" ? "error" : "info", n.text);
+      }
+    };
+    void api.takeNotices().then(show).catch(() => {});
+    const t = setTimeout(() => {
+      void api.takeNotices().then(show).catch(() => {});
+    }, 4000);
+    return () => clearTimeout(t);
+  }, []);
+
   // Say when a review lands, once.
   //
   // Only a change against something already seen is worth a toast: the first

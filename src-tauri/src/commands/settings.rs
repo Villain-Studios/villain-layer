@@ -7,7 +7,7 @@ use crate::config::{GithubConfig, JiraConfig, SlackConfig, UiPrefs};
 use crate::error::{Error, Result};
 use crate::secrets;
 
-use super::AppState;
+use super::{AppNotice, AppState};
 
 // ---------------------------------------------------------------- settings
 
@@ -40,6 +40,13 @@ pub fn get_settings(state: State<AppState>) -> Settings {
         github: c.github,
         slack: c.slack,
     }
+}
+
+/// Notices queued before the UI was listening — MCP bind failure, restore
+/// truncation, and anything else raised on the startup path.
+#[tauri::command]
+pub fn take_notices(state: State<AppState>) -> Vec<AppNotice> {
+    std::mem::take(&mut *state.pending_notices.lock())
 }
 
 #[tauri::command]

@@ -40,6 +40,9 @@ export function Terminals({ task }: { task: TaskView }) {
   const addRef = useRef<HTMLButtonElement>(null);
   /** null = the task root, where every repo is visible as a sibling folder. */
   const [scope, setScope] = useState<string | null>(null);
+  /** Last auto-fetched briefing; if the textarea still matches, scope changes replace it. */
+  const fetchedPrompt = useRef("");
+  const cursorIde = useStore((s) => s.cursorIde);
 
   const multi = task.checkouts.length > 1;
 
@@ -55,17 +58,30 @@ export function Terminals({ task }: { task: TaskView }) {
       .catch(() => setResumable([]));
   }, [task.id, scope, panes.length]);
 
-  // Prefill the real prompt rather than showing one as placeholder text: what
-  // is on screen should be what gets sent. For a ticket-backed task this is the
-  // same briefing the first agent got, description and repo layout included.
+  // Prefill (and refresh on Start-in change) so the text matches where the
+  // agent will actually run. Edits the user typed are kept until they change
+  // Start in again while the box still holds the previous auto-fetch.
   useEffect(() => {
     if (!launching) return;
+    let cancelled = false;
     setPromptLoading(true);
-    api.taskPrompt(task.id)
-      .then((p) => setPrompt((current) => (current.trim() ? current : p)))
-      .catch((e) => toast("error", `Could not load the briefing: ${errMessage(e)}`))
-      .finally(() => setPromptLoading(false));
-  }, [launching, task.id, toast]);
+    api.taskPrompt(task.id, scope)
+      .then((p) => {
+        if (cancelled) return;
+        setPrompt((current) => {
+          if (!current.trim() || current === fetchedPrompt.current) {
+            fetchedPrompt.current = p;
+            return p;
+          }
+          return current;
+        });
+      })
+      .catch((e) => {
+        if (!cancelled) toast("error", `Could not load the briefing: ${errMessage(e)}`);
+      })
+      .finally(() => { if (!cancelled) setPromptLoading(false); });
+    return () => { cancelled = true; };
+  }, [launching, task.id, scope, toast]);
 
   // Keep a sensible pane selected as panes come and go. Panes are given fresh
   // ids every launch, so what survives a restart is the position in the bar,
@@ -287,7 +303,7 @@ export function Terminals({ task }: { task: TaskView }) {
             })
           }
         >
-          + <span className="caret">▾</span>
+          +
         </button>
       </div>
 
@@ -380,6 +396,15 @@ export function Terminals({ task }: { task: TaskView }) {
                 </button>
               ))}
               <button className="btn" onClick={() => void launchShell()}>Open shell</button>
+              {cursorIde && (
+                <button
+                  className="btn"
+                  title={`Open ${task.root} in Cursor`}
+                  onClick={() => void api.openInCursor(task.root).catch(fail)}
+                >
+                  Open in Cursor
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -453,12 +478,12 @@ export function Terminals({ task }: { task: TaskView }) {
       {launching && (
         <Modal
           title={`Start ${agents.find((a) => a.id === launching)?.name ?? launching}`}
-          onClose={() => { setLaunching(null); setPrompt(""); }}
+          onClose={() => { setLaunching(null); setPrompt(""); fetchedPrompt.current = ""; }}
           footer={
             <>
               <button
                 className="btn"
-                onClick={() => { setLaunching(null); setPrompt(""); }}
+                onClick={() => { setLaunching(null); setPrompt(""); fetchedPrompt.current = ""; }}
               >
                 Cancel
               </button>

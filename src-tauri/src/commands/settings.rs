@@ -1,11 +1,15 @@
 //! UI prefs, worktree root, disconnect integrations.
 
+use std::path::PathBuf;
+use std::process::Command;
+
 use serde::Serialize;
 use tauri::State;
 
 use crate::config::{GithubConfig, JiraConfig, SlackConfig, UiPrefs};
 use crate::error::{Error, Result};
 use crate::secrets;
+use crate::shellenv;
 
 use super::{AppNotice, AppState};
 
@@ -86,5 +90,79 @@ pub fn disconnect(state: State<AppState>, which: String) -> Result<()> {
             state.config.update(|c| c.slack = None)
         }
         other => Err(Error::NotFound(format!("integration {other}"))),
+    }
+}
+
+/// Where Cursor.app lives, if it does. The shell `cursor` CLI is checked
+/// separately — either is enough to open a folder.
+fn cursor_app() -> Option<PathBuf> {
+    let mut candidates = vec![PathBuf::from("/Applications/Cursor.app")];
+    if let Some(home) = std::env::var_os("HOME") {
+        candidates.push(PathBuf::from(home).join("Applications/Cursor.app"));
+    }
+    candidates.into_iter().find(|p| p.is_dir())
+}
+
+/// True when the Cursor IDE is on this machine (the app, or its `cursor` CLI).
+/// Distinct from the `cursor-agent` agent CLI listed under agents.
+#[tauri::command]
+pub fn cursor_ide_installed() -> bool {
+    shellenv::which("cursor").is_some() || cursor_app().is_some()
+}
+
+/// Open a folder in Cursor IDE. Prefers the `cursor` CLI (opens as a window);
+/// falls back to launching the .app on macOS.
+#[tauri::command]
+pub fn open_in_cursor(path: String) -> Result<()> {
+    let dir = PathBuf::from(&path);
+    if !dir.is_dir() {
+        return Err(Error::NotFound(format!("folder {path}")));
+    }
+
+    if let Some(bin) = shellenv::which("cursor") {
+        Command::new(bin)
+            .arg(&dir)
+            .spawn()
+            .map_err(|e| Error::Other(format!("could not start Cursor: {e}")))?;
+        return Ok(());
+    }
+
+    if let Some(app) = cursor_app() {
+        let status = Command::new("open")
+            .arg("-a")
+            .arg(&app)
+            .arg(&dir)
+            .status()
+            .map_err(|e| Error::Other(format!("could not open Cursor: {e}")))?;
+        if status.success() {
+            return Ok(());
+        }
+        return Err(Error::Other(format!(
+            "open -a Cursor failed with {}",
+            status.code().unwrap_or(-1)
+        )));
+    }
+
+    Err(Error::Other("Cursor IDE is not installed".into()))
+}
+
+#[cfg(test)]
+mod cursor_tests {
+    use super::*;
+
+    #[test]
+    fn missing_folder_is_not_found() {
+        let err = open_in_cursor("/no/such/cursor/folder/ever".into()).unwrap_err();
+        assert!(matches!(err, Error::NotFound(_)));
+    }
+
+    #[test]
+    fn detection_agrees_with_the_filesystem() {
+        let expected = PathBuf::from("/Applications/Cursor.app").is_dir()
+            || std::env::var_os("HOME")
+                .map(|h| PathBuf::from(h).join("Applications/Cursor.app").is_dir())
+                .unwrap_or(false)
+            || shellenv::which("cursor").is_some();
+        assert_eq!(cursor_ide_installed(), expected);
     }
 }

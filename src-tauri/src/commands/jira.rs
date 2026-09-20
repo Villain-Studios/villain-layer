@@ -201,9 +201,14 @@ pub async fn jira_transition(
     client.transition(&key, &transition_id).await
 }
 
-/// The opening prompt. For a multi-repo task it also spells out the layout, so
-/// an agent at the task root knows what the sibling folders are.
-pub(crate) fn ticket_prompt(issue: &jira::Issue, task: &Task, repos: &[(String, String)]) -> String {
+/// The opening prompt. Spells out the layout so the agent knows what it can see
+/// from where it was started: the task root (sibling folders) or one repo.
+pub(crate) fn ticket_prompt(
+    issue: &jira::Issue,
+    task: &Task,
+    repos: &[(String, String)],
+    at_task_root: bool,
+) -> String {
     let description = if issue.description.trim().is_empty() {
         "(no description on the ticket)"
     } else {
@@ -216,20 +221,31 @@ pub(crate) fn ticket_prompt(issue: &jira::Issue, task: &Task, repos: &[(String, 
     );
 
     if !repos.is_empty() {
-        prompt.push_str(&format!(
-            "You are in the task folder, not in a repository. {} checked out as {} inside it, on branch `{}`:\n",
-            if repos.len() == 1 { "One repository is" } else { "Each repository is" },
-            if repos.len() == 1 { "a folder" } else { "sibling folders" },
-            task.branch,
-        ));
-        for (folder, origin) in repos {
-            prompt.push_str(&format!("  {folder}/  — {origin}\n"));
+        if at_task_root {
+            prompt.push_str(&format!(
+                "You are in the task folder, not in a repository. {} checked out as {} inside it, on branch `{}`:\n",
+                if repos.len() == 1 { "One repository is" } else { "Each repository is" },
+                if repos.len() == 1 { "a folder" } else { "sibling folders" },
+                task.branch,
+            ));
+            for (folder, origin) in repos {
+                prompt.push_str(&format!("  {folder}/  — {origin}\n"));
+            }
+            prompt.push_str(
+                "\nRun git and each repository's own tests from inside its folder. Do not \
+                 init or install a package manager project in this task folder — it is only \
+                 a container for the checkouts. More repositories can be added to the task \
+                 later, with the add_repo tool if you find you need one, and they appear \
+                 here as further folders.\n\n",
+            );
+        } else {
+            let (folder, origin) = &repos[0];
+            prompt.push_str(&format!(
+                "You are inside the `{folder}` repository (checked out from {origin}), \
+                 on branch `{}`. Stay in this repository unless asked otherwise.\n\n",
+                task.branch,
+            ));
         }
-        prompt.push_str(
-            "\nRun git and each repository's own tests from inside its folder. More \
-             repositories can be added to the task later, with the add_repo tool if you \
-             find you need one, and they appear here as further folders.\n\n",
-        );
     }
 
     prompt.push_str(
@@ -264,16 +280,40 @@ pub(crate) fn task_repos(state: &AppState, task: &Task) -> Vec<(String, String)>
 /// Used to prefill the launch dialog, so the text on screen is the text that
 /// gets sent. When the task came from a ticket this refetches it, so an agent
 /// started later gets the same briefing as the first one rather than just the
-/// task's title.
+/// task's title. `checkout_id` selects "start inside one repo" wording; omit
+/// it for the task-root layout.
 #[tauri::command]
-pub async fn task_prompt(state: State<'_, AppState>, task_id: String) -> Result<String> {
+pub async fn task_prompt(
+    state: State<'_, AppState>,
+    task_id: String,
+    checkout_id: Option<String>,
+) -> Result<String> {
     let task = state.config.task(&task_id)?;
-    let repos = task_repos(&state, &task);
+    let at_task_root = checkout_id.is_none();
+    let repos = match checkout_id.as_deref() {
+        Some(id) => {
+            let checkout = state.config.checkout(id)?;
+            if checkout.task_id != task.id {
+                return Err(Error::NotFound(format!("checkout {id}")));
+            }
+            let folder = PathBuf::from(&checkout.path)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let origin = state
+                .config
+                .project(&checkout.project_id)
+                .map(|p| p.path)
+                .unwrap_or_default();
+            vec![(folder, origin)]
+        }
+        None => task_repos(&state, &task),
+    };
 
     if let Some(key) = task.issue_key.as_deref() {
         if let Ok((client, _)) = jira_client(&state) {
             if let Ok(issue) = client.issue(key).await {
-                return Ok(ticket_prompt(&issue, &task, &repos));
+                return Ok(ticket_prompt(&issue, &task, &repos, at_task_root));
             }
         }
     }
@@ -283,7 +323,7 @@ pub async fn task_prompt(state: State<'_, AppState>, task_id: String) -> Result<
     if let Some(url) = &task.issue_url {
         prompt.push_str(&format!("Ticket: {url}\n\n"));
     }
-    if repos.len() > 1 {
+    if at_task_root && repos.len() > 1 {
         prompt.push_str(&format!(
             "This task spans {} repositories, checked out as sibling folders in your \
              working directory, all on branch `{}`:\n",
@@ -294,6 +334,14 @@ pub async fn task_prompt(state: State<'_, AppState>, task_id: String) -> Result<
             prompt.push_str(&format!("  {folder}/  — {origin}\n"));
         }
         prompt.push('\n');
+    } else if !at_task_root {
+        if let Some((folder, origin)) = repos.first() {
+            prompt.push_str(&format!(
+                "You are inside the `{folder}` repository (checked out from {origin}), \
+                 on branch `{}`.\n\n",
+                task.branch,
+            ));
+        }
     }
     prompt.push_str(
         "Start by exploring the relevant code, then implement the change. Ask before \
@@ -692,8 +740,11 @@ pub async fn handoff_prompt(state: State<'_, AppState>, pane_id: String) -> Resu
     let mut out =
         String::from("You are taking over work another agent started and could not finish.\n\n");
 
-    // The original briefing, refetched so the ticket is current.
-    out.push_str(&task_prompt(state.clone(), task.id.clone()).await?);
+    // The original briefing, scoped the same way the outgoing agent was, so a
+    // handoff from a pinned repo does not claim the whole task folder.
+    out.push_str(
+        &task_prompt(state.clone(), task.id.clone(), pane.checkout_id.clone()).await?,
+    );
     out.push_str("\n\n---\n\n## What has happened so far\n\n");
 
     let mut any_change = false;
@@ -1039,7 +1090,7 @@ pub async fn jira_start_work(
             task.id.clone(),
             agent_id,
             None,
-            Some(ticket_prompt(&issue, &task, &repos)),
+            Some(ticket_prompt(&issue, &task, &repos, true)),
             false,
             None,
             None,

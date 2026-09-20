@@ -48,6 +48,8 @@ interface State {
   toasts: Toast[];
   /** Background task/pane polls have failed repeatedly — not a toast every few seconds. */
   watchFailing: boolean;
+  /** Cursor IDE (the editor app / `cursor` CLI), not the cursor-agent agent. */
+  cursorIde: boolean;
 
   select: (id: string | null) => void;
   setView: (v: View) => void;
@@ -131,6 +133,7 @@ export const useStore = create<State>((set, get) => {
   settingsOpen: false,
   toasts: [],
   watchFailing: false,
+  cursorIde: false,
 
   // Selecting a task is always a request to look at it.
   select: (id) => set({ selectedTask: id, tab: "terminals", view: "work" }),
@@ -148,11 +151,12 @@ export const useStore = create<State>((set, get) => {
   fail: (e) => get().toast("error", errMessage(e)),
 
   refreshAll: async () => {
-    const [projects, tasks, panes, agents] = await Promise.all([
+    const [projects, tasks, panes, agents, cursorIde] = await Promise.all([
       api.listProjects(), api.listTasks(), api.listPanes(), api.listAgents(),
+      api.cursorIdeInstalled().catch(() => false),
     ]);
     set((s) => ({
-      projects, tasks, panes, agents,
+      projects, tasks, panes, agents, cursorIde,
       selectedTask: stillThere(tasks, s.selectedTask),
     }));
     watchOk();

@@ -446,7 +446,8 @@ pub(crate) fn write_task_context(state: &AppState, task: &Task) -> Result<()> {
     md.push_str(concat!(
         "Run git, and each repository's own tests, from inside its folder. A ",
         "repository's own CLAUDE.md or AGENTS.md lives in that folder and applies ",
-        "there.\n\n",
+        "there. Do not `npm`/`pnpm`/`yarn` init, install, or drop a lockfile in ",
+        "this task folder — it is not a package, only a container for the checkouts.\n\n",
         "## If the work needs a repository that is not here\n\n",
         "Call `add_repo` on the `villain-layer` MCP server with this task's id and the ",
         "repository's name, and it is checked out here on the same branch. Do that ",

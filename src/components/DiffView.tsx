@@ -2,9 +2,22 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../lib/api";
 import { reportRepoResults } from "../lib/report";
 import { useStore } from "../store";
-import type { ChangedFile, DiffScope, RepoBranchFacts, TaskView } from "../lib/types";
+import type {
+  ChangedFile, DiffScope, RepoBranchFacts, ReviewComment, TaskView,
+} from "../lib/types";
 import { Field, Modal } from "./ui";
 import { read, write } from "../lib/persist";
+
+/** Same shape `send_review` builds — used when starting an agent with the notes. */
+function reviewPrompt(comments: ReviewComment[]): string {
+  let prompt = "Review feedback on your changes. Please address each point:\n\n";
+  for (const c of comments) {
+    const path = c.repo ? `${c.repo}/${c.path}` : c.path;
+    prompt += `- ${path}:${c.line} — ${c.body.trim()}\n`;
+    if (c.code?.trim()) prompt += `    (line reads: \`${c.code.trim()}\`)\n`;
+  }
+  return prompt;
+}
 
 type LineKind = "meta" | "hunk" | "add" | "del" | "ctx";
 
@@ -133,11 +146,15 @@ export function DiffView({ task }: { task: TaskView }) {
   const fail = useStore((s) => s.fail);
   const toast = useStore((s) => s.toast);
   const refreshTasks = useStore((s) => s.refreshTasks);
+  const refreshPanes = useStore((s) => s.refreshPanes);
+  const setTab = useStore((s) => s.setTab);
+  const agents = useStore((s) => s.agents);
   const allPanes = useStore((s) => s.panes);
   const agentPanes = useMemo(
     () => allPanes.filter((p) => p.task_id === task.id && p.kind === "agent" && p.running),
     [allPanes, task.id],
   );
+  const installed = useMemo(() => agents.filter((a) => a.installed), [agents]);
 
   const [files, setFiles] = useState<ChangedFile[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
@@ -148,6 +165,11 @@ export function DiffView({ task }: { task: TaskView }) {
   const [committing, setCommitting] = useState(false);
   const [message, setMessage] = useState("");
   const [target, setTarget] = useState<string>("");
+  /** No running agent: pick a CLI (and Start in) so Send can start one. */
+  const [starting, setStarting] = useState(false);
+  const [startAgentId, setStartAgentId] = useState("");
+  const [startScope, setStartScope] = useState<string | null>(null);
+  const [startingBusy, setStartingBusy] = useState(false);
   const [width, setWidth] = useState(() => read("diffWidth", 260));
   const [shut, setShut] = useState<Record<string, boolean>>({});
   // What "changed" means here. Uncommitted by default: it is what you are
@@ -197,6 +219,12 @@ export function DiffView({ task }: { task: TaskView }) {
       setTarget(agentPanes[0]?.id ?? "");
     }
   }, [agentPanes, target]);
+
+  useEffect(() => {
+    if (!startAgentId || !installed.some((a) => a.id === startAgentId)) {
+      setStartAgentId(installed[0]?.id ?? "");
+    }
+  }, [installed, startAgentId]);
 
   const parsed = useMemo(() => parseDiff(patch), [patch]);
   // Every line is a div, and a div per line of a generated file is what makes
@@ -276,28 +304,60 @@ export function DiffView({ task }: { task: TaskView }) {
     setComposing(null);
   }
 
+  function commentsFor(checkoutId: string | null): ReviewComment[] {
+    return drafts.map((d) => ({
+      // Only qualify the path when the agent is not already inside that repo.
+      repo: checkoutId === d.checkoutId ? null : d.repo,
+      path: d.path,
+      line: d.line,
+      body: d.body,
+      code: d.code,
+    }));
+  }
+
   async function send() {
+    if (drafts.length === 0) return;
     const pane = agentPanes.find((p) => p.id === target);
-    if (!pane) {
-      toast("error", "No running agent in this task to send review notes to.");
+    if (pane) {
+      try {
+        const n = drafts.length;
+        await api.sendReview(pane.id, commentsFor(pane.checkout_id));
+        setDrafts([]);
+        toast("success", `Sent ${n} note(s) to ${pane.title}.`);
+      } catch (e) {
+        fail(e);
+      }
       return;
     }
+    // Notes stay queued: open a picker instead of failing after the work.
+    if (installed.length === 0) {
+      toast("error", "No agent CLI is installed — install one, then send these notes.");
+      return;
+    }
+    setStartScope(null);
+    setStarting(true);
+  }
+
+  async function startAndSend() {
+    if (!startAgentId || drafts.length === 0) return;
+    setStartingBusy(true);
     try {
-      await api.sendReview(
-        pane.id,
-        drafts.map((d) => ({
-          // Only qualify the path when the agent is not already inside that repo.
-          repo: pane.checkout_id === d.checkoutId ? null : d.repo,
-          path: d.path,
-          line: d.line,
-          body: d.body,
-          code: d.code,
-        })),
+      const n = drafts.length;
+      const pane = await api.spawnAgent(
+        task.id,
+        startAgentId,
+        startScope,
+        reviewPrompt(commentsFor(startScope)),
       );
       setDrafts([]);
-      toast("success", `Sent ${drafts.length} note(s) to ${pane.title}.`);
+      setStarting(false);
+      await refreshPanes();
+      setTab("terminals");
+      toast("success", `Started ${pane.title} with ${n} note(s).`);
     } catch (e) {
       fail(e);
+    } finally {
+      setStartingBusy(false);
     }
   }
 
@@ -414,7 +474,9 @@ export function DiffView({ task }: { task: TaskView }) {
           <button className="btn" onClick={() => void load()}>Refresh</button>
         </div>
         <div className="review-tray">
-          {scopeTabs}
+          <div className="review-tray-group" title="What the list is measuring">
+            {scopeTabs}
+          </div>
         </div>
       </>
     );
@@ -557,36 +619,109 @@ export function DiffView({ task }: { task: TaskView }) {
       </div>
 
       <div className="review-tray">
-        {scopeTabs}
-        <span style={{ color: "var(--dim)" }}>
+        <div className="review-tray-group" title="What the list is measuring">
+          {scopeTabs}
+        </div>
+        <span className="review-tray-hint">
           {drafts.length === 0
-            ? "Click a line number to leave a note for the agent."
-            : `${drafts.length} note${drafts.length === 1 ? "" : "s"} queued across ${
-                new Set(drafts.map((d) => d.repo)).size
-              } repo(s)`}
+            ? "Click a line number to leave a note"
+            : agentPanes.length === 0
+              ? `${drafts.length} note${drafts.length === 1 ? "" : "s"} queued · no agent running — Send will start one`
+              : `${drafts.length} note${drafts.length === 1 ? "" : "s"} queued`}
         </span>
         <div className="spacer" />
-        {agentPanes.length > 1 && (
-          <select
-            style={{ width: "auto" }}
-            value={target}
-            onChange={(e) => setTarget(e.target.value)}
+        <div className="review-tray-actions">
+          {agentPanes.length > 1 && (
+            <label className="review-target">
+              <span>Send notes to</span>
+              <select
+                value={target}
+                onChange={(e) => setTarget(e.target.value)}
+              >
+                {agentPanes.map((p) => (
+                  <option key={p.id} value={p.id}>{p.title}</option>
+                ))}
+              </select>
+            </label>
+          )}
+          <button className="btn btn-sm" onClick={() => void load()}>Refresh</button>
+          <button className="btn btn-sm" onClick={() => setCommitting(true)}>Commit…</button>
+          <button
+            className="btn btn-sm btn-primary"
+            disabled={drafts.length === 0}
+            onClick={() => void send()}
+            title={
+              drafts.length === 0
+                ? "Add notes on line numbers first"
+                : agentPanes.length === 0
+                  ? installed.length === 0
+                    ? "Install an agent CLI first"
+                    : "No agent running — pick one to start with these notes"
+                  : agentPanes.length > 1
+                    ? `Send queued notes to ${agentPanes.find((p) => p.id === target)?.title ?? "the selected agent"}`
+                    : "Send queued notes to the agent"
+            }
           >
-            {agentPanes.map((p) => (
-              <option key={p.id} value={p.id}>{p.title}</option>
-            ))}
-          </select>
-        )}
-        <button className="btn btn-sm" onClick={() => void load()}>Refresh</button>
-        <button className="btn btn-sm" onClick={() => setCommitting(true)}>Commit…</button>
-        <button
-          className="btn btn-sm btn-primary"
-          disabled={drafts.length === 0}
-          onClick={() => void send()}
-        >
-          Send to agent
-        </button>
+            {agentPanes.length === 0 && drafts.length > 0 ? "Start agent & send" : "Send to agent"}
+            {drafts.length > 0 && <span className="badge">{drafts.length}</span>}
+          </button>
+        </div>
       </div>
+
+      {starting && (
+        <Modal
+          title="Start an agent for these notes"
+          onClose={() => !startingBusy && setStarting(false)}
+          footer={
+            <>
+              <button className="btn" disabled={startingBusy} onClick={() => setStarting(false)}>
+                Cancel
+              </button>
+              <button
+                className="btn btn-primary"
+                disabled={startingBusy || !startAgentId}
+                onClick={() => void startAndSend()}
+              >
+                {startingBusy ? "Starting…" : "Start & send"}
+              </button>
+            </>
+          }
+        >
+          <p style={{ marginTop: 0, color: "var(--dim)", fontSize: 13, lineHeight: 1.5 }}>
+            Nothing is running in this task. Pick an agent to start — your{" "}
+            {drafts.length} queued note{drafts.length === 1 ? "" : "s"} become its opening prompt.
+          </p>
+          <Field label="Agent">
+            <select
+              value={startAgentId}
+              onChange={(e) => setStartAgentId(e.target.value)}
+              disabled={startingBusy}
+            >
+              {installed.map((a) => (
+                <option key={a.id} value={a.id}>{a.name}</option>
+              ))}
+            </select>
+          </Field>
+          <Field
+            label="Start in"
+            hint="The task folder sees every repo as a sibling folder. Pinning to one hides the others from the agent."
+          >
+            <select
+              value={startScope ?? ""}
+              onChange={(e) => setStartScope(e.target.value || null)}
+              disabled={startingBusy}
+            >
+              <option value="">
+                The task folder
+                {task.checkouts.length > 1 ? ` — all ${task.checkouts.length} repos` : ""}
+              </option>
+              {task.checkouts.map((c) => (
+                <option key={c.id} value={c.id}>Only {c.project_name}</option>
+              ))}
+            </select>
+          </Field>
+        </Modal>
+      )}
 
       {committing && (
         <Modal

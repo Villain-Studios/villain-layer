@@ -114,7 +114,7 @@ export function ChatView() {
               })
             }
           >
-            + <span className="caret">▾</span>
+            +
           </button>
         </div>
 

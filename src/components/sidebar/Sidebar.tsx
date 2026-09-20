@@ -30,6 +30,7 @@ export function Sidebar() {
   const refreshPanes = useStore((s) => s.refreshPanes);
   const toast = useStore((s) => s.toast);
   const fail = useStore((s) => s.fail);
+  const cursorIde = useStore((s) => s.cursorIde);
 
   const [creating, setCreating] = useState(false);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -205,6 +206,12 @@ export function Sidebar() {
         onSelect: () => void revealItemInDir(task.root).catch(fail),
       },
     );
+    if (cursorIde) {
+      items.push({
+        label: "Open in Cursor",
+        onSelect: () => void api.openInCursor(task.root).catch(fail),
+      });
+    }
     if (available(task).length > 0) {
       items.push({
         label: "Add a repository…",

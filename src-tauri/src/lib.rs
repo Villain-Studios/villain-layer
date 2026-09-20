@@ -200,6 +200,8 @@ pub fn run() {
             commands::set_worktree_root,
             commands::set_ui_prefs,
             commands::disconnect,
+            commands::cursor_ide_installed,
+            commands::open_in_cursor,
         ])
         .build(tauri::generate_context!())
         .expect("error while building villain-layer")

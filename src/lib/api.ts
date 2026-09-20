@@ -107,7 +107,8 @@ export const api = {
   jiraTransitions: (key: string) => invoke<JiraTransition[]>("jira_transitions", { key }),
   jiraTransition: (key: string, transitionId: string) =>
     invoke<void>("jira_transition", { key, transitionId }),
-  taskPrompt: (taskId: string) => invoke<string>("task_prompt", { taskId }),
+  taskPrompt: (taskId: string, checkoutId?: string | null) =>
+    invoke<string>("task_prompt", { taskId, checkoutId: checkoutId ?? null }),
   handoffPrompt: (paneId: string) => invoke<string>("handoff_prompt", { paneId }),
   draftPrDescription: (taskId: string) =>
     invoke<string>("draft_pr_description", { taskId }),
@@ -173,6 +174,8 @@ export const api = {
   setWorktreeRoot: (path: string | null) => invoke<void>("set_worktree_root", { path }),
   setUiPrefs: (ui: UiPrefs) => invoke<void>("set_ui_prefs", { ui }),
   disconnect: (which: "jira" | "github" | "slack") => invoke<void>("disconnect", { which }),
+  cursorIdeInstalled: () => invoke<boolean>("cursor_ide_installed"),
+  openInCursor: (path: string) => invoke<void>("open_in_cursor", { path }),
 };
 
 export function errMessage(e: unknown): string {

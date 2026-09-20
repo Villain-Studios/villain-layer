@@ -394,7 +394,38 @@ textarea { resize: vertical; font-family: var(--mono); }
   padding: 8px 12px;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 14px;
+}
+.review-tray-group { flex: none; }
+.review-tray-group .subtabs { margin-left: 0; }
+.review-tray-hint {
+  color: var(--dimmer);
+  font-size: 12.5px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.review-tray-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+.review-tray-actions select { width: auto; max-width: 220px; }
+.review-target {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  color: var(--dim);
+}
+.review-target select { width: auto; max-width: 200px; }
+.review-tray-actions .badge {
+  margin-left: 6px;
+  font-size: 11px;
+  font-family: var(--mono);
+  opacity: 0.85;
 }
 
 /* -------------------------------------------------------------------- pr */
@@ -737,7 +768,7 @@ textarea { resize: vertical; font-family: var(--mono); }
   -webkit-app-region: drag;
 }
 .topbar-left { display: flex; align-items: center; min-width: 0; }
-.topbar-center { display: flex; align-items: center; gap: 4px; }
+.topbar-center { display: flex; align-items: center; gap: 2px; padding: 3px; border-radius: 8px; background: var(--bg); border: 1px solid var(--border); }
 .topbar-right { display: flex; align-items: center; gap: 6px; justify-content: flex-end; }
 .watch-chip {
   font-size: 12px;
@@ -754,22 +785,27 @@ textarea { resize: vertical; font-family: var(--mono); }
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 6px 13px;
+  padding: 5px 12px;
   border-radius: var(--radius);
-  color: var(--dim);
+  color: #a8a8b8;
   font-size: 14px;
+  font-weight: 500;
 }
 .viewtab:hover { background: var(--panel-2); color: var(--text); }
-.viewtab.active { color: var(--text); background: var(--panel-2); border-color: var(--border); }
+.viewtab.active {
+  color: var(--text);
+  background: var(--panel-2);
+  border-color: var(--accent-dim);
+}
 .viewtab .badge {
   font-size: 11px;
   font-family: var(--mono);
-  color: var(--dimmer);
-  background: var(--bg);
+  color: #8a8a98;
+  background: var(--panel);
   border-radius: 9px;
   padding: 1px 6px;
 }
-.viewtab.active .badge { color: var(--accent); }
+.viewtab.active .badge { color: var(--accent); background: #1a1628; }
 
 .views { flex: 1; overflow: hidden; display: flex; }
 .app { display: grid; grid-template-columns: 260px 1fr; height: 100%; width: 100%; }
@@ -1111,21 +1147,6 @@ textarea { resize: vertical; font-family: var(--mono); }
 }
 .limit-banner b { color: var(--text); }
 
-/* The pane bar's single launcher. Wider than its glyph so it stays an easy
-   target, and the caret says it opens a menu rather than acting immediately. */
-.btn-add {
-  font-size: 16px;
-  line-height: 1;
-  padding: 4px 10px;
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-}
-.btn-add .caret {
-  font-size: 10px;
-  opacity: 0.65;
-}
-
 /* The Jira half of the new-task dialog, set apart so the form reads as two
    steps rather than one long column of fields. */
 .jira-fields {
@@ -1150,34 +1171,45 @@ textarea { resize: vertical; font-family: var(--mono); }
 .type-pick:hover { border-color: var(--accent-dim); }
 .type-pick.active { color: var(--text); border-color: var(--accent); background: var(--panel-2); }
 
-/* Tickets: two ways of looking — your own queue, and everything else. */
-.subtabs { display: flex; gap: 2px; margin-left: 6px; }
+/* The pane bar's single launcher. Wider than its glyph so it stays an easy
+   target; the menu itself is what says more than one thing can start. */
+.btn-add {
+  font-size: 16px;
+  line-height: 1;
+  padding: 4px 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+}
+
+/* Tickets (and Diff scope): equal sub-tabs in a shared track. */
+.subtabs {
+  display: flex;
+  gap: 2px;
+  margin-left: 6px;
+  padding: 3px;
+  border-radius: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
 .subtabs button {
   padding: 4px 11px;
   font-size: 13px;
-  color: var(--dim);
-  border-radius: 20px;
+  font-weight: 500;
+  color: #a8a8b8;
+  border-radius: var(--radius);
   border: 1px solid transparent;
 }
-.subtabs button:hover { color: var(--text); }
+.subtabs button:hover { color: var(--text); background: var(--panel-2); }
 .subtabs button.active {
   color: var(--text);
   background: var(--panel-2);
   border-color: var(--accent-dim);
 }
-/*
-  The way onto the whole board, sitting next to a tab that merely relabels
-  what is already on screen. Dimmed like its neighbour, it read as the less
-  interesting of the two, which is backwards.
-*/
-.subtabs button.call {
-  color: var(--accent);
-  background: transparent;
-  border-color: transparent;
-}
-.subtabs button.call:hover { border-color: var(--accent-dim); }
 
-.subtabs .badge { margin-left: 6px; font-size: 11px; color: var(--dimmer); font-family: var(--mono); }
+.subtabs .badge { margin-left: 6px; font-size: 11px; color: #8a8a98; font-family: var(--mono); }
+.subtabs button.active .badge { color: var(--accent); }
 
 .browse-bar {
   display: flex;

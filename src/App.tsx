@@ -38,6 +38,7 @@ export default function App() {
   const dismissToast = useStore((s) => s.dismissToast);
   const toast = useStore((s) => s.toast);
   const fail = useStore((s) => s.fail);
+  const cursorIde = useStore((s) => s.cursorIde);
 
   /** The last PR state each repo was seen in, so only changes are announced. */
   const seenPrs = useRef(
@@ -294,6 +295,15 @@ export default function App() {
                       )}
                       {totals && totals.conflicted > 0 && (
                         <span className="chip del">{totals.conflicted} conflicts</span>
+                      )}
+                      {cursorIde && (
+                        <button
+                          className="btn btn-sm"
+                          title={`Open ${task.root} in Cursor`}
+                          onClick={() => void api.openInCursor(task.root).catch(fail)}
+                        >
+                          Cursor ↗
+                        </button>
                       )}
                       {task.issue_url && (
                         <button

@@ -2847,6 +2847,51 @@ pub async fn set_checkout_base(
     })?
 }
 
+/// What each of a task's branches is measured against, one row per repository.
+#[derive(Debug, Serialize)]
+pub struct RepoBranchFacts {
+    pub checkout_id: String,
+    pub repo: String,
+    pub base: String,
+    #[serde(flatten)]
+    pub facts: git::BranchFacts,
+}
+
+#[tauri::command]
+pub fn task_branch_facts(
+    state: State<'_, AppState>,
+    task_id: String,
+) -> Result<Vec<RepoBranchFacts>> {
+    let task = state.config.task(&task_id)?;
+    Ok(state
+        .config
+        .checkouts_of(&task_id)
+        .into_iter()
+        .map(|c| RepoBranchFacts {
+            repo: state
+                .config
+                .project(&c.project_id)
+                .map(|p| p.name)
+                .unwrap_or_else(|_| "(unknown)".into()),
+            facts: git::branch_facts(
+                &PathBuf::from(&c.path),
+                &task.branch,
+                &c.base,
+                c.base_commit.as_deref(),
+            ),
+            base: c.base,
+            checkout_id: c.id,
+        })
+        .collect())
+}
+
+/// What this repository could open a pull request against.
+#[tauri::command]
+pub fn checkout_branches(state: State<'_, AppState>, checkout_id: String) -> Result<Vec<String>> {
+    let checkout = state.config.checkout(&checkout_id)?;
+    git::remote_branches(&PathBuf::from(&checkout.path))
+}
+
 /// Move the open pull request for a checkout onto its current base.
 #[tauri::command]
 pub async fn github_retarget_pr(

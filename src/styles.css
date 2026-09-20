@@ -634,6 +634,18 @@ textarea { resize: vertical; font-family: var(--mono); }
   font-family: var(--sans);
   font-weight: 600;
 }
+.diff-summary {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  font-family: var(--mono);
+}
+.diff-summary b { font-family: var(--sans); }
+
 .diff-repo-banner {
   flex: none;
   background: var(--panel-2);

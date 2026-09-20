@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../lib/api";
 import { useStore } from "../store";
-import type { ChangedFile, DiffScope, RepoResult, TaskView } from "../lib/types";
+import type { ChangedFile, DiffScope, RepoBranchFacts, RepoResult, TaskView } from "../lib/types";
 import { Field, Modal } from "./ui";
 import { read, write } from "../lib/persist";
 
@@ -157,6 +157,7 @@ export function DiffView({ task }: { task: TaskView }) {
 
   const multi = task.checkouts.length > 1;
   const current = files.find((f) => fileKey(f) === selected) ?? null;
+  const [facts, setFacts] = useState<RepoBranchFacts[]>([]);
 
   async function load() {
     try {
@@ -171,6 +172,12 @@ export function DiffView({ task }: { task: TaskView }) {
   }
 
   useEffect(() => { void load(); /* eslint-disable-next-line */ }, [task.id, scope]);
+
+  // What the numbers are measured against. Asked of git rather than worked out
+  // from the file list, and reloaded with it so the two always agree.
+  useEffect(() => {
+    api.taskBranchFacts(task.id).then(setFacts).catch(() => setFacts([]));
+  }, [task.id, files]);
 
   useEffect(() => {
     if (!current) { setPatch(""); return; }
@@ -314,6 +321,71 @@ export function DiffView({ task }: { task: TaskView }) {
   // The scope switch lives in the tray under the diff, and the tray is drawn
   // in both states: an empty "uncommitted" view is exactly when someone wants
   // to flip to the whole branch and see what was committed.
+  /**
+   * What this view is comparing, said out loud.
+   *
+   * The counts above a diff mean nothing without their baseline: "2 files" is
+   * two files *against what*. Worse, a worktree with no recorded branch point
+   * falls back to the merge base, which credits this branch with every commit
+   * that arrived from anywhere else — which is how a two-line edit comes to
+   * list a hundred and twenty-nine files. That distinction is now on screen
+   * rather than buried in the difference between two similar numbers.
+   */
+  const summary = (() => {
+    const adds = files.reduce((n, f) => n + f.additions, 0);
+    const dels = files.reduce((n, f) => n + f.deletions, 0);
+
+    if (scope === "uncommitted") {
+      return {
+        what: "against the last commit — written, but not committed yet",
+        detail: "This is what `git status` shows: the working tree, including untracked files.",
+        adds,
+        dels,
+      };
+    }
+
+    const commits = facts.reduce((n, f) => n + f.commits, 0);
+    const unpushed = facts.reduce((n, f) => n + f.unpushed, 0);
+    const guessed = facts.filter((f) => !f.baseline_recorded);
+    const one = facts.length === 1 ? facts[0] : null;
+
+    const from = one
+      ? one.baseline_recorded
+        ? `since ${one.baseline}, where this branch left ${one.base}`
+        : `since ${one.baseline}, the merge base with ${one.base}`
+      : `across ${facts.length} repositories`;
+
+    const pushed = facts.every((f) => !f.has_remote)
+      ? "never pushed"
+      : unpushed > 0
+        ? `${unpushed} not pushed`
+        : "all pushed";
+
+    return {
+      what: `${commits} commit${commits === 1 ? "" : "s"} ${from} · ${pushed}`,
+      detail: guessed.length
+        ? `No branch point was recorded for ${
+            one ? "this worktree" : `${guessed.length} of these repositories`
+          }, so the comparison falls back to the merge base — commits merged in from elsewhere are counted here too.`
+        : "Measured from the commit this worktree was created at, so a moving base branch cannot inflate it.",
+      adds,
+      dels,
+    };
+  })();
+
+  const summaryBar = (
+    <div className="diff-summary" title={summary.detail}>
+      <b>{scope === "uncommitted" ? "Uncommitted" : "Whole branch"}</b>
+      <span style={{ color: "var(--dim)" }}>{summary.what}</span>
+      <div className="spacer" />
+      <span style={{ color: "var(--dim)" }}>
+        {files.length} file{files.length === 1 ? "" : "s"}
+      </span>
+      <span style={{ color: "var(--green)" }}>+{summary.adds}</span>
+      <span style={{ color: "var(--red)" }}>−{summary.dels}</span>
+    </div>
+  );
+
   const scopeTabs = (
     <div className="subtabs">
       {(["uncommitted", "branch"] as DiffScope[]).map((v) => (
@@ -337,6 +409,7 @@ export function DiffView({ task }: { task: TaskView }) {
     const where = multi ? "any of the task's repos" : "this worktree";
     return (
       <>
+        {summaryBar}
         <div className="empty">
           <h2>{scope === "uncommitted" ? "Nothing uncommitted" : "No changes yet"}</h2>
           <p>
@@ -355,6 +428,7 @@ export function DiffView({ task }: { task: TaskView }) {
 
   return (
     <>
+      {summaryBar}
       <div className="diff">
         <div className="diff-files" style={{ width }}>
           {groups.map((g) => (

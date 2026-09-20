@@ -14,6 +14,7 @@ import type {
   MatchKind,
   PaneInfo,
   Project,
+  RepoBranchFacts,
   RepoResult,
   RepoRule,
   RepoSet,
@@ -166,6 +167,10 @@ export const api = {
   githubAllPrs: () => invoke<TaskPrs[]>("github_all_prs"),
   setCheckoutBase: (checkoutId: string, base: string) =>
     invoke<void>("set_checkout_base", { checkoutId, base }),
+  taskBranchFacts: (taskId: string) =>
+    invoke<RepoBranchFacts[]>("task_branch_facts", { taskId }),
+  checkoutBranches: (checkoutId: string) =>
+    invoke<string[]>("checkout_branches", { checkoutId }),
   githubRetargetPr: (checkoutId: string) =>
     invoke<string>("github_retarget_pr", { checkoutId }),
   githubOpenPrs: (taskId: string, title: string, body: string, draft: boolean) =>

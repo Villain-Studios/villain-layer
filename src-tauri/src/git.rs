@@ -60,6 +60,31 @@ pub fn default_branch(dir: &Path) -> String {
     current_branch(dir).unwrap_or_else(|_| "main".into())
 }
 
+/// The branches a pull request could be opened against, newest first.
+///
+/// Read from the worktree rather than asked of GitHub: it is instant, it works
+/// with no network, and a remote-tracking ref is exactly what a base has to
+/// name anyway. A branch pushed by somebody else since the last fetch will not
+/// be in here, which is why the field that uses this still takes anything
+/// typed into it.
+pub fn remote_branches(dir: &Path) -> Result<Vec<String>> {
+    let out = run(
+        dir,
+        &[
+            "for-each-ref",
+            "--format=%(refname:short)",
+            "--sort=-committerdate",
+            "refs/remotes/origin",
+        ],
+    )?;
+    Ok(out
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("origin/"))
+        .filter(|b| *b != "HEAD")
+        .map(str::to_string)
+        .collect())
+}
+
 pub fn branch_exists(dir: &Path, branch: &str) -> bool {
     run(
         dir,
@@ -318,6 +343,63 @@ pub fn baseline(dir: &Path, base: &str, base_commit: Option<&str>) -> String {
         .or_else(|_| run(dir, &["merge-base", base, "HEAD"]))
         .map(|s| s.trim().to_string())
         .unwrap_or_else(|_| base.to_string())
+}
+
+/// What a branch amounts to, so a diff can say plainly what it is showing.
+#[derive(Debug, Clone, Serialize)]
+pub struct BranchFacts {
+    /// The commit the branch is measured from, abbreviated.
+    pub baseline: String,
+    /// Whether that is the branch point this worktree recorded when it was
+    /// made, or a merge base worked out afterwards. The two part company as
+    /// soon as the base branch moves, and which one is in use decides whether
+    /// the file list can be trusted to be this branch's own work.
+    pub baseline_recorded: bool,
+    /// Commits on this branch since that point.
+    pub commits: u32,
+    /// Commits not yet on the remote branch.
+    pub unpushed: u32,
+    /// Whether the branch exists on the remote at all.
+    pub has_remote: bool,
+}
+
+/// Measure a branch against its base and its remote.
+///
+/// Every number here is one `git` can answer directly; none of it is inferred
+/// from the file list, which is what makes it safe to print beside one.
+pub fn branch_facts(
+    dir: &Path,
+    branch: &str,
+    base: &str,
+    base_commit: Option<&str>,
+) -> BranchFacts {
+    let point = baseline(dir, base, base_commit);
+    // `baseline` falls back when the recorded commit is not in this worktree,
+    // so believing `base_commit` alone would overstate what is known.
+    let recorded = base_commit
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+        .is_some_and(|c| c == point);
+
+    let count = |range: &str| {
+        run(dir, &["rev-list", "--count", range])
+            .ok()
+            .and_then(|s| s.trim().parse::<u32>().ok())
+            .unwrap_or(0)
+    };
+
+    let remote = format!("origin/{branch}");
+    let has_remote = run(dir, &["rev-parse", "--verify", "--quiet", &remote]).is_ok();
+
+    BranchFacts {
+        commits: count(&format!("{point}..HEAD")),
+        unpushed: if has_remote { count(&format!("{remote}..HEAD")) } else { 0 },
+        has_remote,
+        baseline: run(dir, &["rev-parse", "--short", &point])
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|_| point.chars().take(8).collect()),
+        baseline_recorded: recorded,
+    }
 }
 
 /// How many files differ from the baseline, committed or not.

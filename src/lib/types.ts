@@ -230,6 +230,19 @@ export interface CheckoutPr {
   error: string | null;
 }
 
+export interface RepoBranchFacts {
+  checkout_id: string;
+  repo: string;
+  base: string;
+  /** Abbreviated commit the branch is measured from. */
+  baseline: string;
+  /** True when that is the branch point recorded at creation, not a merge base. */
+  baseline_recorded: boolean;
+  commits: number;
+  unpushed: number;
+  has_remote: boolean;
+}
+
 export interface TaskPrs {
   task_id: string;
   rows: CheckoutPr[];

@@ -330,7 +330,9 @@ export function Sidebar() {
   // Two lists, because they are two questions. A task with a PR open is no
   // longer asking what to write — it is waiting on somebody, and what it is
   // waiting on is what the second list says.
-  const reviewing = tasks.filter((t) => (prs[t.id] ?? []).some((r) => r.pr));
+  const reviewing = tasks.filter((t) =>
+    (prs[t.id] ?? []).some((r) => r.pr && r.pr.state === "open"),
+  );
   const working = tasks.filter((t) => !reviewing.includes(t));
   const ordered = [...working, ...reviewing];
 

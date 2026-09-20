@@ -42,6 +42,30 @@ const TASK_REVIEW: Record<TaskReview, { word: string; color: string }> = {
   merged: { word: "Merged", color: "var(--green)" },
 };
 
+/**
+ * One row per check name, keeping the worst outcome.
+ *
+ * A commit can carry several check suites — the same workflow run once for the
+ * push and again for the pull request — so the same names come back twice and
+ * the list doubles. Collapsing on the worst means a failure can never hide
+ * behind a duplicate of itself that happened to pass.
+ */
+function worstByName(checks: CheckRun[]): CheckRun[] {
+  const rank = (c: CheckRun) => {
+    if (c.status !== "completed") return 1;
+    if (c.conclusion === "success" || c.conclusion === "skipped" || c.conclusion === "neutral") {
+      return 0;
+    }
+    return 2;
+  };
+  const by = new Map<string, CheckRun>();
+  for (const c of checks) {
+    const seen = by.get(c.name);
+    if (!seen || rank(c) > rank(seen)) by.set(c.name, c);
+  }
+  return [...by.values()];
+}
+
 function checkColor(c: CheckRun) {
   if (c.status !== "completed") return "var(--amber)";
   if (c.conclusion === "success") return "var(--green)";
@@ -72,6 +96,7 @@ export function PrPanel({ task }: { task: TaskView }) {
    * one in the meantime.
    */
   const [loaded, setLoaded] = useState(false);
+  const [branches, setBranches] = useState<Record<string, string[]>>({});
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [title, setTitle] = useState(task.name);
@@ -106,6 +131,25 @@ export function PrPanel({ task }: { task: TaskView }) {
     setLoaded(true);
   }, [watched]);
 
+  // What the base field offers. Keyed on the set of repos rather than the rows
+  // themselves, so a sweep landing every ninety seconds does not refetch it.
+  const checkoutIds = rows.map((r) => r.checkout_id).join(",");
+  useEffect(() => {
+    let stop = false;
+    void (async () => {
+      for (const id of checkoutIds.split(",").filter(Boolean)) {
+        try {
+          const list = await api.checkoutBranches(id);
+          if (stop) return;
+          setBranches((b) => ({ ...b, [id]: list }));
+        } catch {
+          // A repo whose branches cannot be listed still takes a typed base.
+        }
+      }
+    })();
+    return () => { stop = true; };
+  }, [checkoutIds]);
+
   // Stop waiting for a draft if the panel goes away.
   useEffect(() => () => { if (pollRef.current) window.clearInterval(pollRef.current); }, []);
 
@@ -132,6 +176,17 @@ export function PrPanel({ task }: { task: TaskView }) {
     if (ok.length) {
       toast("success", `${verb} ${ok.map((r) => `${r.repo} (${r.detail})`).join(", ")}`);
     }
+  }
+
+  function openPr(url: string) {
+    void openUrl(url).catch(() => toast("error", "Could not open the browser"));
+  }
+
+  function copyPr(url: string, number: number) {
+    navigator.clipboard
+      .writeText(url)
+      .then(() => toast("success", `Copied the link to #${number}`))
+      .catch(() => toast("error", "Could not reach the clipboard"));
   }
 
   /** Where this repo's next PR goes. Changing it leaves an open PR alone. */
@@ -247,7 +302,10 @@ export function PrPanel({ task }: { task: TaskView }) {
   // after it landed still needs one, and the row keeps the old PR only so the
   // panel can show what became of it.
   const pending = rows.filter((r) => (!r.pr || r.pr.state !== "open") && r.changed > 0);
-  const open = rows.filter((r) => r.pr);
+  // Only an open PR is worth a card. One merged or closed is an outcome, not
+  // something to read twenty check runs about.
+  const live = rows.filter((r) => r.pr && r.pr.state === "open");
+  const done = rows.filter((r) => r.pr && r.pr.state !== "open");
   const review = taskReview(rows);
   const said = reviewComments(rows);
 
@@ -260,7 +318,7 @@ export function PrPanel({ task }: { task: TaskView }) {
           <span className="dot" style={{ background: TASK_REVIEW[review].color }} />
           <b>{TASK_REVIEW[review].word}</b>
           <span className="muted">
-            {open.length} PR{open.length === 1 ? "" : "s"}
+            {live.length} PR{live.length === 1 ? "" : "s"}
             {/* A task is only as reviewed as its least reviewed repository. */}
             {review === "incomplete" &&
               `, ${pending.length} repo${pending.length === 1 ? "" : "s"} still without one`}
@@ -269,7 +327,7 @@ export function PrPanel({ task }: { task: TaskView }) {
         </div>
       )}
 
-      {open.map((row) => (
+      {live.map((row) => (
         <div key={row.checkout_id} className="card">
           <div className="row">
             <h3 style={{ margin: 0 }}>
@@ -288,26 +346,13 @@ export function PrPanel({ task }: { task: TaskView }) {
               At the top, not under the checks: a PR with a dozen check runs
               put its only link below the fold, which is no link at all.
             */}
-            <button
-              className="btn-sm"
-              title="Open on GitHub"
-              onClick={() =>
-                void openUrl(row.pr!.url).catch(() =>
-                  toast("error", "Could not open the browser"),
-                )
-              }
-            >
+            <button className="btn-sm" title="Open on GitHub" onClick={() => openPr(row.pr!.url)}>
               ↗
             </button>
             <button
               className="btn-sm"
               title="Copy link"
-              onClick={() => {
-                navigator.clipboard
-                  .writeText(row.pr!.url)
-                  .then(() => toast("success", `Copied the link to #${row.pr!.number}`))
-                  .catch(() => toast("error", "Could not reach the clipboard"));
-              }}
+              onClick={() => copyPr(row.pr!.url, row.pr!.number)}
             >
               ⧉
             </button>
@@ -351,7 +396,7 @@ export function PrPanel({ task }: { task: TaskView }) {
 
           {row.checks.length > 0 && (
             <div style={{ marginTop: 10 }}>
-              {row.checks.map((c, i) => (
+              {worstByName(row.checks).map((c, i) => (
                 <div key={`${c.name}:${i}`} className="check">
                   <span className="dot" style={{ background: checkColor(c) }} />
                   <span className="name">{c.name}</span>
@@ -363,19 +408,44 @@ export function PrPanel({ task }: { task: TaskView }) {
           )}
 
           <div className="row" style={{ marginTop: 10 }}>
-            <button
-              className="btn btn-sm"
-              onClick={() =>
-                void openUrl(row.pr!.url).catch(() =>
-                  toast("error", "Could not open the browser"),
-                )
-              }
-            >
+            <button className="btn btn-sm" onClick={() => openPr(row.pr!.url)}>
               Open on GitHub
             </button>
           </div>
         </div>
       ))}
+
+      {done.length > 0 && (
+        <div className="card">
+          <h3>Already decided</h3>
+          {done.map((row) => (
+            <div key={row.checkout_id} className="check">
+              <span
+                className="dot"
+                style={{ background: row.pr!.merged ? "var(--green)" : "var(--dim)" }}
+              />
+              <span className="name">
+                {row.repo} #{row.pr!.number}
+              </span>
+              <span className="muted">
+                {row.pr!.merged
+                  ? `merged into ${row.pr!.base}`
+                  : "closed without merging"}
+              </span>
+              <button className="btn-sm" title="Open on GitHub" onClick={() => openPr(row.pr!.url)}>
+                ↗
+              </button>
+              <button
+                className="btn-sm"
+                title="Copy link"
+                onClick={() => copyPr(row.pr!.url, row.pr!.number)}
+              >
+                ⧉
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       {loaded && rows.some((r) => r.error) && (
         <div className="card">
@@ -393,7 +463,7 @@ export function PrPanel({ task }: { task: TaskView }) {
       {loaded && (
       <div className="card">
         <h3>
-          {pending.length === 0 && open.length > 0
+          {pending.length === 0 && live.length > 0
             ? "Everything with changes has a PR"
             : `Open pull request${pending.length === 1 ? "" : "s"}`}
         </h3>
@@ -416,12 +486,22 @@ export function PrPanel({ task }: { task: TaskView }) {
                 <div className="spacer" />
                 <span>→</span>
                 <input
-                  style={{ width: 210 }}
+                  list={`branches-${r.checkout_id}`}
+                  style={{ width: 240 }}
                   defaultValue={r.base}
                   title="The branch this repository's pull request is opened against"
                   onBlur={(e) => void setBase(r, e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
                 />
+                {/*
+                  Typing still works: the list is the worktree's remote-tracking
+                  refs, so a branch pushed since the last fetch is not in it.
+                */}
+                <datalist id={`branches-${r.checkout_id}`}>
+                  {(branches[r.checkout_id] ?? []).map((b) => (
+                    <option key={b} value={b} />
+                  ))}
+                </datalist>
               </div>
             ))}
           </div>

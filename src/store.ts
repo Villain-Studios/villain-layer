@@ -351,23 +351,27 @@ export type TaskReview =
  * has been shown.
  */
 export function taskReview(rows: CheckoutPr[]): TaskReview {
-  const open = rows.filter((r) => r.pr);
-  if (open.length === 0) return "none";
+  // A PR closed without merging is neither review in progress nor work that
+  // landed — it is one somebody gave up on. The row keeps it so the panel can
+  // say what became of it, but it answers nothing about where the task stands.
+  const live = rows.filter((r) => r.pr && (r.pr.state === "open" || r.pr.merged));
+  if (live.length === 0) return "none";
 
   // Merged is the last word: a "changes requested" left outstanding on a PR
   // that landed anyway is history, not something still to answer.
-  if (open.every((r) => r.pr!.merged)) return "merged";
-  if (open.some((r) => r.verdict === "changes_requested")) return "changes_requested";
-  if (rows.some((r) => !r.pr && r.changed > 0)) return "incomplete";
-  if (open.every((r) => r.verdict === "approved")) return "approved";
-  if (open.some((r) => r.verdict === "commented")) return "commented";
+  if (live.every((r) => r.pr!.merged)) return "merged";
+  if (live.some((r) => r.verdict === "changes_requested")) return "changes_requested";
+  if (rows.some((r) => (!r.pr || r.pr.state !== "open") && r.changed > 0)) return "incomplete";
+  if (live.every((r) => r.verdict === "approved")) return "approved";
+  if (live.some((r) => r.verdict === "commented")) return "commented";
   return "open";
 }
 
 /** How many comments a task's PRs are carrying, conversation and inline both. */
 export function reviewComments(rows: CheckoutPr[]): number {
   return rows.reduce(
-    (n, r) => n + (r.pr ? r.pr.comments + r.pr.review_comments : 0),
+    (n, r) =>
+      n + (r.pr && r.pr.state === "open" ? r.pr.comments + r.pr.review_comments : 0),
     0,
   );
 }

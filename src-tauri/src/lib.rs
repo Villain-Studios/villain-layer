@@ -166,6 +166,8 @@ pub fn run() {
             commands::github_task_prs,
             commands::github_all_prs,
             commands::set_checkout_base,
+            commands::checkout_branches,
+            commands::task_branch_facts,
             commands::github_retarget_pr,
             commands::github_open_prs,
             commands::slack_connect,

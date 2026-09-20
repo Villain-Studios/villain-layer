@@ -95,7 +95,7 @@ Four top-level views:
 | **Work** | your tasks. With one selected: its terminals, diff and pull requests. With none selected: every agent across every task — what it is doing, how long since it last printed, and whether it has gone quiet waiting for you |
 | **Tickets** | your Jira backlog, grouped by epic, with each issue's own Jira type icon |
 | **Chat** | a standing agent with no worktree |
-| **Repos** | the repositories Villain Layer knows about, their groups, saved sets and Jira rules |
+| **Repos** | the repositories Villain Layer knows about, and their groups |
 
 Work flows Tickets → Work: an issue becomes a task.
 
@@ -139,21 +139,16 @@ Past about ten repos a flat list stops being usable, so repos carry a **group**
 group. Groups are collapsible in the sidebar and in the picker, and the picker
 gets a filter box and select-all per group.
 
-Which repos a ticket needs is then answered by a cascade, most confident first:
+Which repos a ticket needs is then answered from what you did last, most
+confident first:
 
-1. **Jira rules.** "Tickets with component *Payments* touch these repos."
-   You write these in Settings → Repos; being explicit, they outrank everything.
-2. **The epic.** What the last task under the same epic used. Tickets in one epic
+1. **The epic.** What the last task under the same epic used. Tickets in one epic
    usually hit the same repos.
-3. **The Jira project.** What the last task in the project used.
+2. **The Jira project.** What the last task in the project used.
 
 Whatever it picks, the picker says *why* — "preselected from last task under
 ACME-21131" — so a stale guess is visible rather than silent, and you can always
 change it.
-
-**Saved sets** sit alongside that: select some repos, hit *save these as a set*,
-name it, and it becomes a one-click chip in the picker from then on. Good for
-combinations that recur but that no rule quite describes.
 
 ## Chat
 

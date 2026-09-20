@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
-import { api } from "../lib/api";
-import { groupProjects, useStore } from "../store";
+import { groupProjects } from "../store";
 import type { Project } from "../lib/types";
 
 /**
@@ -17,15 +16,9 @@ export function RepoPicker({
   /** Why these were preselected, surfaced so the guess is auditable. */
   reason?: string | null;
 }) {
-  const repoSets = useStore((s) => s.repoSets);
-  const refreshRepos = useStore((s) => s.refreshRepos);
-  const toast = useStore((s) => s.toast);
-  const fail = useStore((s) => s.fail);
 
   const [query, setQuery] = useState("");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
-  const [naming, setNaming] = useState(false);
-  const [setName, setSetName] = useState("");
 
   const groups = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -43,24 +36,6 @@ export function RepoPicker({
 
   function setGroup(ids: string[], on: boolean) {
     onChange(on ? [...new Set([...picked, ...ids])] : picked.filter((p) => !ids.includes(p)));
-  }
-
-  function applySet(ids: string[], exact: boolean) {
-    // Clicking an already-applied set clears it, so chips toggle.
-    onChange(exact ? picked.filter((p) => !ids.includes(p)) : [...new Set([...picked, ...ids])]);
-  }
-
-  async function saveSet() {
-    if (!setName.trim()) return;
-    try {
-      await api.saveRepoSet(setName.trim(), picked);
-      await refreshRepos();
-      setNaming(false);
-      setSetName("");
-      toast("success", `Saved set "${setName.trim()}"`);
-    } catch (e) {
-      fail(e);
-    }
   }
 
   if (projects.length === 0) {
@@ -90,48 +65,6 @@ export function RepoPicker({
             <button className="btn-sm" title="Clear selection" onClick={() => onChange([])}>
               ✕
             </button>
-          )}
-        </div>
-      )}
-
-      {(repoSets.length > 0 || picked.length > 1) && (
-        <div className="picker-sets">
-          {repoSets.map((s) => {
-            const exact = s.project_ids.every((id) => picked.includes(id));
-            return (
-              <span
-                key={s.id}
-                className={`set-chip${exact ? " on" : ""}`}
-                title={s.project_ids.length + " repos"}
-                onClick={() => applySet(s.project_ids, exact)}
-              >
-                {s.name}
-              </span>
-            );
-          })}
-          {picked.length > 1 && !naming && (
-            <span className="set-chip" onClick={() => setNaming(true)}>
-              + save these {picked.length} as a set
-            </span>
-          )}
-          {naming && (
-            <span className="row" style={{ gap: 4 }}>
-              <input
-                autoFocus
-                style={{ width: 150 }}
-                placeholder="Set name"
-                value={setName}
-                onChange={(e) => setSetName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") void saveSet();
-                  if (e.key === "Escape") setNaming(false);
-                }}
-              />
-              <button className="btn btn-sm btn-primary" onClick={() => void saveSet()}>
-                Save
-              </button>
-              <button className="btn btn-sm" onClick={() => setNaming(false)}>✕</button>
-            </span>
           )}
         </div>
       )}

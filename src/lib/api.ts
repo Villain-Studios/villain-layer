@@ -11,13 +11,10 @@ import type {
   JiraIssueType,
   JiraPage,
   JiraTransition,
-  MatchKind,
   PaneInfo,
   Project,
   RepoBranchFacts,
   RepoResult,
-  RepoRule,
-  RepoSet,
   RepoSuggestion,
   Resumable,
   ReviewComment,
@@ -57,27 +54,11 @@ export const api = {
     invoke<AddedRepo>("add_checkout", { taskId, projectId }),
   removeCheckout: (checkoutId: string, force = false) =>
     invoke<void>("remove_checkout", { checkoutId, force }),
-  suggestRepos: (args: {
-    issueKey?: string | null;
-    epicKey?: string | null;
-    components?: string[];
-    labels?: string[];
-  }) => invoke<RepoSuggestion>("suggest_repos", {
-    issueKey: args.issueKey ?? null,
-    epicKey: args.epicKey ?? null,
-    components: args.components ?? [],
-    labels: args.labels ?? [],
-  }),
-
-  // repo sets and Jira rules
-  listRepoSets: () => invoke<RepoSet[]>("list_repo_sets"),
-  saveRepoSet: (name: string, projectIds: string[], id?: string | null) =>
-    invoke<RepoSet>("save_repo_set", { id: id ?? null, name, projectIds }),
-  deleteRepoSet: (id: string) => invoke<void>("delete_repo_set", { id }),
-  listRepoRules: () => invoke<RepoRule[]>("list_repo_rules"),
-  saveRepoRule: (kind: MatchKind, value: string, projectIds: string[], id?: string | null) =>
-    invoke<RepoRule>("save_repo_rule", { id: id ?? null, kind, value, projectIds }),
-  deleteRepoRule: (id: string) => invoke<void>("delete_repo_rule", { id }),
+  suggestRepos: (args: { issueKey?: string | null; epicKey?: string | null }) =>
+    invoke<RepoSuggestion>("suggest_repos", {
+      issueKey: args.issueKey ?? null,
+      epicKey: args.epicKey ?? null,
+    }),
 
   // panes
   listAgents: () => invoke<AgentStatus[]>("list_agents"),

@@ -71,12 +71,7 @@ export function TicketsView() {
     if (!open) { setTransitions([]); setReason(null); return; }
     setSuffix("");
     api.jiraTransitions(open.key).then(setTransitions).catch(() => setTransitions([]));
-    api.suggestRepos({
-      issueKey: open.key,
-      epicKey: open.epic_key,
-      components: open.components,
-      labels: open.labels,
-    })
+    api.suggestRepos({ issueKey: open.key, epicKey: open.epic_key })
       .then((s) => { setPicked(s.project_ids); setReason(s.reason); })
       .catch(() => { setPicked([]); setReason(null); });
   }, [open]);

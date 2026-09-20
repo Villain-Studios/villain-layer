@@ -2,8 +2,14 @@ import { create } from "zustand";
 import { api, errMessage } from "./lib/api";
 import { read, readOneOf, write } from "./lib/persist";
 import type {
-  AgentStatus, CheckoutPr, JiraIssue, JiraIssueType, PaneInfo, Project, RepoRule, RepoSet,
-  Settings, TaskView,
+  AgentStatus,
+  CheckoutPr,
+  JiraIssue,
+  JiraIssueType,
+  PaneInfo,
+  Project,
+  Settings,
+  TaskView,
 } from "./lib/types";
 
 export const TABS = ["terminals", "diff", "pr"] as const;
@@ -22,8 +28,6 @@ interface Toast {
 
 interface State {
   projects: Project[];
-  repoSets: RepoSet[];
-  repoRules: RepoRule[];
   tasks: TaskView[];
   panes: PaneInfo[];
   agents: AgentStatus[];
@@ -90,8 +94,6 @@ function stillThere(tasks: TaskView[], selected: string | null): string | null {
 
 export const useStore = create<State>((set, get) => ({
   projects: [],
-  repoSets: [],
-  repoRules: [],
   tasks: [],
   panes: [],
   prs: {},
@@ -127,23 +129,17 @@ export const useStore = create<State>((set, get) => ({
   fail: (e) => get().toast("error", errMessage(e)),
 
   refreshAll: async () => {
-    const [projects, tasks, panes, agents, repoSets, repoRules] = await Promise.all([
+    const [projects, tasks, panes, agents] = await Promise.all([
       api.listProjects(), api.listTasks(), api.listPanes(), api.listAgents(),
-      api.listRepoSets(), api.listRepoRules(),
     ]);
     set((s) => ({
-      projects, tasks, panes, agents, repoSets, repoRules,
+      projects, tasks, panes, agents,
       selectedTask: stillThere(tasks, s.selectedTask),
     }));
     await get().refreshSettings();
   },
 
-  refreshRepos: async () => {
-    const [projects, repoSets, repoRules] = await Promise.all([
-      api.listProjects(), api.listRepoSets(), api.listRepoRules(),
-    ]);
-    set({ projects, repoSets, repoRules });
-  },
+  refreshRepos: async () => set({ projects: await api.listProjects() }),
 
   refreshTasks: async () => {
     const tasks = await api.listTasks();

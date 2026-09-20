@@ -13,8 +13,8 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::agents;
 use crate::config::{
-    Checkout, ConfigStore, GithubConfig, JiraConfig, MatchKind, Project, RepoRule,
-    RepoSet, SavedPane, SlackConfig, Task, UiPrefs,
+    Checkout, ConfigStore, GithubConfig, JiraConfig, Project, SavedPane, SlackConfig, Task,
+    UiPrefs,
 };
 use crate::error::{Error, Result};
 use crate::git;
@@ -189,81 +189,6 @@ fn register_project(state: &AppState, path: &str, group: Option<&str>) -> Result
     })
 }
 
-// ------------------------------------------------- repo sets and Jira rules
-
-#[tauri::command]
-pub fn list_repo_sets(state: State<AppState>) -> Vec<RepoSet> {
-    state.config.read().repo_sets
-}
-
-#[tauri::command]
-pub fn save_repo_set(
-    state: State<AppState>,
-    id: Option<String>,
-    name: String,
-    project_ids: Vec<String>,
-) -> Result<RepoSet> {
-    if name.trim().is_empty() {
-        return Err(Error::Other("a set needs a name".into()));
-    }
-    if project_ids.is_empty() {
-        return Err(Error::Other("a set needs at least one repository".into()));
-    }
-    let set = RepoSet {
-        id: id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
-        name: name.trim().to_string(),
-        project_ids,
-    };
-    state.config.update(|c| {
-        match c.repo_sets.iter_mut().find(|s| s.id == set.id) {
-            Some(existing) => *existing = set.clone(),
-            None => c.repo_sets.push(set.clone()),
-        }
-        set.clone()
-    })
-}
-
-#[tauri::command]
-pub fn delete_repo_set(state: State<AppState>, id: String) -> Result<()> {
-    state.config.update(|c| c.repo_sets.retain(|s| s.id != id))
-}
-
-#[tauri::command]
-pub fn list_repo_rules(state: State<AppState>) -> Vec<RepoRule> {
-    state.config.read().repo_rules
-}
-
-#[tauri::command]
-pub fn save_repo_rule(
-    state: State<AppState>,
-    id: Option<String>,
-    kind: MatchKind,
-    value: String,
-    project_ids: Vec<String>,
-) -> Result<RepoRule> {
-    if value.trim().is_empty() {
-        return Err(Error::Other("a rule needs a component or label".into()));
-    }
-    let rule = RepoRule {
-        id: id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
-        kind,
-        value: value.trim().to_string(),
-        project_ids,
-    };
-    state.config.update(|c| {
-        match c.repo_rules.iter_mut().find(|r| r.id == rule.id) {
-            Some(existing) => *existing = rule.clone(),
-            None => c.repo_rules.push(rule.clone()),
-        }
-        rule.clone()
-    })
-}
-
-#[tauri::command]
-pub fn delete_repo_rule(state: State<AppState>, id: String) -> Result<()> {
-    state.config.update(|c| c.repo_rules.retain(|r| r.id != id))
-}
-
 #[tauri::command]
 pub fn remove_project(state: State<AppState>, id: String) -> Result<()> {
     state.config.update(|c| {
@@ -374,31 +299,21 @@ pub struct RepoSuggestion {
 }
 
 /// Which repositories to preselect for a ticket, in descending confidence:
-/// the user's own component/label rules, then what the last ticket in the same
-/// epic used, then the same Jira project, then nothing.
+/// what the last ticket in the same epic used, then the same Jira project,
+/// then whatever was used last.
 #[tauri::command]
 pub fn suggest_repos(
     state: State<AppState>,
     issue_key: Option<String>,
     epic_key: Option<String>,
-    components: Vec<String>,
-    labels: Vec<String>,
 ) -> RepoSuggestion {
-    suggest_from(
-        &state.config.read(),
-        issue_key.as_deref(),
-        epic_key.as_deref(),
-        &components,
-        &labels,
-    )
+    suggest_from(&state.config.read(), issue_key.as_deref(), epic_key.as_deref())
 }
 
 fn suggest_from(
     cfg: &crate::config::AppConfig,
     issue_key: Option<&str>,
     epic_key: Option<&str>,
-    components: &[String],
-    labels: &[String],
 ) -> RepoSuggestion {
     let known = |ids: Vec<String>| -> Vec<String> {
         ids.into_iter()
@@ -406,32 +321,7 @@ fn suggest_from(
             .collect()
     };
 
-    // 1. Explicit rules. Several can match; take the union.
-    let mut matched: Vec<String> = Vec::new();
-    let mut ids: Vec<String> = Vec::new();
-    for rule in &cfg.repo_rules {
-        let haystack = match rule.kind {
-            MatchKind::Component => components,
-            MatchKind::Label => labels,
-        };
-        if haystack.iter().any(|v| v.eq_ignore_ascii_case(&rule.value)) {
-            matched.push(rule.value.clone());
-            for id in &rule.project_ids {
-                if !ids.contains(id) {
-                    ids.push(id.clone());
-                }
-            }
-        }
-    }
-    let ids = known(ids);
-    if !ids.is_empty() {
-        return RepoSuggestion {
-            project_ids: ids,
-            reason: Some(format!("rule for {}", matched.join(", "))),
-        };
-    }
-
-    // 2. The same epic is a tighter signal than the same project.
+    // 1. The same epic is a tighter signal than the same project.
     if let Some(epic) = epic_key.filter(|e| !e.is_empty()) {
         let ids = known(cfg.last_repos.get(&format!("epic:{epic}")).cloned().unwrap_or_default());
         if !ids.is_empty() {
@@ -442,7 +332,7 @@ fn suggest_from(
         }
     }
 
-    // 3. The same Jira project. Bare keys are what v1 wrote.
+    // 2. The same Jira project. Bare keys are what v1 wrote.
     let project = issue_project(issue_key);
     if !project.is_empty() {
         for key in [format!("project:{project}"), project.clone()] {
@@ -3539,42 +3429,17 @@ mod tests {
     }
 
     #[test]
-    fn rules_outrank_history_and_union_across_matches() {
-        let mut c = cfg();
-        c.repo_rules = vec![
-            RepoRule {
-                id: "r1".into(),
-                kind: MatchKind::Component,
-                value: "Payments".into(),
-                project_ids: strs(&["api-billing"]),
-            },
-            RepoRule {
-                id: "r2".into(),
-                kind: MatchKind::Label,
-                value: "frontend".into(),
-                project_ids: strs(&["web"]),
-            },
-        ];
-        c.last_repos.insert("project:ACME".into(), strs(&["admin"]));
-
-        // Case-insensitive on both sides, and both matches contribute.
-        let s = suggest_from(&c, Some("ACME-1"), None, &strs(&["payments"]), &strs(&["FRONTEND"]));
-        assert_eq!(s.project_ids, strs(&["api-billing", "web"]));
-        assert!(s.reason.unwrap().contains("Payments"));
-    }
-
-    #[test]
     fn epic_memory_beats_project_memory() {
         let mut c = cfg();
         c.last_repos.insert("epic:ACME-100".into(), strs(&["api-orders", "api-billing"]));
         c.last_repos.insert("project:ACME".into(), strs(&["web"]));
 
-        let s = suggest_from(&c, Some("ACME-7"), Some("ACME-100"), &[], &[]);
+        let s = suggest_from(&c, Some("ACME-7"), Some("ACME-100"));
         assert_eq!(s.project_ids, strs(&["api-orders", "api-billing"]));
         assert_eq!(s.reason.as_deref(), Some("last task under ACME-100"));
 
         // A ticket in the project but under no known epic falls through.
-        let s = suggest_from(&c, Some("ACME-7"), Some("ACME-999"), &[], &[]);
+        let s = suggest_from(&c, Some("ACME-7"), Some("ACME-999"));
         assert_eq!(s.project_ids, strs(&["web"]));
         assert_eq!(s.reason.as_deref(), Some("last ACME ticket"));
     }
@@ -3583,23 +3448,20 @@ mod tests {
     fn falls_back_to_v1_bare_project_keys() {
         let mut c = cfg();
         c.last_repos.insert("ACME".into(), strs(&["web"]));
-        let s = suggest_from(&c, Some("ACME-3"), None, &[], &[]);
+        let s = suggest_from(&c, Some("ACME-3"), None);
         assert_eq!(s.project_ids, strs(&["web"]));
     }
 
     #[test]
     fn never_suggests_a_repo_that_was_removed() {
         let mut c = cfg();
-        c.repo_rules = vec![RepoRule {
-            id: "r1".into(),
-            kind: MatchKind::Component,
-            value: "Gone".into(),
-            project_ids: strs(&["deleted-repo"]),
-        }];
+        c.last_repos.insert("epic:ACME-100".into(), strs(&["deleted-repo"]));
         c.last_repos.insert("project:ACME".into(), strs(&["deleted-repo", "web"]));
 
-        // The rule matches but resolves to nothing, so the cascade continues.
-        let s = suggest_from(&c, Some("ACME-1"), None, &strs(&["Gone"]), &[]);
+        // The epic remembers a repository that is gone, so that tier resolves
+        // to nothing and the cascade continues rather than preselecting an id
+        // that matches no repository the user still has.
+        let s = suggest_from(&c, Some("ACME-1"), Some("ACME-100"));
         assert_eq!(s.project_ids, strs(&["web"]));
     }
 
@@ -3666,7 +3528,7 @@ mod tests {
 
     #[test]
     fn suggests_nothing_when_there_is_no_signal() {
-        let s = suggest_from(&cfg(), Some("ACME-1"), None, &[], &[]);
+        let s = suggest_from(&cfg(), Some("ACME-1"), None);
         assert!(s.project_ids.is_empty());
         assert!(s.reason.is_none());
     }

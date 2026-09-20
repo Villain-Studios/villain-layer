@@ -29,32 +29,6 @@ pub struct Project {
     pub group: Option<String>,
 }
 
-/// A named combination of repositories, for ticket shapes that recur.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RepoSet {
-    pub id: String,
-    pub name: String,
-    pub project_ids: Vec<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum MatchKind {
-    Component,
-    Label,
-}
-
-/// "Tickets with component Payments touch these repos." User-authored, so it
-/// outranks anything inferred from history.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RepoRule {
-    pub id: String,
-    pub kind: MatchKind,
-    /// The component or label name, matched case-insensitively.
-    pub value: String,
-    pub project_ids: Vec<String>,
-}
-
 /// One ticket's worth of work, spanning one or more repositories.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
@@ -243,10 +217,6 @@ pub struct AppConfig {
     /// Repos last used, keyed "epic:ACME-12" / "project:ACME". Prefills the picker.
     #[serde(default)]
     pub last_repos: HashMap<String, Vec<String>>,
-    #[serde(default)]
-    pub repo_sets: Vec<RepoSet>,
-    #[serde(default)]
-    pub repo_rules: Vec<RepoRule>,
     #[serde(default)]
     pub ui: UiPrefs,
     /// Messages the app posted to Slack, so it can retract its own litter.

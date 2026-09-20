@@ -7,21 +7,6 @@ export interface Project {
   group: string | null;
 }
 
-export interface RepoSet {
-  id: string;
-  name: string;
-  project_ids: string[];
-}
-
-export type MatchKind = "component" | "label";
-
-export interface RepoRule {
-  id: string;
-  kind: MatchKind;
-  value: string;
-  project_ids: string[];
-}
-
 export interface RepoSuggestion {
   project_ids: string[];
   reason: string | null;

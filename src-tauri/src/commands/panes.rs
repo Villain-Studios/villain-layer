@@ -350,8 +350,11 @@ pub(crate) fn write_chat_context(state: &AppState, dir: &Path) -> Result<()> {
         "own. Its tools include `jira_search`, `jira_get_issue`, `jira_create_issue`, ",
         "`jira_comment`, `jira_transition`, `slack_post`, `list_tasks`, `list_repos`, ",
         "`task_diff`, `start_work` and `open_prs`.\n\n",
-        "These act immediately and are not confirmed: filing a ticket or posting to ",
-        "Slack happens for real. Check with the user before anything others will see.\n\n",
+        "Most writes act immediately: filing a ticket or posting to Slack happens ",
+        "for real. Check with the user before anything others will see. A few tools ",
+        "(`open_prs`, `jira_transition`, `forget_repo`, `slack_delete`, `slack_cleanup`) ",
+        "also need `confirm: true` on the call after they agree — without it the ",
+        "tool refuses and changes nothing.\n\n",
     ));
 
     if !cfg.projects.is_empty() {

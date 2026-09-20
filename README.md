@@ -225,8 +225,11 @@ but needs `channels:read` and `channels:history`, and says so when they are
 missing.
 
 The server binds an ephemeral port on loopback and is gated on a bearer token
-minted fresh each run. Writes are **not** confirmed — an agent can file a ticket
-or post to Slack unattended, which is the point, but worth knowing.
+minted fresh each run. Most writes are **not** confirmed — an agent can file a
+ticket or post to Slack unattended, which is the point. A smaller set of
+high-impact tools (`open_prs`, applying a `jira_transition`, `forget_repo`,
+`slack_delete`, and a non-dry-run `slack_cleanup`) refuse unless the call also
+passes `confirm: true`, so the agent has to come back after asking.
 
 Agents get the config automatically:
 

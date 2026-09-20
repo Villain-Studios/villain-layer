@@ -195,6 +195,37 @@ fn str_prop(desc: &str) -> Value {
     json!({ "type": "string", "description": desc })
 }
 
+fn bool_prop(desc: &str) -> Value {
+    json!({ "type": "boolean", "description": desc })
+}
+
+/// High-impact writes that change shared state. Soft tools (create issue, post
+/// to Slack, start work) still run unattended — that is the point — but these
+/// need an explicit second call with `confirm: true` after the user agrees.
+const DANGER: &[&str] = &[
+    "jira_transition",
+    "slack_delete",
+    "slack_cleanup",
+    "forget_repo",
+    "open_prs",
+];
+
+fn confirm_prop() -> Value {
+    bool_prop(
+        "Set true only after the user agrees. Calls without it are refused — \
+         this tool changes shared state that is hard to undo.",
+    )
+}
+
+fn require_confirm(args: &Value, tool: &str) -> Result<()> {
+    if args.get("confirm").and_then(Value::as_bool) == Some(true) {
+        return Ok(());
+    }
+    Err(crate::error::Error::Other(format!(
+        "{tool} needs confirm: true after the user agrees; nothing was changed"
+    )))
+}
+
 fn tools() -> Vec<Value> {
     vec![
         tool(
@@ -273,10 +304,12 @@ fn tools() -> Vec<Value> {
         tool(
             "jira_transition",
             "Move a Jira issue to another status by the transition's name, e.g. \
-             'Start progress'. Call with no transition to list what is available.",
+             'Start progress'. Call with no transition to list what is available. \
+             Applying a transition needs confirm: true after the user agrees.",
             json!({
                 "key": str_prop("Issue key"),
-                "transition": str_prop("Transition name; omit to list the options")
+                "transition": str_prop("Transition name; omit to list the options"),
+                "confirm": confirm_prop()
             }),
             vec!["key"],
         ),
@@ -292,20 +325,26 @@ fn tools() -> Vec<Value> {
         tool(
             "slack_cleanup",
             "Delete messages this app posted to its Slack channel. Only a bot can \
-             delete a bot's messages, so this is the only way to clear them.",
-            json!({ "dry_run": { "type": "boolean", "description": "Count without deleting" } }),
+             delete a bot's messages, so this is the only way to clear them. \
+             Deleting needs confirm: true; dry_run does not.",
+            json!({
+                "dry_run": { "type": "boolean", "description": "Count without deleting" },
+                "confirm": confirm_prop()
+            }),
             vec![],
         ),
         tool(
             "slack_delete",
             "Delete specific messages this app posted, by Slack permalink. Works \
-             with only chat:write, unlike slack_cleanup which has to search.",
+             with only chat:write, unlike slack_cleanup which has to search. \
+             Needs confirm: true after the user agrees.",
             json!({
                 "links": {
                     "type": "array",
                     "items": { "type": "string" },
                     "description": "Slack permalinks (Copy link on the message)"
-                }
+                },
+                "confirm": confirm_prop()
             }),
             vec!["links"],
         ),
@@ -384,8 +423,12 @@ fn tools() -> Vec<Value> {
         tool(
             "forget_repo",
             "Remove a repository from Villain Layer's list. The clone and any \
-             worktrees stay on disk untouched; only the app forgets it.",
-            json!({ "repo": str_prop("Repository name, or its exact path when two share a name") }),
+             worktrees stay on disk untouched; only the app forgets it. Needs \
+             confirm: true after the user agrees.",
+            json!({
+                "repo": str_prop("Repository name, or its exact path when two share a name"),
+                "confirm": confirm_prop()
+            }),
             vec!["repo"],
         ),
         tool(
@@ -406,12 +449,14 @@ fn tools() -> Vec<Value> {
         tool(
             "open_prs",
             "Push every repository in a task that has changes and open a pull \
-             request for each, then post the links back to the Jira ticket.",
+             request for each, then post the links back to the Jira ticket. Needs \
+             confirm: true after the user agrees.",
             json!({
                 "task_id": str_prop("Task id from list_tasks"),
                 "title": str_prop("Pull request title"),
                 "body": str_prop("Pull request description"),
-                "draft": { "type": "boolean", "description": "Open as draft, default true" }
+                "draft": { "type": "boolean", "description": "Open as draft, default true" },
+                "confirm": confirm_prop()
             }),
             vec!["task_id", "title"],
         ),
@@ -452,6 +497,17 @@ fn resolve_repos(
 
 async fn call(app: &AppHandle, name: &str, args: Value) -> Result<Value> {
     let state = app.state::<AppState>();
+
+    // Listing transitions and dry-run cleanup are reads in all but name — they
+    // do not need the confirm gate. Applying them does.
+    let needs_confirm = match name {
+        "jira_transition" => arg(&args, "transition").is_some(),
+        "slack_cleanup" => !args.get("dry_run").and_then(Value::as_bool).unwrap_or(false),
+        other => DANGER.contains(&other),
+    };
+    if needs_confirm {
+        require_confirm(&args, name)?;
+    }
 
     match name {
         "list_tasks" => Ok(serde_json::to_value(commands::list_tasks(state))?),
@@ -717,10 +773,21 @@ async fn call(app: &AppHandle, name: &str, args: Value) -> Result<Value> {
 }
 
 /// Drop an `.mcp.json` next to an agent so it picks the server up on start.
+///
+/// Mode 0600: the file holds the bearer token for this run. Loopback is not
+/// authorisation on a shared machine; neither is a world-readable config.
 pub fn write_config(dir: &std::path::Path) -> Result<()> {
     let Some(config) = mcp_json() else {
         return Ok(());
     };
-    std::fs::write(dir.join(".mcp.json"), serde_json::to_vec_pretty(&config)?)?;
+    let path = dir.join(".mcp.json");
+    std::fs::write(&path, serde_json::to_vec_pretty(&config)?)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&path)?.permissions();
+        perms.set_mode(0o600);
+        std::fs::set_permissions(&path, perms)?;
+    }
     Ok(())
 }

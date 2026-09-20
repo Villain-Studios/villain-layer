@@ -16,8 +16,16 @@ import { GearIcon, SidebarToggle } from "./components/ui";
 
 export default function App() {
   const task = useStore(selectedTask);
-  const { view, tab, settingsOpen, toasts, panes, issues, settings, projects, prs, tasks } =
-    useStore();
+  const view = useStore((s) => s.view);
+  const tab = useStore((s) => s.tab);
+  const settingsOpen = useStore((s) => s.settingsOpen);
+  const toasts = useStore((s) => s.toasts);
+  const panes = useStore((s) => s.panes);
+  const issueCount = useStore((s) => s.issues.length);
+  const settings = useStore((s) => s.settings);
+  const projectCount = useStore((s) => s.projects.length);
+  const prs = useStore((s) => s.prs);
+  const tasks = useStore((s) => s.tasks);
   const setView = useStore((s) => s.setView);
   const setTab = useStore((s) => s.setTab);
   const sidebarHidden = useStore((s) => s.sidebarHidden);
@@ -199,9 +207,9 @@ export default function App() {
 
   const tabs: { id: View; label: string; badge?: number }[] = [
     { id: "work", label: "Work", badge: running || undefined },
-    { id: "tickets", label: "Tickets", badge: issues.length || undefined },
+    { id: "tickets", label: "Tickets", badge: issueCount || undefined },
     { id: "chat", label: "Chat", badge: chats || undefined },
-    { id: "repos", label: "Repos", badge: projects.length || undefined },
+    { id: "repos", label: "Repos", badge: projectCount || undefined },
   ];
 
   return (

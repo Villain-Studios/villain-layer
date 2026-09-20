@@ -6,7 +6,8 @@ import { AddRepos } from "./AddRepos";
 import { Combo, Confirm } from "./ui";
 
 export function ReposView() {
-  const { projects, tasks } = useStore();
+  const projects = useStore((s) => s.projects);
+  const tasks = useStore((s) => s.tasks);
   const refreshRepos = useStore((s) => s.refreshRepos);
   const refreshAll = useStore((s) => s.refreshAll);
   const fail = useStore((s) => s.fail);

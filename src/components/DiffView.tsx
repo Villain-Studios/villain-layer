@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../lib/api";
+import { reportRepoResults } from "../lib/report";
 import { useStore } from "../store";
-import type { ChangedFile, DiffScope, RepoBranchFacts, RepoResult, TaskView } from "../lib/types";
+import type { ChangedFile, DiffScope, RepoBranchFacts, TaskView } from "../lib/types";
 import { Field, Modal } from "./ui";
 import { read, write } from "../lib/persist";
 
@@ -300,23 +301,9 @@ export function DiffView({ task }: { task: TaskView }) {
     }
   }
 
-  function report(results: RepoResult[], verb: string) {
-    const ok = results.filter((r) => r.ok);
-    const bad = results.filter((r) => !r.ok);
-    if (bad.length) {
-      toast("error", bad.map((r) => `${r.repo}: ${r.detail}`).join("\n"));
-    }
-    if (ok.length) {
-      toast("success", `${verb} ${ok.map((r) => `${r.repo} (${r.detail})`).join(", ")}`);
-    }
-    if (!ok.length && !bad.length) {
-      toast("info", "Nothing to do — no repository had changes.");
-    }
-  }
-
   async function commit() {
     try {
-      report(await api.commitTask(task.id, message.trim()), "Committed");
+      reportRepoResults(toast, await api.commitTask(task.id, message.trim()), "Committed");
       setCommitting(false);
       setMessage("");
       await Promise.all([load(), refreshTasks()]);

@@ -1,0 +1,196 @@
+import { useEffect, useState } from "react";
+import { api } from "../../lib/api";
+import { useStore } from "../../store";
+import type { AgentStatus, JiraIssue, JiraTransition, Project } from "../../lib/types";
+import { Field, Modal } from "../ui";
+import { RepoPicker } from "../RepoPicker";
+import { IssueTypeIcon, type TypeMap } from "../IssueType";
+
+export function StartWorkDialog({
+  issue,
+  projects,
+  agents,
+  types,
+  onClose,
+}: {
+  issue: JiraIssue;
+  projects: Project[];
+  agents: AgentStatus[];
+  types: TypeMap;
+  onClose: () => void;
+}) {
+  const refreshIssues = useStore((s) => s.refreshIssues);
+  const refreshTasks = useStore((s) => s.refreshTasks);
+  const refreshPanes = useStore((s) => s.refreshPanes);
+  const select = useStore((s) => s.select);
+  const toast = useStore((s) => s.toast);
+  const fail = useStore((s) => s.fail);
+
+  const [transitions, setTransitions] = useState<JiraTransition[]>([]);
+  const [picked, setPicked] = useState<string[]>([]);
+  const [reason, setReason] = useState<string | null>(null);
+  const [agentId, setAgentId] = useState("");
+  const [suffix, setSuffix] = useState("");
+  const [starting, setStarting] = useState(false);
+
+  const installed = agents.filter((a) => a.installed);
+
+  useEffect(() => {
+    if (!agentId && installed.length) setAgentId(installed[0].id);
+  }, [installed, agentId]);
+
+  useEffect(() => {
+    setTransitions([]);
+    setReason(null);
+    setSuffix("");
+    api.jiraTransitions(issue.key).then(setTransitions).catch(() => setTransitions([]));
+    api.suggestRepos({ issueKey: issue.key, epicKey: issue.epic_key })
+      .then((s) => { setPicked(s.project_ids); setReason(s.reason); })
+      .catch(() => { setPicked([]); setReason(null); });
+  }, [issue]);
+
+  async function startWork() {
+    if (picked.length === 0) return;
+    setStarting(true);
+    try {
+      const task = await api.jiraStartWork(issue.key, picked, agentId || null, suffix || null);
+      // Refresh the issues too: the ticket has usually just moved, and the
+      // status on the card is the thing the move was meant to correct.
+      await Promise.all([refreshTasks(), refreshPanes(), refreshIssues()]);
+      select(task.id);
+      onClose();
+      toast(
+        "success",
+        `${picked.length} worktree${picked.length === 1 ? "" : "s"} ready on ${task.branch}` +
+          (task.moved ? ` · ${issue.key} → ${task.moved}` : ""),
+      );
+    } catch (e) {
+      fail(e);
+    } finally {
+      setStarting(false);
+    }
+  }
+
+  async function doTransition(t: JiraTransition) {
+    try {
+      await api.jiraTransition(issue.key, t.id);
+      toast("success", `${issue.key} → ${t.to_status}`);
+      onClose();
+      await refreshIssues();
+    } catch (e) {
+      fail(e);
+    }
+  }
+
+  return (
+    <Modal
+      title={`${issue.key} · ${issue.status}`}
+      wide
+      onClose={onClose}
+      footer={
+        <>
+          <button className="btn" onClick={onClose}>Close</button>
+          <button
+            className="btn btn-primary"
+            disabled={picked.length === 0 || starting}
+            onClick={() => void startWork()}
+          >
+            {starting
+              ? "Creating worktrees…"
+              : `Start work in ${picked.length} repo${picked.length === 1 ? "" : "s"}`}
+          </button>
+        </>
+      }
+    >
+      <h3 style={{ margin: "0 0 10px", fontSize: 15, lineHeight: 1.4 }}>{issue.summary}</h3>
+
+      <div className="row" style={{ marginBottom: 14, flexWrap: "wrap" }}>
+        <span className="chip chip-type">
+          <IssueTypeIcon types={types} name={issue.issue_type} size={13} />
+          {issue.issue_type}
+        </span>
+        {issue.priority && <span className="chip">{issue.priority}</span>}
+        {issue.assignee && <span className="chip">{issue.assignee}</span>}
+        {issue.epic_key && (
+          <span className="chip" title={issue.epic_summary ?? undefined}>
+            epic {issue.epic_key}
+          </span>
+        )}
+        {issue.components.map((c) => <span key={c} className="chip">{c}</span>)}
+        {issue.labels.map((l) => <span key={l} className="chip">{l}</span>)}
+      </div>
+
+      <Field
+        label="Repositories"
+        hint="One worktree per repo, on the same branch, side by side in one task folder. You can add more later."
+      >
+        <RepoPicker
+          projects={projects}
+          picked={picked}
+          onChange={setPicked}
+          reason={reason}
+        />
+      </Field>
+
+      <Field
+        label="Branch"
+        hint={`Created in every repo you picked, and names the task folder. Leave the suffix blank for just ${issue.key}.`}
+      >
+        <div className="branch-compose">
+          <span className="branch-key">{issue.key}</span>
+          <span className="branch-dash">-</span>
+          <input
+            value={suffix}
+            onChange={(e) => setSuffix(e.target.value)}
+            placeholder="optional suffix"
+          />
+        </div>
+      </Field>
+
+      <Field
+        label="Agent"
+        hint={
+          picked.length > 1
+            ? "Starts at the task root, where all the repos are visible as sibling folders, primed with the ticket and the layout."
+            : "Starts in the new worktree with the ticket as its opening prompt."
+        }
+      >
+        <select value={agentId} onChange={(e) => setAgentId(e.target.value)}>
+          <option value="">No agent — just the worktrees</option>
+          {installed.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+        </select>
+      </Field>
+
+      {transitions.length > 0 && (
+        <Field label="Move ticket">
+          <div className="row" style={{ flexWrap: "wrap" }}>
+            {transitions.map((t) => (
+              <button key={t.id} className="btn btn-sm" onClick={() => void doTransition(t)}>
+                {t.name}
+              </button>
+            ))}
+          </div>
+        </Field>
+      )}
+
+      {issue.description.trim() && (
+        <Field label="Description">
+          <div
+            className="muted"
+            style={{
+              whiteSpace: "pre-wrap",
+              maxHeight: 220,
+              overflowY: "auto",
+              border: "1px solid var(--border)",
+              borderRadius: 6,
+              padding: 10,
+              userSelect: "text",
+            }}
+          >
+            {issue.description}
+          </div>
+        </Field>
+      )}
+    </Modal>
+  );
+}

@@ -12,7 +12,9 @@ function ago(iso: string): string {
 }
 
 export function AgentsView() {
-  const { panes, tasks, agents } = useStore();
+  const panes = useStore((s) => s.panes);
+  const tasks = useStore((s) => s.tasks);
+  const agents = useStore((s) => s.agents);
   const refreshPanes = useStore((s) => s.refreshPanes);
   const select = useStore((s) => s.select);
   const setView = useStore((s) => s.setView);

@@ -334,7 +334,7 @@ src-tauri/src/
   shellenv.rs       asks your login shell for its real PATH — a GUI app launched
                     from Finder cannot see ~/.local/bin otherwise
   agents.rs         the agent catalogue and how each one takes an opening prompt
-  commands.rs       the Tauri command surface; most commands take a task id and
+  commands/         the Tauri command surface; most commands take a task id and
                     fan out over its checkouts
   secrets.rs        keychain access
   integrations/     jira.rs, github.rs, slack.rs

@@ -55,7 +55,7 @@ live process kills it and takes its agents with it, and the same is true of
 
 | | |
 |---|---|
-| `src-tauri/src/commands.rs` | every Tauri command; the bulk of the backend |
+| `src-tauri/src/commands/` | every Tauri command; the bulk of the backend |
 | `src-tauri/src/pty.rs` | panes, the PTY, output throttling, limit detection |
 | `src-tauri/src/git.rs` | the only place that shells out to `git` |
 | `src-tauri/src/agents.rs` | the agent CLI catalogue — add one here |
@@ -85,6 +85,6 @@ live process kills it and takes its agents with it, and the same is true of
 
 ## Limits
 
-`MAX_PANES` (32, `pty.rs`) and `RESTORE_LIMIT` (12, `commands.rs`) are
+`MAX_PANES` (32, `pty.rs`) and `RESTORE_LIMIT` (12, `commands/panes.rs`) are
 ceilings that stop a runaway, not preferences. Do not turn them into
 settings.

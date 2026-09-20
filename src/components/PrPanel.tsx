@@ -2,8 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api } from "../lib/api";
+import { reportRepoResults } from "../lib/report";
 import { reviewComments, taskReview, useStore, type TaskReview } from "../store";
-import type { CheckoutPr, CheckRun, RepoResult, Review, TaskView } from "../lib/types";
+import type { CheckoutPr, CheckRun, Review, TaskView } from "../lib/types";
 import { Combo, Field, Modal, Spinner } from "./ui";
 
 /**
@@ -180,15 +181,6 @@ export function PrPanel({ task }: { task: TaskView }) {
     setBody(task.issue_url ? `Jira: ${task.issue_url}\n` : "");
   }, [task.id, task.name, task.issue_url]);
 
-  function report(results: RepoResult[], verb: string) {
-    const bad = results.filter((r) => !r.ok);
-    const ok = results.filter((r) => r.ok);
-    if (bad.length) toast("error", bad.map((r) => `${r.repo}: ${r.detail}`).join("\n"));
-    if (ok.length) {
-      toast("success", `${verb} ${ok.map((r) => `${r.repo} (${r.detail})`).join(", ")}`);
-    }
-  }
-
   function openPr(url: string) {
     void openUrl(url).catch(() => toast("error", "Could not open the browser"));
   }
@@ -275,7 +267,7 @@ export function PrPanel({ task }: { task: TaskView }) {
   async function push() {
     setBusy(true);
     try {
-      report(await api.pushTask(task.id), "Pushed");
+      reportRepoResults(toast, await api.pushTask(task.id), "Pushed");
       await load();
     } catch (e) {
       fail(e);
@@ -287,7 +279,7 @@ export function PrPanel({ task }: { task: TaskView }) {
   async function openPrs() {
     setBusy(true);
     try {
-      report(await api.githubOpenPrs(task.id, title.trim(), body, draft), "Opened");
+      reportRepoResults(toast, await api.githubOpenPrs(task.id, title.trim(), body, draft), "Opened");
       setCreating(false);
       await load();
     } catch (e) {

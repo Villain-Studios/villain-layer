@@ -1,0 +1,595 @@
+//! Task lifecycle: create, suggest repos, add/remove checkouts.
+
+use std::path::{Path, PathBuf};
+
+use chrono::Utc;
+use serde::{Deserialize, Serialize};
+use tauri::State;
+
+use crate::config::{Checkout, ConfigStore, Project, Task};
+use crate::error::{Error, Result};
+use crate::git;
+use crate::pty::PaneKind;
+
+use super::AppState;
+use super::diff::RepoResult;
+use super::panes::{agent_file_dir, write_task_context, GENERATED_FILES};
+
+// ------------------------------------------------------------------- tasks
+
+#[derive(Debug, Serialize)]
+pub struct CheckoutView {
+    #[serde(flatten)]
+    pub checkout: Checkout,
+    pub project_name: String,
+    pub status: Option<git::WorktreeStatus>,
+    pub exists: bool,
+    /// Files with uncommitted changes — what the Diff tab lists by default.
+    /// The status counts split the same work by staged, unstaged and
+    /// untracked; this is the number of files across all three.
+    pub changed: u32,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TaskView {
+    #[serde(flatten)]
+    pub task: Task,
+    pub checkouts: Vec<CheckoutView>,
+    pub pane_count: usize,
+}
+
+pub(crate) fn slugify(s: &str) -> String {
+    let mut out = String::new();
+    let mut last_dash = true;
+    for ch in s.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+            last_dash = false;
+        } else if !last_dash {
+            out.push('-');
+            last_dash = true;
+        }
+    }
+    out.trim_matches('-').chars().take(48).collect()
+}
+
+/// The Jira project a key belongs to: "ACME-123" -> "ACME". Used to remember which
+/// repos a team's tickets usually touch.
+pub(crate) fn issue_project(issue_key: Option<&str>) -> String {
+    issue_key
+        .and_then(|k| k.split_once('-').map(|(p, _)| p.to_string()))
+        .unwrap_or_default()
+}
+
+pub(crate) fn view_checkout(state: &AppState, checkout: Checkout) -> CheckoutView {
+    let dir = PathBuf::from(&checkout.path);
+    let exists = dir.is_dir();
+    CheckoutView {
+        project_name: state
+            .config
+            .project(&checkout.project_id)
+            .map(|p| p.name)
+            .unwrap_or_else(|_| "(unknown repo)".into()),
+        status: exists.then(|| git::status(&dir).ok()).flatten(),
+        changed: if exists {
+            git::changed_count(
+                &dir,
+                &checkout.base,
+                checkout.base_commit.as_deref(),
+                git::Scope::Uncommitted,
+            )
+        } else {
+            0
+        },
+        exists,
+        checkout,
+    }
+}
+
+#[tauri::command]
+pub fn list_tasks(state: State<AppState>) -> Vec<TaskView> {
+    let cfg = state.config.read();
+    cfg.tasks
+        .iter()
+        .map(|t| TaskView {
+            checkouts: cfg
+                .checkouts
+                .iter()
+                .filter(|c| c.task_id == t.id)
+                .cloned()
+                .map(|c| view_checkout(&state, c))
+                .collect(),
+            pane_count: state.ptys.list(Some(&t.id)).len(),
+            task: t.clone(),
+        })
+        .collect()
+}
+
+#[derive(Debug, Serialize)]
+pub struct RepoSuggestion {
+    pub project_ids: Vec<String>,
+    /// Why these were preselected. Shown in the picker so it never feels like
+    /// magic the user cannot audit or override.
+    pub reason: Option<String>,
+}
+
+/// Which repositories to preselect for a ticket, in descending confidence:
+/// what the last ticket in the same epic used, then the same Jira project,
+/// then whatever was used last.
+#[tauri::command]
+pub fn suggest_repos(
+    state: State<AppState>,
+    issue_key: Option<String>,
+    epic_key: Option<String>,
+) -> RepoSuggestion {
+    suggest_from(&state.config.read(), issue_key.as_deref(), epic_key.as_deref())
+}
+
+pub(crate) fn suggest_from(
+    cfg: &crate::config::AppConfig,
+    issue_key: Option<&str>,
+    epic_key: Option<&str>,
+) -> RepoSuggestion {
+    let known = |ids: Vec<String>| -> Vec<String> {
+        ids.into_iter()
+            .filter(|id| cfg.projects.iter().any(|p| &p.id == id))
+            .collect()
+    };
+
+    // 1. The same epic is a tighter signal than the same project.
+    if let Some(epic) = epic_key.filter(|e| !e.is_empty()) {
+        let ids = known(cfg.last_repos.get(&format!("epic:{epic}")).cloned().unwrap_or_default());
+        if !ids.is_empty() {
+            return RepoSuggestion {
+                project_ids: ids,
+                reason: Some(format!("last task under {epic}")),
+            };
+        }
+    }
+
+    // 2. The same Jira project. Bare keys are what v1 wrote.
+    let project = issue_project(issue_key);
+    if !project.is_empty() {
+        for key in [format!("project:{project}"), project.clone()] {
+            let ids = known(cfg.last_repos.get(&key).cloned().unwrap_or_default());
+            if !ids.is_empty() {
+                return RepoSuggestion {
+                    project_ids: ids,
+                    reason: Some(format!("last {project} ticket")),
+                };
+            }
+        }
+    }
+
+    RepoSuggestion {
+        project_ids: known(cfg.last_repos.get("").cloned().unwrap_or_default()),
+        reason: None,
+    }
+}
+
+/// The branch for a task.
+///
+/// A ticket's branch is its key, optionally with a suffix — `ACME-1234` or
+/// `ACME-1234-some-feature`. The key is used verbatim rather than folded into a
+/// slug of the task name, which would repeat it: task names from Jira already
+/// begin with the key.
+pub(crate) fn derive_branch(
+    explicit: Option<&str>,
+    issue_key: Option<&str>,
+    suffix: Option<&str>,
+    name: &str,
+) -> String {
+    if let Some(branch) = explicit.map(str::trim).filter(|b| !b.is_empty()) {
+        return branch.to_string();
+    }
+    match issue_key.map(str::trim).filter(|k| !k.is_empty()) {
+        Some(key) => match suffix.map(slugify).filter(|s| !s.is_empty()) {
+            Some(suffix) => format!("{key}-{suffix}"),
+            None => key.to_string(),
+        },
+        None => format!("villain/{}", slugify(name)),
+    }
+}
+
+/// A task directory no other task owns and nothing occupies, so two tasks with
+/// the same name never share a folder or clobber each other's worktrees.
+pub(crate) fn unique_task_root(config: &ConfigStore, dir_name: &str) -> PathBuf {
+    let base = config.worktree_root();
+    let taken: Vec<String> = config.read().tasks.iter().map(|t| t.root.clone()).collect();
+
+    let mut candidate = base.join(dir_name);
+    let mut n = 2;
+    while candidate.exists() || taken.iter().any(|t| Path::new(t) == candidate) {
+        candidate = base.join(format!("{dir_name}-{n}"));
+        n += 1;
+    }
+    candidate
+}
+
+/// `<task root>/<repo-name>`, deduped if two repos share a name.
+pub(crate) fn checkout_path(root: &Path, project: &Project, taken: &[String]) -> PathBuf {
+    let mut name = project.name.clone();
+    let mut n = 2;
+    while taken.iter().any(|t| t == &name) {
+        name = format!("{}-{n}", project.name);
+        n += 1;
+    }
+    root.join(name)
+}
+
+pub(crate) fn create_checkout(
+    state: &AppState,
+    task: &Task,
+    project: &Project,
+    taken: &mut Vec<String>,
+) -> Result<Checkout> {
+    let root = PathBuf::from(&task.root);
+    let path = checkout_path(&root, project, taken);
+    taken.push(
+        path.file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default(),
+    );
+
+    let base_commit = git::add_worktree(
+        &PathBuf::from(&project.path),
+        &path,
+        &task.branch,
+        &project.default_branch,
+    )?;
+
+    let checkout = Checkout {
+        id: uuid::Uuid::new_v4().to_string(),
+        task_id: task.id.clone(),
+        project_id: project.id.clone(),
+        path: path.to_string_lossy().to_string(),
+        base: project.default_branch.clone(),
+        base_commit: Some(base_commit).filter(|c| !c.is_empty()),
+    };
+    state
+        .config
+        .update(|c| c.checkouts.push(checkout.clone()))?;
+    Ok(checkout)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct NewTask {
+    pub name: String,
+    /// One worktree is created per repository, all on the same branch.
+    pub project_ids: Vec<String>,
+    /// A fully explicit branch name, overriding everything below.
+    #[serde(default)]
+    pub branch: Option<String>,
+    /// Appended to the ticket key: ACME-1234 becomes ACME-1234-some-feature.
+    #[serde(default)]
+    pub branch_suffix: Option<String>,
+    #[serde(default)]
+    pub issue_key: Option<String>,
+    #[serde(default)]
+    pub issue_url: Option<String>,
+    /// Recorded only so the next ticket under the same epic can be prefilled.
+    #[serde(default)]
+    pub epic_key: Option<String>,
+}
+
+#[tauri::command]
+pub fn create_task(state: State<AppState>, req: NewTask) -> Result<Task> {
+    new_task(&state, req)
+}
+
+pub(crate) fn new_task(state: &AppState, req: NewTask) -> Result<Task> {
+    if req.project_ids.is_empty() {
+        return Err(Error::Other("pick at least one repository".into()));
+    }
+    let projects: Vec<Project> = req
+        .project_ids
+        .iter()
+        .map(|id| state.config.project(id))
+        .collect::<Result<_>>()?;
+
+    let branch = derive_branch(
+        req.branch.as_deref(),
+        req.issue_key.as_deref(),
+        req.branch_suffix.as_deref(),
+        &req.name,
+    );
+
+    // The folder is named after the branch, so the two are always findable
+    // from each other. Slashes would nest it, so they become dashes.
+    let root = unique_task_root(&state.config, &branch.replace('/', "-"));
+    std::fs::create_dir_all(&root)?;
+
+    let task = Task {
+        id: uuid::Uuid::new_v4().to_string(),
+        name: req.name,
+        root: root.to_string_lossy().to_string(),
+        branch,
+        issue_key: req.issue_key.clone(),
+        issue_url: req.issue_url,
+        created_at: Utc::now(),
+    };
+    state.config.update(|c| c.tasks.push(task.clone()))?;
+
+    let mut taken = Vec::new();
+    let mut created = Vec::new();
+    for project in &projects {
+        match create_checkout(state, &task, project, &mut taken) {
+            Ok(c) => created.push(c),
+            Err(e) => {
+                // Leave nothing half-built: unwind the worktrees we just made.
+                for c in &created {
+                    if let Ok(p) = state.config.project(&c.project_id) {
+                        let _ = git::remove_worktree(&PathBuf::from(&p.path), &c.path, true);
+                    }
+                }
+                let task_id = task.id.clone();
+                state.config.update(|c| {
+                    c.tasks.retain(|t| t.id != task_id);
+                    c.checkouts.retain(|ch| ch.task_id != task_id);
+                })?;
+                let _ = std::fs::remove_dir(&root);
+                return Err(e);
+            }
+        }
+    }
+
+    // Remember the choice against both the epic and the Jira project, so the
+    // next ticket gets the tightest signal available.
+    let project = issue_project(req.issue_key.as_deref());
+    let epic = req.epic_key.clone();
+    let ids = req.project_ids.clone();
+    state.config.update(|c| {
+        if let Some(epic) = epic.filter(|e| !e.is_empty()) {
+            c.last_repos.insert(format!("epic:{epic}"), ids.clone());
+        }
+        let key = if project.is_empty() {
+            String::new()
+        } else {
+            format!("project:{project}")
+        };
+        c.last_repos.insert(key, ids);
+    })?;
+
+    // The folder describes itself from the moment it exists, so an agent
+    // started by hand in it is no worse off than one the app launched.
+    let _ = write_task_context(state, &task);
+
+    Ok(task)
+}
+
+/// What a terminal has printed, as readable text.
+///
+/// Gated here rather than in the tool definition so nothing can route around
+/// it: the scrollback of a shell is a record of everything that has passed
+/// through it, which is useful to an agent and is also not automatically the
+/// agent's business.
+pub(crate) fn pane_output(state: &AppState, pane_id: &str, lines: usize) -> Result<String> {
+    if !state.config.read().ui.agents_read_panes {
+        return Err(Error::Other(
+            "reading terminal output is switched off in the app's settings. Turn on \
+             \"Let agents read terminal output\" there if you want this."
+                .into(),
+        ));
+    }
+    state.ptys.transcript(pane_id, lines.clamp(1, 2_000))
+}
+
+/// Tell the agents working on a task that it gained a repository.
+///
+/// A worktree appearing beside a running agent is invisible to it: nothing
+/// prompts it to look at its surroundings again, so it carries on believing
+/// the repo it needs is not there. The note goes into the pane's input, which
+/// is the one channel an agent is actually listening on — a CLI queues it and
+/// picks it up when the current turn ends.
+///
+/// Returns how many were told, so the app can say so rather than doing it
+/// silently.
+pub(crate) fn tell_agents(state: &AppState, task_id: &str, text: &str) -> usize {
+    let mut told = 0;
+    for pane in state.ptys.list(Some(task_id)) {
+        if pane.kind != PaneKind::Agent || !pane.running {
+            continue;
+        }
+        if state.ptys.write(&pane.id, text).is_ok() && state.ptys.write(&pane.id, "\r").is_ok() {
+            told += 1;
+        }
+    }
+    told
+}
+
+/// A repository added to a task, and how many running agents were told.
+#[derive(Debug, Serialize)]
+pub struct AddedRepo {
+    #[serde(flatten)]
+    pub checkout: Checkout,
+    pub told: usize,
+}
+
+/// Add a repository to a task that is already in flight.
+pub(crate) fn add_repo(state: &AppState, task_id: &str, project_id: &str) -> Result<AddedRepo> {
+    let checkout = add_checkout_inner(state, task_id, project_id)?;
+    let name = state
+        .config
+        .project(project_id)
+        .map(|p| p.name)
+        .unwrap_or_else(|_| "a repository".into());
+
+    // The folder gained a sibling, so the description of it is now wrong.
+    if let Ok(task) = state.config.task(task_id) {
+        let _ = write_task_context(state, &task);
+    }
+
+    let told = tell_agents(
+        state,
+        task_id,
+        &format!(
+            "[villain-layer] {name} has just been added to this task, checked out on the \
+             same branch at {}. It is there if the work needs it — read it before assuming \
+             anything about what is in it.",
+            checkout.path
+        ),
+    );
+    Ok(AddedRepo { checkout, told })
+}
+
+#[tauri::command]
+pub fn add_checkout(
+    state: State<AppState>,
+    task_id: String,
+    project_id: String,
+) -> Result<AddedRepo> {
+    add_repo(&state, &task_id, &project_id)
+}
+
+pub(crate) fn add_checkout_inner(
+    state: &AppState,
+    task_id: &str,
+    project_id: &str,
+) -> Result<Checkout> {
+    let task_id = task_id.to_string();
+    let project_id = project_id.to_string();
+    let task = state.config.task(&task_id)?;
+    let project = state.config.project(&project_id)?;
+
+    let existing = state.config.checkouts_of(&task_id);
+    if existing.iter().any(|c| c.project_id == project_id) {
+        return Err(Error::Other(format!(
+            "{} is already part of this task",
+            project.name
+        )));
+    }
+
+    // A task created before this repo joined may still point its root at a lone
+    // worktree; give it a real task directory before adding a sibling.
+    let root = PathBuf::from(&task.root);
+    if existing.iter().any(|c| c.path == task.root) {
+        let slug = match &task.issue_key {
+            Some(key) => format!("{}-{}", key.to_uppercase(), slugify(&task.name)),
+            None => slugify(&task.name),
+        };
+        let new_root = unique_task_root(&state.config, &slug);
+        std::fs::create_dir_all(&new_root)?;
+        let root_s = new_root.to_string_lossy().to_string();
+        let id = task_id.clone();
+        state.config.update(|c| {
+            if let Some(t) = c.tasks.iter_mut().find(|t| t.id == id) {
+                t.root = root_s;
+            }
+        })?;
+    } else {
+        std::fs::create_dir_all(&root)?;
+    }
+
+    let task = state.config.task(&task_id)?;
+    let mut taken: Vec<String> = existing
+        .iter()
+        .filter_map(|c| {
+            PathBuf::from(&c.path)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+        })
+        .collect();
+    create_checkout(state, &task, &project, &mut taken)
+}
+
+#[tauri::command]
+pub fn remove_checkout(state: State<AppState>, checkout_id: String, force: bool) -> Result<()> {
+    let checkout = state.config.checkout(&checkout_id)?;
+    let project = state.config.project(&checkout.project_id)?;
+
+    state.ptys.close_checkout(&checkout_id);
+    let repo = PathBuf::from(&project.path);
+    if Path::new(&checkout.path).exists() {
+        // A refusal — uncommitted work, without force — keeps the record too:
+        // dropping it would leave the worktree on disk with nothing pointing
+        // at it, which is the orphan delete_task already learned not to make.
+        git::remove_worktree(&repo, &checkout.path, force)?;
+    } else {
+        // Already removed by hand; just tidy the admin files.
+        let _ = git::run(&repo, &["worktree", "prune"]);
+    }
+
+    state
+        .config
+        .update(|c| c.checkouts.retain(|ch| ch.id != checkout_id))?;
+
+    // The folder lost a sibling, so the description of it is now wrong.
+    if let Ok(task) = state.config.task(&checkout.task_id) {
+        let _ = write_task_context(&state, &task);
+    }
+    Ok(())
+}
+
+/// Delete a task and every worktree it owns.
+///
+/// Reports per repository rather than swallowing failures: `git worktree
+/// remove` refuses while a worktree has uncommitted or untracked files, and
+/// ignoring that left the worktree on disk with no task pointing at it — an
+/// orphan the app could not see and the user had to clean up by hand.
+#[tauri::command]
+pub fn delete_task(state: State<AppState>, id: String, force: bool) -> Result<Vec<RepoResult>> {
+    let task = state.config.task(&id)?;
+    state.ptys.close_task(&id);
+
+    let mut results = Vec::new();
+    for checkout in state.config.checkouts_of(&id) {
+        let project = match state.config.project(&checkout.project_id) {
+            Ok(p) => p,
+            // The repo is gone from the app, so there is no worktree admin to
+            // clean up; drop the record.
+            Err(_) => continue,
+        };
+
+        let path = PathBuf::from(&checkout.path);
+        let (ok, detail) = if !path.exists() {
+            // Already removed by hand; just tidy the admin files.
+            let _ = git::run(&PathBuf::from(&project.path), &["worktree", "prune"]);
+            (true, "already gone".to_string())
+        } else {
+            match git::remove_worktree(&PathBuf::from(&project.path), &checkout.path, force) {
+                Ok(()) => (true, "removed".to_string()),
+                Err(e) => (false, e.to_string()),
+            }
+        };
+
+        results.push(RepoResult {
+            checkout_id: checkout.id,
+            repo: project.name,
+            ok,
+            detail,
+        });
+    }
+
+    let stuck: Vec<String> = results
+        .iter()
+        .filter(|r| !r.ok)
+        .map(|r| r.checkout_id.clone())
+        .collect();
+
+    if !stuck.is_empty() {
+        // Keep the task so the worktrees stay reachable and the user can retry
+        // with force, rather than stranding them.
+        state.config.update(|c| {
+            c.checkouts
+                .retain(|ch| ch.task_id != id || stuck.contains(&ch.id));
+        })?;
+        return Ok(results);
+    }
+
+    // The app's own files go first, or the folder is never empty and lingers
+    // as an orphan under the worktree root. Anything else in there is the
+    // user's, so remove_dir refuses rather than taking it.
+    if let Some(dir) = agent_file_dir(&state, &task) {
+        for name in GENERATED_FILES {
+            let _ = std::fs::remove_file(dir.join(name));
+        }
+    }
+    let _ = std::fs::remove_dir(&task.root);
+
+    state.config.update(|c| {
+        c.tasks.retain(|t| t.id != id);
+        c.checkouts.retain(|ch| ch.task_id != id);
+    })?;
+    Ok(results)
+}
+

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api } from "../lib/api";
+import { api, errMessage } from "../lib/api";
 import { read, write } from "../lib/persist";
 import { useStore } from "../store";
 import type { PaneInfo, Resumable, TaskView } from "../lib/types";
@@ -24,6 +24,7 @@ export function Terminals({ task }: { task: TaskView }) {
   const agents = useStore((s) => s.agents);
   const refreshPanes = useStore((s) => s.refreshPanes);
   const tab = useStore((s) => s.tab);
+  const toast = useStore((s) => s.toast);
   const fail = useStore((s) => s.fail);
 
   const [active, setActive] = useState<string | null>(null);
@@ -62,9 +63,9 @@ export function Terminals({ task }: { task: TaskView }) {
     setPromptLoading(true);
     api.taskPrompt(task.id)
       .then((p) => setPrompt((current) => (current.trim() ? current : p)))
-      .catch(() => {})
+      .catch((e) => toast("error", `Could not load the briefing: ${errMessage(e)}`))
       .finally(() => setPromptLoading(false));
-  }, [launching, task.id]);
+  }, [launching, task.id, toast]);
 
   // Keep a sensible pane selected as panes come and go. Panes are given fresh
   // ids every launch, so what survives a restart is the position in the bar,

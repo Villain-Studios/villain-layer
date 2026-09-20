@@ -20,6 +20,7 @@ export default function App() {
   const tab = useStore((s) => s.tab);
   const settingsOpen = useStore((s) => s.settingsOpen);
   const toasts = useStore((s) => s.toasts);
+  const watchFailing = useStore((s) => s.watchFailing);
   const panes = useStore((s) => s.panes);
   const issueCount = useStore((s) => s.issues.length);
   const settings = useStore((s) => s.settings);
@@ -231,6 +232,11 @@ export default function App() {
           ))}
         </div>
         <div className="topbar-right">
+          {watchFailing && (
+            <span className="watch-chip" title="Task and pane polls are failing">
+              couldn&apos;t refresh
+            </span>
+          )}
           <button className="icon-btn" title="Settings" onClick={() => toggleSettings(true)}>
             <GearIcon />
           </button>

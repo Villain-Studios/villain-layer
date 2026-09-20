@@ -46,6 +46,8 @@ interface State {
   sidebarHidden: boolean;
   settingsOpen: boolean;
   toasts: Toast[];
+  /** Background task/pane polls have failed repeatedly — not a toast every few seconds. */
+  watchFailing: boolean;
 
   select: (id: string | null) => void;
   setView: (v: View) => void;
@@ -81,6 +83,12 @@ let toastSeq = 0;
 let sweeping = false;
 
 /**
+ * Consecutive quiet failures of the task/pane polls. One blip is noise; two
+ * in a row usually means the backend is unreachable or a token is gone.
+ */
+let watchStreak = 0;
+
+/**
  * Drop a remembered selection whose task is gone.
  *
  * The id outlives the task in storage, and a dangling one would leave the app
@@ -92,7 +100,17 @@ function stillThere(tasks: TaskView[], selected: string | null): string | null {
   return null;
 }
 
-export const useStore = create<State>((set, get) => ({
+export const useStore = create<State>((set, get) => {
+  const watchOk = () => {
+    watchStreak = 0;
+    if (get().watchFailing) set({ watchFailing: false });
+  };
+  const watchFail = () => {
+    watchStreak += 1;
+    if (watchStreak >= 2) set({ watchFailing: true });
+  };
+
+  return {
   projects: [],
   tasks: [],
   panes: [],
@@ -112,6 +130,7 @@ export const useStore = create<State>((set, get) => ({
   sidebarHidden: read("sidebarHidden", false),
   settingsOpen: false,
   toasts: [],
+  watchFailing: false,
 
   // Selecting a task is always a request to look at it.
   select: (id) => set({ selectedTask: id, tab: "terminals", view: "work" }),
@@ -136,24 +155,39 @@ export const useStore = create<State>((set, get) => ({
       projects, tasks, panes, agents,
       selectedTask: stillThere(tasks, s.selectedTask),
     }));
+    watchOk();
     await get().refreshSettings();
   },
 
   refreshRepos: async () => set({ projects: await api.listProjects() }),
 
   refreshTasks: async () => {
-    const tasks = await api.listTasks();
-    set((s) => ({
-      tasks,
-      selectedTask: stillThere(tasks, s.selectedTask),
-      // PR rows for a task that has been deleted have nothing to hang off any
-      // more, and the watch would keep comparing against them for good.
-      prs: Object.fromEntries(
-        Object.entries(s.prs).filter(([id]) => tasks.some((t) => t.id === id)),
-      ),
-    }));
+    try {
+      const tasks = await api.listTasks();
+      set((s) => ({
+        tasks,
+        selectedTask: stillThere(tasks, s.selectedTask),
+        // PR rows for a task that has been deleted have nothing to hang off any
+        // more, and the watch would keep comparing against them for good.
+        prs: Object.fromEntries(
+          Object.entries(s.prs).filter(([id]) => tasks.some((t) => t.id === id)),
+        ),
+      }));
+      watchOk();
+    } catch (e) {
+      watchFail();
+      throw e;
+    }
   },
-  refreshPanes: async () => set({ panes: await api.listPanes() }),
+  refreshPanes: async () => {
+    try {
+      set({ panes: await api.listPanes() });
+      watchOk();
+    } catch (e) {
+      watchFail();
+      throw e;
+    }
+  },
 
   /**
    * Ask GitHub what has happened to every task's pull requests.
@@ -212,7 +246,8 @@ export const useStore = create<State>((set, get) => ({
       set({ issuesLoading: false });
     }
   },
-}));
+  };
+});
 
 export const selectedTask = (s: State) =>
   s.tasks.find((t) => t.id === s.selectedTask) ?? null;

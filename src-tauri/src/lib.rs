@@ -70,6 +70,17 @@ fn report_panics() {
 pub fn run() {
     report_panics();
 
+    // A GUI app launched from Finder starts at `/`, and every child process
+    // inherits it. A coding CLI spawned there treats the whole filesystem as
+    // its project and walks out into Photos, Downloads and Music, which macOS
+    // answers with a permission prompt apiece. Setting it once here is the
+    // only place that cannot be forgotten by the next spawn site added.
+    // Nothing in the app resolves a relative path, so this changes nothing
+    // else.
+    if let Some(home) = std::env::var_os("HOME") {
+        let _ = std::env::set_current_dir(home);
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())

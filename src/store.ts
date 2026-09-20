@@ -58,6 +58,8 @@ interface State {
   refreshTasks: () => Promise<void>;
   refreshPanes: () => Promise<void>;
   refreshPrs: () => Promise<void>;
+  /** Replace one task's PR rows, for a panel that fetched them itself. */
+  setTaskPrs: (taskId: string, rows: CheckoutPr[]) => void;
   refreshSettings: () => Promise<void>;
   refreshIssues: () => Promise<void>;
 }
@@ -161,13 +163,20 @@ export const useStore = create<State>((set, get) => ({
     sweeping = true;
     try {
       const all = await api.githubAllPrs();
-      set({ prs: Object.fromEntries(all.map((t) => [t.task_id, t.rows])) });
+      // Merged, not replaced: a task the sweep could not read is left out of
+      // its result, and dropping it here would blank a panel that had just
+      // fetched those rows for itself.
+      set((s) => ({
+        prs: { ...s.prs, ...Object.fromEntries(all.map((t) => [t.task_id, t.rows])) },
+      }));
     } catch {
       // Left as it was: stale rows beat empty ones.
     } finally {
       sweeping = false;
     }
   },
+
+  setTaskPrs: (taskId, rows) => set((s) => ({ prs: { ...s.prs, [taskId]: rows } })),
 
   refreshSettings: async () => {
     const settings = await api.getSettings();

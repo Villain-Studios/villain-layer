@@ -2182,6 +2182,11 @@ pub async fn draft_pr_description(
     let branch = task.branch.clone();
     let issue_key = task.issue_key.clone();
 
+    // The same directory an interactive agent for this task would get, from
+    // the helper that decides it, rather than a second opinion that will not
+    // follow when that one changes its mind.
+    let cwd = PathBuf::from(resolve_scope(&state, &task, None)?.0);
+
     let env = shellenv::user_env().clone();
     let out = tauri::async_runtime::spawn_blocking(move || -> Result<String> {
         use std::io::{BufRead, BufReader, Write};
@@ -2235,6 +2240,7 @@ pub async fn draft_pr_description(
                 "WebFetch",
                 "WebSearch",
             ])
+            .current_dir(&cwd)
             .envs(&env)
             // Nothing here is worth thinking about first, and the thinking block
             // is dead time the reader spends watching a spinner.
@@ -2803,8 +2809,12 @@ pub struct CheckoutPr {
     pub repo: String,
     pub pr: Option<crate::integrations::github::PullRequest>,
     pub checks: Vec<crate::integrations::github::CheckRun>,
-    /// Every review submitted, so the panel can name who said what.
+    /// Every review submitted on `pr`, so the panel can name who said what.
     pub reviews: Vec<crate::integrations::github::Review>,
+    /// Earlier pull requests from this same branch, newest first. A branch
+    /// abandoned once and retried has them, and losing them off the screen
+    /// loses the record of what was already tried.
+    pub past: Vec<crate::integrations::github::PullRequest>,
     /// The decision those reviews add up to: "approved", "changes_requested",
     /// "commented" or "none".
     pub verdict: String,
@@ -2982,6 +2992,7 @@ async fn task_prs(state: &AppState, client: &GitHub, task_id: &str) -> Result<Ve
             pr: None,
             checks: Vec::new(),
             reviews: Vec::new(),
+            past: Vec::new(),
             verdict: "none".into(),
             base: checkout.base.clone(),
             changed,
@@ -2991,25 +3002,34 @@ async fn task_prs(state: &AppState, client: &GitHub, task_id: &str) -> Result<Ve
         // One repo without a GitHub remote should not fail the whole view.
         match git::origin_slug(&dir) {
             Ok((owner, name)) => {
-                match client.latest_for_branch(&owner, &name, &task.branch).await {
-                    Ok(Some(found)) => {
-                        row.checks = client
-                            .checks(&owner, &name, &task.branch)
-                            .await
-                            .unwrap_or_default();
-                        row.reviews = client
-                            .reviews(&owner, &name, found.number)
-                            .await
-                            .unwrap_or_default();
-                        row.verdict = github::verdict(&row.reviews).to_string();
+                match client.pulls_for_branch(&owner, &name, &task.branch).await {
+                    Ok(mut all) if !all.is_empty() => {
+                        // The open one is the one still being decided. With
+                        // none open, the newest says what became of the branch.
+                        let at = all.iter().position(|p| p.state == "open").unwrap_or(0);
+                        let found = all.remove(at);
 
+                        // None of the three needs anything from the others,
+                        // and this runs for every repository of every task on
+                        // a timer — so they go together rather than in turn.
+                        //
                         // The listing carries no comment counts and no merged
-                        // flag, so a PR that exists is fetched again in full
-                        // rather than reported with those silently zeroed.
-                        let full = client.pull(&owner, &name, found.number).await.ok();
-                        row.pr = Some(full.unwrap_or(found));
+                        // flag, which is why the one being shown in full is
+                        // fetched again rather than reported with those
+                        // silently zeroed.
+                        let (checks, reviews, full) = tokio::join!(
+                            client.checks(&owner, &name, &task.branch),
+                            client.reviews(&owner, &name, found.number),
+                            client.pull(&owner, &name, found.number),
+                        );
+
+                        row.checks = checks.unwrap_or_default();
+                        row.reviews = reviews.unwrap_or_default();
+                        row.verdict = github::verdict(&row.reviews).to_string();
+                        row.pr = Some(full.ok().unwrap_or(found));
+                        row.past = all;
                     }
-                    Ok(None) => {}
+                    Ok(_) => {}
                     Err(e) => row.error = Some(e.to_string()),
                 }
             }

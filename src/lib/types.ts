@@ -223,6 +223,8 @@ export interface CheckoutPr {
   pr: PullRequest | null;
   checks: CheckRun[];
   reviews: Review[];
+  /** Earlier pull requests from this branch, newest first. */
+  past: PullRequest[];
   verdict: Verdict;
   /** Where this repo's next PR is opened against; may differ from pr.base. */
   base: string;

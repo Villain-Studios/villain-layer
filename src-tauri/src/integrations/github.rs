@@ -100,34 +100,49 @@ impl GitHub {
         repo: &str,
         branch: &str,
     ) -> Result<Option<PullRequest>> {
-        let v = self
-            .json(self.req(
-                reqwest::Method::GET,
-                &format!("/repos/{owner}/{repo}/pulls?state=open&head={owner}:{branch}"),
-            ))
-            .await?;
-        Ok(v.as_array().and_then(|a| a.first()).map(to_pr))
+        Ok(self
+            .list_pulls(owner, repo, branch, "open", 1)
+            .await?
+            .into_iter()
+            .next())
     }
 
-    /// The most recent pull request for a branch, whatever became of it.
-    ///
-    /// [`pull_for_branch`](Self::pull_for_branch) asks only for open ones,
-    /// which is right when deciding whether to create another but useless for
-    /// watching: GitHub drops a PR from that listing the moment it merges, so
-    /// a watch built on it would see the PR disappear and never learn why.
-    pub async fn latest_for_branch(
+    /// Pull requests whose head is this branch, newest first.
+    async fn list_pulls(
         &self,
         owner: &str,
         repo: &str,
         branch: &str,
-    ) -> Result<Option<PullRequest>> {
+        state: &str,
+        per_page: u32,
+    ) -> Result<Vec<PullRequest>> {
         let v = self
             .json(self.req(
                 reqwest::Method::GET,
-                &format!("/repos/{owner}/{repo}/pulls?state=all&head={owner}:{branch}&per_page=1"),
+                &format!(
+                    "/repos/{owner}/{repo}/pulls?state={state}&head={owner}:{branch}&per_page={per_page}"
+                ),
             ))
             .await?;
-        Ok(v.as_array().and_then(|a| a.first()).map(to_pr))
+        Ok(v.as_array()
+            .map(|a| a.iter().map(to_pr).collect())
+            .unwrap_or_default())
+    }
+
+    /// Every pull request a branch has had, newest first.
+    ///
+    /// [`pull_for_branch`](Self::pull_for_branch) asks only for open ones,
+    /// which is right when deciding whether to open another but useless for
+    /// looking back: GitHub drops a PR from that listing the moment it closes,
+    /// so a panel built on it watches history disappear. A branch abandoned
+    /// once and retried has two, and both are worth keeping on screen.
+    pub async fn pulls_for_branch(
+        &self,
+        owner: &str,
+        repo: &str,
+        branch: &str,
+    ) -> Result<Vec<PullRequest>> {
+        self.list_pulls(owner, repo, branch, "all", 20).await
     }
 
     #[allow(clippy::too_many_arguments)]

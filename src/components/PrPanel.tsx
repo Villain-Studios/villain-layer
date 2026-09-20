@@ -4,7 +4,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { api } from "../lib/api";
 import { reviewComments, taskReview, useStore, type TaskReview } from "../store";
 import type { CheckoutPr, CheckRun, RepoResult, Review, TaskView } from "../lib/types";
-import { Field, Spinner } from "./ui";
+import { Field, Modal, Spinner } from "./ui";
 
 /**
  * The latest review from each reviewer, which is the one GitHub itself shows.
@@ -66,6 +66,8 @@ function worstByName(checks: CheckRun[]): CheckRun[] {
   return [...by.values()];
 }
 
+const NO_ROWS: CheckoutPr[] = [];
+
 function checkColor(c: CheckRun) {
   if (c.status !== "completed") return "var(--amber)";
   if (c.conclusion === "success") return "var(--green)";
@@ -82,11 +84,18 @@ export function PrPanel({ task }: { task: TaskView }) {
   );
   const toggleSettings = useStore((s) => s.toggleSettings);
   const toast = useStore((s) => s.toast);
-  const refreshPrs = useStore((s) => s.refreshPrs);
   const fail = useStore((s) => s.fail);
 
-  const watched = useStore((s) => s.prs[task.id]);
-  const [rows, setRows] = useState<CheckoutPr[]>([]);
+  /**
+   * The rows, held in the store rather than here.
+   *
+   * The background watch writes them for every task on a timer and this panel
+   * fetches them for one on demand. Two copies meant every action had to
+   * refresh both and one of them always forgot; with a single copy, whoever
+   * fetched last is simply what everyone sees.
+   */
+  const rows = useStore((s) => s.prs[task.id]) ?? NO_ROWS;
+  const setTaskPrs = useStore((s) => s.setTaskPrs);
   /**
    * Whether GitHub has answered yet.
    *
@@ -95,8 +104,17 @@ export function PrPanel({ task }: { task: TaskView }) {
    * An answer that arrives a moment later is not a reason to show the wrong
    * one in the meantime.
    */
-  const [loaded, setLoaded] = useState(false);
+  const [askedFor, setAskedFor] = useState<string | null>(null);
+  // Per task, because the panel is not remounted when you switch between them:
+  // a flag left true from the last one would show this one's empty state while
+  // its own rows were still in flight.
+  const loaded = askedFor === task.id || rows.length > 0;
   const [branches, setBranches] = useState<Record<string, string[]>>({});
+  /** Whether the "open a pull request" dialog is up. */
+  const [creating, setCreating] = useState(false);
+  /** Which PR cards are expanded, when there are enough to be worth folding. */
+  const [cards, setCards] = useState<Record<string, boolean>>({});
+  const [showPast, setShowPast] = useState(false);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [title, setTitle] = useState(task.name);
@@ -109,46 +127,39 @@ export function PrPanel({ task }: { task: TaskView }) {
     if (!settings?.github_connected) return;
     setLoading(true);
     try {
-      setRows(await api.githubTaskPrs(task.id));
-      setLoaded(true);
+      setTaskPrs(task.id, await api.githubTaskPrs(task.id));
     } catch (e) {
       fail(e);
-      // An error is an answer too: leaving this false would hide the form
-      // for good and offer nothing in its place.
-      setLoaded(true);
     } finally {
+      // An error is an answer too: never setting this would hide the form for
+      // good and offer nothing in its place.
+      setAskedFor(task.id);
       setLoading(false);
     }
   }, [task.id, settings?.github_connected, fail]);
 
   useEffect(() => { void load(); }, [load]);
 
-  // The watch refreshes every task on its own timer. Taking what it saw keeps
-  // an open panel current without it having to poll on its own account.
-  useEffect(() => {
-    if (!watched) return;
-    setRows(watched);
-    setLoaded(true);
-  }, [watched]);
-
   // What the base field offers. Keyed on the set of repos rather than the rows
   // themselves, so a sweep landing every ninety seconds does not refetch it.
   const checkoutIds = rows.map((r) => r.checkout_id).join(",");
   useEffect(() => {
+    if (!creating) return;
     let stop = false;
     void (async () => {
-      for (const id of checkoutIds.split(",").filter(Boolean)) {
-        try {
-          const list = await api.checkoutBranches(id);
-          if (stop) return;
-          setBranches((b) => ({ ...b, [id]: list }));
-        } catch {
+      const ids = checkoutIds.split(",").filter(Boolean);
+      // Independent of each other, so they are not waited for in turn.
+      const lists = await Promise.all(
+        ids.map((id) =>
           // A repo whose branches cannot be listed still takes a typed base.
-        }
-      }
+          api.checkoutBranches(id).catch(() => [] as string[]),
+        ),
+      );
+      if (stop) return;
+      setBranches(Object.fromEntries(ids.map((id, i) => [id, lists[i]])));
     })();
     return () => { stop = true; };
-  }, [checkoutIds]);
+  }, [checkoutIds, creating]);
 
   // Stop waiting for a draft if the panel goes away.
   useEffect(() => () => { if (pollRef.current) window.clearInterval(pollRef.current); }, []);
@@ -194,9 +205,7 @@ export function PrPanel({ task }: { task: TaskView }) {
     if (base.trim() === row.base || !base.trim()) return;
     try {
       await api.setCheckoutBase(row.checkout_id, base);
-      // Both copies, or the watch's older rows would put the old base back.
       await load();
-      await refreshPrs();
     } catch (e) {
       fail(e);
     }
@@ -206,7 +215,6 @@ export function PrPanel({ task }: { task: TaskView }) {
     try {
       toast("success", await api.githubRetargetPr(row.checkout_id));
       await load();
-      await refreshPrs();
     } catch (e) {
       fail(e);
     }
@@ -280,6 +288,7 @@ export function PrPanel({ task }: { task: TaskView }) {
     setBusy(true);
     try {
       report(await api.githubOpenPrs(task.id, title.trim(), body, draft), "Opened");
+      setCreating(false);
       await load();
     } catch (e) {
       fail(e);
@@ -302,148 +311,269 @@ export function PrPanel({ task }: { task: TaskView }) {
   // after it landed still needs one, and the row keeps the old PR only so the
   // panel can show what became of it.
   const pending = rows.filter((r) => (!r.pr || r.pr.state !== "open") && r.changed > 0);
-  // Only an open PR is worth a card. One merged or closed is an outcome, not
-  // something to read twenty check runs about.
-  const live = rows.filter((r) => r.pr && r.pr.state === "open");
-  const done = rows.filter((r) => r.pr && r.pr.state !== "open");
   const review = taskReview(rows);
   const said = reviewComments(rows);
 
+  // A card is only drawn for a repository's current pull request, because that
+  // is the only one whose reviews and checks were fetched. Everything else the
+  // branch has been through is a line in the list below — kept, so that opening
+  // a second attempt does not erase the first from the record.
+  const live = rows.filter((r) => r.pr && r.pr.state === "open");
+  const earlier = rows.flatMap((r) => [
+    ...(r.pr && r.pr.state !== "open" ? [{ row: r, pr: r.pr }] : []),
+    ...r.past.map((pr) => ({ row: r, pr })),
+  ]);
+  const entries = live.length + earlier.length;
+
+  const repoRows = (
+    <div className="muted" style={{ marginBottom: 10, lineHeight: 1.6 }}>
+      {rows.map((r) => (
+        <div key={r.checkout_id} className="row">
+          <span
+            className="dot"
+            style={{
+              background:
+                r.pr && r.pr.state === "open"
+                  ? "var(--green)"
+                  : r.changed > 0
+                    ? "var(--amber)"
+                    : "var(--dimmer)",
+            }}
+          />
+          <span style={{ fontFamily: "var(--mono)", fontSize: 11.5, width: 140 }}>{r.repo}</span>
+          <span>
+            {r.pr && r.pr.state === "open"
+              ? `PR #${r.pr.number} open`
+              : r.changed > 0
+                ? `${r.changed} changed file${r.changed === 1 ? "" : "s"}`
+                : "no changes"}
+          </span>
+          <div className="spacer" />
+          <span>→</span>
+          <input
+            list={`branches-${r.checkout_id}`}
+            style={{ width: 240 }}
+            defaultValue={r.base}
+            title="The branch this repository's pull request is opened against"
+            onBlur={(e) => void setBase(r, e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
+          />
+          {/*
+            Typing still works: the list is the worktree's remote-tracking
+            refs, so a branch pushed since the last fetch is not in it.
+          */}
+          <datalist id={`branches-${r.checkout_id}`}>
+            {(branches[r.checkout_id] ?? []).map((b) => (
+              <option key={b} value={b} />
+            ))}
+          </datalist>
+        </div>
+      ))}
+    </div>
+  );
+
   return (
     <div className="panel-scroll">
-      {loading && <div className="row" style={{ marginBottom: 10 }}><Spinner /> Loading…</div>}
+      <div className="row" style={{ marginBottom: 12 }}>
+        {review !== "none" ? (
+          <>
+            <span className="dot" style={{ background: TASK_REVIEW[review].color }} />
+            <b>{TASK_REVIEW[review].word}</b>
+            <span className="muted">
+              {live.length} PR{live.length === 1 ? "" : "s"}
+              {/* A task is only as reviewed as its least reviewed repository. */}
+              {review === "incomplete" &&
+                `, ${pending.length} repo${pending.length === 1 ? "" : "s"} still without one`}
+              {said > 0 && ` · ${said} comment${said === 1 ? "" : "s"}`}
+            </span>
+          </>
+        ) : (
+          <b>Pull requests</b>
+        )}
+        <div className="spacer" />
+        {loading && <Spinner />}
+        <button className="btn btn-sm" onClick={() => void load()}>Refresh</button>
+        <button className="btn btn-sm" disabled={busy} onClick={() => void push()}>
+          Push all
+        </button>
+        {entries > 0 && (
+          <button
+            className="btn btn-sm btn-primary"
+            disabled={pending.length === 0}
+            title={
+              pending.length === 0
+                ? "Every repository with changes already has an open pull request"
+                : `Open a pull request in ${pending.length} repositor${
+                    pending.length === 1 ? "y" : "ies"
+                  }`
+            }
+            onClick={() => setCreating(true)}
+          >
+            +
+          </button>
+        )}
+      </div>
 
-      {review !== "none" && (
-        <div className="row" style={{ marginBottom: 10 }}>
-          <span className="dot" style={{ background: TASK_REVIEW[review].color }} />
-          <b>{TASK_REVIEW[review].word}</b>
-          <span className="muted">
-            {live.length} PR{live.length === 1 ? "" : "s"}
-            {/* A task is only as reviewed as its least reviewed repository. */}
-            {review === "incomplete" &&
-              `, ${pending.length} repo${pending.length === 1 ? "" : "s"} still without one`}
-            {said > 0 && ` · ${said} comment${said === 1 ? "" : "s"}`}
-          </span>
+      {loaded && entries === 0 && (
+        <div className="card">
+          <div className="muted" style={{ lineHeight: 1.6, marginBottom: 12 }}>
+            Nothing has been opened from <code>{task.branch}</code> yet.
+            {pending.length > 0
+              ? ` ${pending.length} repositor${pending.length === 1 ? "y has" : "ies have"} changes ready.`
+              : " No repository has changes to open one with."}
+          </div>
+          <button
+            className="btn btn-primary"
+            disabled={pending.length === 0}
+            onClick={() => setCreating(true)}
+          >
+            Open pull request
+          </button>
         </div>
       )}
 
-      {live.map((row) => (
-        <div key={row.checkout_id} className="card">
-          <div className="row">
-            <h3 style={{ margin: 0 }}>
-              <span style={{ color: "var(--dim)" }}>{row.repo}</span>{" "}
-              #{row.pr!.number} {row.pr!.title}
-            </h3>
-            <div className="spacer" />
-            {row.pr!.draft && <span className="chip">draft</span>}
-            {row.pr!.merged && <span className="chip add">merged</span>}
-            {row.verdict === "approved" && <span className="chip add">approved</span>}
-            {row.verdict === "changes_requested" && (
-              <span className="chip del">changes requested</span>
-            )}
-            <span className="chip">{row.pr!.state}</span>
-            {/*
-              At the top, not under the checks: a PR with a dozen check runs
-              put its only link below the fold, which is no link at all.
-            */}
-            <button className="btn-sm" title="Open on GitHub" onClick={() => openPr(row.pr!.url)}>
-              ↗
-            </button>
-            <button
-              className="btn-sm"
-              title="Copy link"
-              onClick={() => copyPr(row.pr!.url, row.pr!.number)}
+      {live.map((row) => {
+        const pr = row.pr!;
+        const key = row.checkout_id;
+        // Several fold, so the list reads as a list rather than as a wall of
+        // check runs. One on its own is always shown — and stays shown if the
+        // others go away while it is folded, which would otherwise leave it
+        // collapsed with no chevron left to open it.
+        const foldable = live.length > 1;
+        const shown = !foldable || (cards[key] ?? false);
+        return (
+          <div key={key} className="card">
+            <div
+              className="row"
+              style={foldable ? { cursor: "pointer" } : undefined}
+              onClick={foldable ? () => setCards((c) => ({ ...c, [key]: !shown })) : undefined}
             >
-              ⧉
-            </button>
-          </div>
-          <div className="muted" style={{ marginTop: 6 }}>
-            {row.pr!.head} → {row.pr!.base} · opened by {row.pr!.author}
-            {row.pr!.comments + row.pr!.review_comments > 0 && (
-              <>
-                {" · "}
-                {row.pr!.comments + row.pr!.review_comments} comment
-                {row.pr!.comments + row.pr!.review_comments === 1 ? "" : "s"}
-              </>
-            )}
-          </div>
-
-          {row.pr!.base !== row.base && row.pr!.state === "open" && (
-            <div className="row" style={{ marginTop: 10 }}>
-              <span className="chip warn">targets {row.pr!.base}</span>
-              <button className="btn btn-sm" onClick={() => void retarget(row)}>
-                Move onto {row.base}
-              </button>
-            </div>
-          )}
-
-          {row.reviews.length > 0 && (
-            <div style={{ marginTop: 10 }}>
-              {latestByAuthor(row.reviews).map((r) => (
-                <div key={r.author} className="check">
-                  <span className="dot" style={{ background: reviewColor(r.state) }} />
-                  <span className="name">{r.author}</span>
-                  <span className="muted">
-                    {REVIEW_WORDS[r.state] ?? r.state.toLowerCase()}
-                  </span>
-                  {r.url && (
-                    <button className="btn-sm" onClick={() => void openUrl(r.url)}>↗</button>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-
-          {row.checks.length > 0 && (
-            <div style={{ marginTop: 10 }}>
-              {worstByName(row.checks).map((c, i) => (
-                <div key={`${c.name}:${i}`} className="check">
-                  <span className="dot" style={{ background: checkColor(c) }} />
-                  <span className="name">{c.name}</span>
-                  <span className="muted">{c.conclusion ?? c.status}</span>
-                  {c.url && <button className="btn-sm" onClick={() => void openUrl(c.url!)}>↗</button>}
-                </div>
-              ))}
-            </div>
-          )}
-
-          <div className="row" style={{ marginTop: 10 }}>
-            <button className="btn btn-sm" onClick={() => openPr(row.pr!.url)}>
-              Open on GitHub
-            </button>
-          </div>
-        </div>
-      ))}
-
-      {done.length > 0 && (
-        <div className="card">
-          <h3>Already decided</h3>
-          {done.map((row) => (
-            <div key={row.checkout_id} className="check">
-              <span
-                className="dot"
-                style={{ background: row.pr!.merged ? "var(--green)" : "var(--dim)" }}
-              />
-              <span className="name">
-                {row.repo} #{row.pr!.number}
-              </span>
-              <span className="muted">
-                {row.pr!.merged
-                  ? `merged into ${row.pr!.base}`
-                  : "closed without merging"}
-              </span>
-              <button className="btn-sm" title="Open on GitHub" onClick={() => openPr(row.pr!.url)}>
+              {foldable && <span className={`chev${shown ? " open" : ""}`}>▶</span>}
+              <h3 style={{ margin: 0 }}>
+                <span style={{ color: "var(--dim)" }}>{row.repo}</span> #{pr.number} {pr.title}
+              </h3>
+              <div className="spacer" />
+              {pr.draft && <span className="chip">draft</span>}
+              {row.verdict === "approved" && <span className="chip add">approved</span>}
+              {row.verdict === "changes_requested" && (
+                <span className="chip del">changes requested</span>
+              )}
+              {/* Stopped, or opening the PR would fold the card underneath it. */}
+              <button
+                className="btn-sm"
+                title="Open on GitHub"
+                onClick={(e) => { e.stopPropagation(); openPr(pr.url); }}
+              >
                 ↗
               </button>
               <button
                 className="btn-sm"
                 title="Copy link"
-                onClick={() => copyPr(row.pr!.url, row.pr!.number)}
+                onClick={(e) => { e.stopPropagation(); copyPr(pr.url, pr.number); }}
               >
                 ⧉
               </button>
             </div>
-          ))}
+
+            {shown && (
+              <>
+                <div className="muted" style={{ marginTop: 6 }}>
+                  {pr.head} → {pr.base} · opened by {pr.author}
+                  {pr.comments + pr.review_comments > 0 && (
+                    <>
+                      {" · "}
+                      {pr.comments + pr.review_comments} comment
+                      {pr.comments + pr.review_comments === 1 ? "" : "s"}
+                    </>
+                  )}
+                </div>
+
+                {pr.base !== row.base && (
+                  <div className="row" style={{ marginTop: 10 }}>
+                    <span className="chip warn">targets {pr.base}</span>
+                    <button className="btn btn-sm" onClick={() => void retarget(row)}>
+                      Move onto {row.base}
+                    </button>
+                  </div>
+                )}
+
+                {row.reviews.length > 0 && (
+                  <div style={{ marginTop: 10 }}>
+                    {latestByAuthor(row.reviews).map((r) => (
+                      <div key={r.author} className="check">
+                        <span className="dot" style={{ background: reviewColor(r.state) }} />
+                        <span className="name">{r.author}</span>
+                        <span className="muted">
+                          {REVIEW_WORDS[r.state] ?? r.state.toLowerCase()}
+                        </span>
+                        {r.url && (
+                          <button className="btn-sm" onClick={() => openPr(r.url)}>↗</button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {row.checks.length > 0 && (
+                  <div style={{ marginTop: 10 }}>
+                    {worstByName(row.checks).map((c, i) => (
+                      <div key={`${c.name}:${i}`} className="check">
+                        <span className="dot" style={{ background: checkColor(c) }} />
+                        <span className="name">{c.name}</span>
+                        <span className="muted">{c.conclusion ?? c.status}</span>
+                        {c.url && (
+                          <button className="btn-sm" onClick={() => openPr(c.url!)}>↗</button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        );
+      })}
+
+      {earlier.length > 0 && (
+        <div className="card">
+          <div
+            className="row"
+            style={{ cursor: "pointer" }}
+            onClick={() => setShowPast((v) => !v)}
+          >
+            <span className={`chev${showPast ? " open" : ""}`}>▶</span>
+            <h3 style={{ margin: 0 }}>Earlier pull requests</h3>
+            <span className="muted">{earlier.length}</span>
+          </div>
+          {showPast &&
+            earlier.map(({ row, pr }) => (
+              <div key={`${row.checkout_id}:${pr.number}`} className="check">
+                <span
+                  className="dot"
+                  style={{ background: pr.merged ? "var(--green)" : "var(--dim)" }}
+                />
+                <span className="name">
+                  {row.repo} #{pr.number}
+                </span>
+                <span className="muted">
+                  {pr.merged
+                    ? `merged into ${pr.base}`
+                    : pr.state === "open"
+                      ? `still open against ${pr.base}`
+                      : "closed without merging"}
+                </span>
+                <button className="btn-sm" title="Open on GitHub" onClick={() => openPr(pr.url)}>
+                  ↗
+                </button>
+                <button
+                  className="btn-sm"
+                  title="Copy link"
+                  onClick={() => copyPr(pr.url, pr.number)}
+                >
+                  ⧉
+                </button>
+              </div>
+            ))}
         </div>
       )}
 
@@ -460,117 +590,79 @@ export function PrPanel({ task }: { task: TaskView }) {
         </div>
       )}
 
-      {loaded && (
-      <div className="card">
-        <h3>
-          {pending.length === 0 && live.length > 0
-            ? "Everything with changes has a PR"
-            : `Open pull request${pending.length === 1 ? "" : "s"}`}
-        </h3>
+      {creating && (
+        <Modal
+          title="Open pull request"
+          wide
+          onClose={() => setCreating(false)}
+          footer={
+            <>
+              <button className="btn" onClick={() => setCreating(false)}>Cancel</button>
+              <button
+                className="btn btn-primary"
+                disabled={busy || pending.length === 0 || !title.trim()}
+                onClick={() => void openPrs()}
+              >
+                {busy
+                  ? "Working…"
+                  : `Push & open ${pending.length} PR${pending.length === 1 ? "" : "s"}`}
+              </button>
+            </>
+          }
+        >
+          {repoRows}
 
-        {rows.length > 0 && (
-          <div className="muted" style={{ marginBottom: 10, lineHeight: 1.6 }}>
-            {rows.map((r) => (
-              <div key={r.checkout_id} className="row">
-                <span className="dot" style={{
-                  background: r.pr ? "var(--green)" : r.changed > 0 ? "var(--amber)" : "var(--dimmer)",
-                }} />
-                <span style={{ fontFamily: "var(--mono)", fontSize: 11.5, width: 140 }}>
-                  {r.repo}
-                </span>
-                <span>
-                  {r.pr ? `PR #${r.pr.number}` : r.changed > 0
-                    ? `${r.changed} changed file${r.changed === 1 ? "" : "s"}`
-                    : "no changes"}
-                </span>
-                <div className="spacer" />
-                <span>→</span>
-                <input
-                  list={`branches-${r.checkout_id}`}
-                  style={{ width: 240 }}
-                  defaultValue={r.base}
-                  title="The branch this repository's pull request is opened against"
-                  onBlur={(e) => void setBase(r, e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
-                />
-                {/*
-                  Typing still works: the list is the worktree's remote-tracking
-                  refs, so a branch pushed since the last fetch is not in it.
-                */}
-                <datalist id={`branches-${r.checkout_id}`}>
-                  {(branches[r.checkout_id] ?? []).map((b) => (
-                    <option key={b} value={b} />
-                  ))}
-                </datalist>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {pending.length > 0 && (
-          <>
-            <Field label="Title">
-              <input value={title} onChange={(e) => setTitle(e.target.value)} />
-            </Field>
-            <Field
-              label="Description"
-              hint={
-                drafting
-                  ? "Writing — it appears here as it goes."
-                  : "Written from the diff by a fast model, as a handoff for whoever reviews this."
-              }
-            >
-              <textarea rows={8} value={body} onChange={(e) => setBody(e.target.value)} />
-              <div className="row" style={{ marginTop: 8 }}>
-                <button
-                  className="btn btn-sm"
-                  disabled={drafting}
-                  title="Write the description from the diff on this branch"
-                  onClick={() => void draftWithAgent()}
-                >
-                  {drafting ? "Drafting…" : "✨ Draft description"}
-                </button>
-                {drafting && <Spinner />}
-              </div>
-            </Field>
-            <div className="row" style={{ marginBottom: 12 }}>
-              <label className="row" style={{ gap: 6, cursor: "pointer" }}>
-                <input
-                  type="checkbox"
-                  style={{ width: "auto" }}
-                  checked={draft}
-                  onChange={(e) => setDraft(e.target.checked)}
-                />
-                Open as draft
-              </label>
+          {pending.length === 0 ? (
+            <div className="muted" style={{ lineHeight: 1.6 }}>
+              Every repository with changes already has an open pull request.
             </div>
-          </>
-        )}
+          ) : (
+            <>
+              <Field label="Title">
+                <input value={title} onChange={(e) => setTitle(e.target.value)} />
+              </Field>
+              <Field
+                label="Description"
+                hint={
+                  drafting
+                    ? "Writing — it appears here as it goes."
+                    : "Written from the diff by a fast model, as a handoff for whoever reviews this."
+                }
+              >
+                <textarea rows={8} value={body} onChange={(e) => setBody(e.target.value)} />
+                <div className="row" style={{ marginTop: 8 }}>
+                  <button
+                    className="btn btn-sm"
+                    disabled={drafting}
+                    title="Write the description from the diff on this branch"
+                    onClick={() => void draftWithAgent()}
+                  >
+                    {drafting ? "Drafting…" : "✨ Draft description"}
+                  </button>
+                  {drafting && <Spinner />}
+                </div>
+              </Field>
+              <div className="row" style={{ marginBottom: 12 }}>
+                <label className="row" style={{ gap: 6, cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    style={{ width: "auto" }}
+                    checked={draft}
+                    onChange={(e) => setDraft(e.target.checked)}
+                  />
+                  Open as draft
+                </label>
+              </div>
+            </>
+          )}
 
-        <div className="row">
-          <button className="btn" disabled={busy} onClick={() => void push()}>
-            Push all
-          </button>
-          <button className="btn btn-sm" onClick={() => void load()}>Refresh</button>
-          <div className="spacer" />
-          <button
-            className="btn btn-primary"
-            disabled={busy || pending.length === 0 || !title.trim()}
-            onClick={() => void openPrs()}
-          >
-            {busy
-              ? "Working…"
-              : `Push & open ${pending.length} PR${pending.length === 1 ? "" : "s"}`}
-          </button>
-        </div>
-
-        <div className="muted" style={{ marginTop: 10, lineHeight: 1.55 }}>
-          Opens one PR per repo with changes, all from <code>{task.branch}</code>.
-          {task.issue_key
-            ? ` The links are then posted back to ${task.issue_key} as a single comment, so the ticket is where the set stays joined up.`
-            : ""}
-        </div>
-      </div>
+          <div className="muted" style={{ lineHeight: 1.55 }}>
+            Opens one PR per repository with changes, all from <code>{task.branch}</code>.
+            {task.issue_key
+              ? ` The links are then posted back to ${task.issue_key} as a single comment, so the ticket is where the set stays joined up.`
+              : ""}
+          </div>
+        </Modal>
       )}
     </div>
   );

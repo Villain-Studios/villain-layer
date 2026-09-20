@@ -2,11 +2,11 @@ import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { api, errMessage } from "../lib/api";
 import { paneState, taskReview, taskTotals, useStore, type TaskReview } from "../store";
-import type { TaskView } from "../lib/types";
-import { Confirm, ContextMenu, Field, Modal, Switch, type MenuItem } from "./ui";
+import type { JiraIssue, TaskView } from "../lib/types";
+import { Combo, Confirm, ContextMenu, Field, Modal, Switch, type MenuItem } from "./ui";
 import { RepoPicker } from "./RepoPicker";
 import { read, write } from "../lib/persist";
-import { IssueTypeIcon, isEpicType, typeMap } from "./IssueType";
+import { IssueTypeIcon, typeMap } from "./IssueType";
 
 /** What a task out for review is waiting on, in a word. */
 const REVIEW_WORD: Partial<Record<TaskReview, { text: string; color: string }>> = {
@@ -68,10 +68,17 @@ export function Sidebar() {
     () => issueTypes.filter((t) => t.hierarchy_level === 0 && !t.subtask),
     [issueTypes],
   );
-  const epics = useMemo(
-    () => issues.filter((i) => isEpicType(tm, i.issue_type)),
-    [issues, tm],
+  // Epics from the board are what the dialog used to offer, which is only the
+  // ones already carrying tickets. Jira is asked for the rest.
+  const [projectEpics, setProjectEpics] = useState<JiraIssue[]>([]);
+  const [epicsLoading, setEpicsLoading] = useState(false);
+  const epicOptions = useMemo(
+    () => projectEpics.map((e) => `${e.key} — ${e.summary}`),
+    [projectEpics],
   );
+  const epicLabel = jiraParent
+    ? epicOptions.find((o) => o.startsWith(`${jiraParent} `)) ?? jiraParent
+    : "";
 
   // Default to whatever the site calls a plain issue, without assuming it is
   // named "Task" — it often is not.
@@ -80,6 +87,19 @@ export function Sidebar() {
     const preferred = creatable.find((t) => t.name.toLowerCase() === "task") ?? creatable[0];
     setJiraType(preferred?.name ?? "");
   }, [creatable, jiraType]);
+
+  // Asked for when the dialog is open and a project is named, and again when
+  // that changes. Quiet on failure: the field still takes a typed key.
+  useEffect(() => {
+    if (!creating || !withJira || !jiraProject.trim()) { setProjectEpics([]); return; }
+    let stop = false;
+    setEpicsLoading(true);
+    api.jiraEpics(jiraProject.trim())
+      .then((list) => { if (!stop) setProjectEpics(list); })
+      .catch(() => { if (!stop) setProjectEpics([]); })
+      .finally(() => { if (!stop) setEpicsLoading(false); });
+    return () => { stop = true; };
+  }, [creating, withJira, jiraProject]);
 
   // Seeded when the dialog opens, and only then: refilling whenever the field
   // is empty would make it impossible to clear or retype.
@@ -560,19 +580,17 @@ export function Sidebar() {
           {withJira && (
             <div className="jira-fields">
               <Field label="Project" hint="The key the ticket is filed under.">
-                <input
+                <Combo
                   value={jiraProject}
-                  onChange={(e) => {
-                    const v = e.target.value.trim().toUpperCase();
+                  options={boardKeys}
+                  placeholder="ACME"
+                  width="100%"
+                  onChange={(raw) => {
+                    const v = raw.trim().toUpperCase();
                     setJiraProject(v);
                     write("jiraProject", v);
                   }}
-                  list="jira-project-keys"
-                  placeholder="ACME"
                 />
-                <datalist id="jira-project-keys">
-                  {boardKeys.map((k) => <option key={k} value={k} />)}
-                </datalist>
               </Field>
 
               <Field label="Type">
@@ -593,16 +611,23 @@ export function Sidebar() {
                 </div>
               </Field>
 
-              {epics.length > 0 && (
-                <Field label="Epic" hint="Optional. Only epics already on your board are listed.">
-                  <select value={jiraParent} onChange={(e) => setJiraParent(e.target.value)}>
-                    <option value="">No epic</option>
-                    {epics.map((e) => (
-                      <option key={e.key} value={e.key}>{e.key} — {e.summary}</option>
-                    ))}
-                  </select>
-                </Field>
-              )}
+              <Field
+                label="Epic"
+                hint={
+                  epicsLoading
+                    ? "Asking Jira for this project's epics…"
+                    : "Optional. Every open epic on the project, whether or not it has work on it."
+                }
+              >
+                <Combo
+                  value={epicLabel}
+                  options={epicOptions}
+                  placeholder="No epic"
+                  width="100%"
+                  empty="No open epics on this project"
+                  onChange={(v) => setJiraParent(v.trim().split(/\s/)[0] ?? "")}
+                />
+              </Field>
 
               <Field label="Description" hint="Optional. Becomes the ticket body and the agent's briefing.">
                 <textarea

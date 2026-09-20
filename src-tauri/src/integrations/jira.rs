@@ -656,7 +656,7 @@ pub fn default_jql(project_key: Option<&str>) -> String {
 ///
 /// Search text comes from a text box, and a stray quote would otherwise end
 /// the literal and let the rest of what was typed be read as query syntax.
-fn jql_string(raw: &str) -> String {
+pub(crate) fn jql_string(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len() + 2);
     out.push('"');
     for c in raw.chars() {

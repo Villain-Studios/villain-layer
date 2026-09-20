@@ -120,6 +120,8 @@ export const api = {
   jiraIssues: () => invoke<JiraPage>("jira_issues"),
   jiraIssueTypes: (refresh = false) =>
     invoke<JiraIssueType[]>("jira_issue_types", { refresh }),
+  jiraEpics: (projectKey: string) =>
+    invoke<JiraIssue[]>("jira_epics", { projectKey }),
   jiraTransitions: (key: string) => invoke<JiraTransition[]>("jira_transitions", { key }),
   jiraTransition: (key: string, transitionId: string) =>
     invoke<void>("jira_transition", { key, transitionId }),

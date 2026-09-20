@@ -3,7 +3,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { api } from "../lib/api";
 import { useStore } from "../store";
 import type { FoundRepo } from "../lib/types";
-import { Field, Modal, Spinner } from "./ui";
+import { Combo, Field, Modal, Spinner } from "./ui";
 
 /**
  * Adding repos one folder-picker at a time does not scale past a handful, so
@@ -148,15 +148,13 @@ export function AddRepos({ onClose }: { onClose: () => void }) {
             label="Group"
             hint="Repos added together land in one group, which is how the sidebar and the task picker organise them. Leave blank for ungrouped."
           >
-            <input
+            <Combo
               value={group}
-              list="villain-groups"
-              onChange={(e) => setGroup(e.target.value)}
+              options={existingGroups}
+              onChange={setGroup}
               placeholder="backend"
+              width="100%"
             />
-            <datalist id="villain-groups">
-              {existingGroups.map((g) => <option key={g} value={g} />)}
-            </datalist>
           </Field>
 
           <div className="repo-picker" style={{ maxHeight: 280 }}>

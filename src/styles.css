@@ -1190,10 +1190,10 @@ textarea { resize: vertical; font-family: var(--mono); }
 */
 .subtabs button.call {
   color: var(--accent);
-  border-color: var(--accent-dim);
-  background: var(--panel-2);
+  background: transparent;
+  border-color: transparent;
 }
-.subtabs button.call:hover { border-color: var(--accent); color: var(--accent); }
+.subtabs button.call:hover { border-color: var(--accent-dim); }
 
 .subtabs .badge { margin-left: 6px; font-size: 11px; color: var(--dimmer); font-family: var(--mono); }
 
@@ -1234,3 +1234,36 @@ textarea { resize: vertical; font-family: var(--mono); }
 /* In progress on the board, with nothing here to work in. */
 .chip.sync.open { color: var(--blue); border-color: #2a3a52; }
 .chip.sync.open:hover { border-color: var(--blue); }
+
+/* ------------------------------------------------------------------ combo */
+
+.combo { position: relative; display: inline-flex; flex-direction: column; }
+.combo > input { width: 100%; }
+.combo-list {
+  position: absolute;
+  top: calc(100% + 3px);
+  left: 0;
+  right: 0;
+  z-index: 40;
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+}
+.combo-list button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 5px 8px;
+  border-radius: 5px;
+  font-size: 12.5px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.combo-list button.on { background: var(--panel); color: var(--accent); }
+.combo-empty { padding: 6px 8px; font-size: 12px; color: var(--dimmer); }

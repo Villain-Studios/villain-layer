@@ -3,7 +3,7 @@ import { api } from "../lib/api";
 import { groupProjects, useStore } from "../store";
 import type { Project } from "../lib/types";
 import { AddRepos } from "./AddRepos";
-import { Confirm } from "./ui";
+import { Combo, Confirm } from "./ui";
 
 export function ReposView() {
   const { projects, tasks } = useStore();
@@ -21,6 +21,7 @@ export function ReposView() {
   } | null>(null);
 
   const groups = groupProjects(projects);
+  const groupNames = [...new Set(projects.map((p) => p.group).filter(Boolean))] as string[];
   const anyOpen = groups.some((g) => !(shut[g.group] ?? true));
 
   async function setGroup(projectId: string, group: string) {
@@ -121,16 +122,16 @@ export function ReposView() {
             <span className="muted">{g.projects.length}</span>
             <div className="spacer" />
             {/* Renaming must not toggle the section underneath it. */}
-            <input
-              style={{ width: 170 }}
-              defaultValue={g.group}
-              placeholder="rename group"
-              onClick={(e) => e.stopPropagation()}
-              onBlur={(e) => {
-                if (e.target.value.trim() !== g.group) void regroup(g.group, e.target.value);
-              }}
-              onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
-            />
+            {/* Renaming must not toggle the section underneath it. */}
+            <div onClick={(e) => e.stopPropagation()}>
+              <Combo
+                value={g.group}
+                options={groupNames}
+                placeholder="rename group"
+                width={170}
+                onChange={(v) => { if (v.trim() !== g.group) void regroup(g.group, v); }}
+              />
+            </div>
           </div>
 
           {!closed && g.projects.map((p) => {
@@ -143,16 +144,14 @@ export function ReposView() {
                 <span className="rpath" title={p.path}>{p.path}</span>
                 <span className="chip">{p.default_branch}</span>
                 {inUse > 0 && <span className="chip add">{inUse} task{inUse === 1 ? "" : "s"}</span>}
-                <input
-                  list="villain-groups-view"
-                  defaultValue={p.group ?? ""}
+                <Combo
+                  value={p.group ?? ""}
+                  options={groupNames}
                   placeholder="ungrouped"
-                  onBlur={(e) => {
-                    if ((e.target.value.trim() || null) !== p.group) {
-                      void setGroup(p.id, e.target.value);
-                    }
+                  width={170}
+                  onChange={(v) => {
+                    if ((v.trim() || null) !== p.group) void setGroup(p.id, v);
                   }}
-                  onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
                 />
                 <button className="btn btn-sm btn-danger" onClick={() => askRemove(p)}>
                   Remove
@@ -163,12 +162,6 @@ export function ReposView() {
         </div>
         );
       })}
-
-      <datalist id="villain-groups-view">
-        {[...new Set(projects.map((p) => p.group).filter(Boolean))].map((g) => (
-          <option key={g as string} value={g as string} />
-        ))}
-      </datalist>
 
       {adding && <AddRepos onClose={() => setAdding(false)} />}
 

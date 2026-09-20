@@ -4,7 +4,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { api } from "../lib/api";
 import { reviewComments, taskReview, useStore, type TaskReview } from "../store";
 import type { CheckoutPr, CheckRun, RepoResult, Review, TaskView } from "../lib/types";
-import { Field, Modal, Spinner } from "./ui";
+import { Combo, Field, Modal, Spinner } from "./ui";
 
 /**
  * The latest review from each reviewer, which is the one GitHub itself shows.
@@ -350,23 +350,18 @@ export function PrPanel({ task }: { task: TaskView }) {
           </span>
           <div className="spacer" />
           <span>→</span>
-          <input
-            list={`branches-${r.checkout_id}`}
-            style={{ width: 240 }}
-            defaultValue={r.base}
-            title="The branch this repository's pull request is opened against"
-            onBlur={(e) => void setBase(r, e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
-          />
           {/*
             Typing still works: the list is the worktree's remote-tracking
             refs, so a branch pushed since the last fetch is not in it.
           */}
-          <datalist id={`branches-${r.checkout_id}`}>
-            {(branches[r.checkout_id] ?? []).map((b) => (
-              <option key={b} value={b} />
-            ))}
-          </datalist>
+          <Combo
+            value={r.base}
+            options={branches[r.checkout_id] ?? []}
+            width={240}
+            title="The branch this repository's pull request is opened against"
+            empty="No branch matches"
+            onChange={(v) => void setBase(r, v)}
+          />
         </div>
       ))}
     </div>

@@ -1828,6 +1828,37 @@ pub async fn jira_connect(
 
 /// Every issue type this Jira defines, with its own icon. Nothing about types
 /// is hardcoded — a site with custom types renders exactly as it does in Jira.
+/// Every epic on a project, not just the ones already carrying work.
+///
+/// The New task dialog offered whatever epics happened to appear in the user's
+/// own issue list, which is the epics that already have tickets on them — the
+/// least useful set when the point of the dialog is to file the first one.
+/// Asked of Jira directly instead, by the hierarchy level that means "epic"
+/// everywhere rather than by a name that means it only here.
+#[tauri::command]
+pub async fn jira_epics(
+    state: State<'_, AppState>,
+    project_key: String,
+) -> Result<Vec<jira::Issue>> {
+    let types = jira_issue_types_inner(&state, false).await?;
+    let names: Vec<String> = types
+        .iter()
+        .filter(|t| t.hierarchy_level >= 1)
+        .map(|t| jira::jql_string(&t.name))
+        .collect();
+    if names.is_empty() || project_key.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let (client, _) = jira_client(&state)?;
+    let jql = format!(
+        "project = {} AND issuetype in ({}) AND statusCategory != Done ORDER BY key DESC",
+        jira::jql_string(project_key.trim()),
+        names.join(", "),
+    );
+    Ok(client.search(&jql, 200).await?.issues)
+}
+
 #[tauri::command]
 pub async fn jira_issue_types(
     state: State<'_, AppState>,

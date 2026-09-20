@@ -284,3 +284,128 @@ export function Confirm({
     </Modal>
   );
 }
+
+/**
+ * One input that filters a list as you type.
+ *
+ * The app had grown five of these, each a bare `<input list>` with its own
+ * `<datalist>`: no way to tell there was anything to pick from until you
+ * typed, no keyboard selection, and a native popup that looks like nothing
+ * else here. One component instead, so they behave alike and look like the
+ * rest of the app.
+ *
+ * Free text is allowed by default, because most of these name something that
+ * may not exist yet — a group nobody has used, a branch pushed since the last
+ * fetch. Pass `allowFree={false}` where only a listed value makes sense.
+ */
+export function Combo({
+  value,
+  onChange,
+  options,
+  placeholder,
+  title,
+  width,
+  allowFree = true,
+  empty,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: readonly string[];
+  placeholder?: string;
+  title?: string;
+  width?: number | string;
+  allowFree?: boolean;
+  /** Shown in place of the list when nothing matches. */
+  empty?: string;
+}) {
+  const [text, setText] = useState(value);
+  const [open, setOpen] = useState(false);
+  // Until something is typed the list shows everything: opening it is a
+  // request to see the options, not to filter them by what is already there.
+  const [typed, setTyped] = useState(false);
+  const [cursor, setCursor] = useState(-1);
+
+  /**
+   * Follow the value when it changes underneath us — another pane, a refresh.
+   *
+   * Only on a genuine change: most of these commit through an async save, so
+   * for a moment after picking, `value` is still the old one. Re-reading it
+   * on every render would snap the box back to what was there before, until
+   * the save lands and moves it forward again.
+   */
+  const seen = useRef(value);
+  useEffect(() => {
+    if (value === seen.current) return;
+    seen.current = value;
+    setText(value);
+  }, [value]);
+
+  const shown = typed
+    ? options.filter((o) => o.toLowerCase().includes(text.trim().toLowerCase()))
+    : options;
+
+  function commit(v: string) {
+    seen.current = v;
+    setText(v);
+    setOpen(false);
+    setTyped(false);
+    setCursor(-1);
+    if (v !== value) onChange(v);
+  }
+
+  return (
+    <div className="combo" style={width === undefined ? undefined : { width }}>
+      <input
+        value={text}
+        placeholder={placeholder}
+        title={title}
+        onChange={(e) => { setText(e.target.value); setTyped(true); setOpen(true); setCursor(-1); }}
+        onFocus={() => { setOpen(true); setTyped(false); setCursor(-1); }}
+        onBlur={() => {
+          setOpen(false);
+          setTyped(false);
+          if (allowFree) commit(text);
+          else setText(value);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowDown") {
+            e.preventDefault();
+            setOpen(true);
+            setCursor((c) => Math.min(c + 1, shown.length - 1));
+          } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            setCursor((c) => Math.max(c - 1, -1));
+          } else if (e.key === "Enter") {
+            e.preventDefault();
+            commit(cursor >= 0 && shown[cursor] ? shown[cursor] : text);
+            e.currentTarget.blur();
+          } else if (e.key === "Escape") {
+            setText(value);
+            setOpen(false);
+            e.currentTarget.blur();
+          }
+        }}
+      />
+      {open && (
+        <div className="combo-list">
+          {shown.length === 0 && (
+            <div className="combo-empty">{empty ?? "Nothing matches"}</div>
+          )}
+          {shown.map((o, i) => (
+            <button
+              key={o}
+              type="button"
+              className={i === cursor ? "on" : undefined}
+              // Down, not click: a click fires after blur has already closed
+              // the list out from under the pointer.
+              onMouseDown={(e) => { e.preventDefault(); commit(o); }}
+              onMouseEnter={() => setCursor(i)}
+            >
+              {o}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}

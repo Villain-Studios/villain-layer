@@ -99,12 +99,7 @@ async fn handle(
     body: Json<Value>,
 ) -> impl IntoResponse {
     // Loopback is not authorisation on a shared machine; the token is.
-    let ok = headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .is_some_and(|t| t == ctx.token);
-    if !ok {
+    if !bearer_ok(&headers, &ctx.token) {
         return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "bad token" }))).into_response();
     }
 
@@ -128,6 +123,14 @@ async fn handle(
         }),
     };
     (StatusCode::OK, Json(response)).into_response()
+}
+
+fn bearer_ok(headers: &HeaderMap, token: &str) -> bool {
+    headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .is_some_and(|t| t == token)
 }
 
 async fn dispatch(app: &AppHandle, method: &str, params: Value) -> Result<Value> {
@@ -224,6 +227,15 @@ fn require_confirm(args: &Value, tool: &str) -> Result<()> {
     Err(crate::error::Error::Other(format!(
         "{tool} needs confirm: true after the user agrees; nothing was changed"
     )))
+}
+
+/// Listing transitions and dry-run cleanup are reads in all but name.
+fn tool_needs_confirm(name: &str, args: &Value) -> bool {
+    match name {
+        "jira_transition" => arg(args, "transition").is_some(),
+        "slack_cleanup" => !args.get("dry_run").and_then(Value::as_bool).unwrap_or(false),
+        other => DANGER.contains(&other),
+    }
 }
 
 fn tools() -> Vec<Value> {
@@ -500,12 +512,7 @@ async fn call(app: &AppHandle, name: &str, args: Value) -> Result<Value> {
 
     // Listing transitions and dry-run cleanup are reads in all but name — they
     // do not need the confirm gate. Applying them does.
-    let needs_confirm = match name {
-        "jira_transition" => arg(&args, "transition").is_some(),
-        "slack_cleanup" => !args.get("dry_run").and_then(Value::as_bool).unwrap_or(false),
-        other => DANGER.contains(&other),
-    };
-    if needs_confirm {
+    if tool_needs_confirm(name, &args) {
         require_confirm(&args, name)?;
     }
 
@@ -782,12 +789,101 @@ pub fn write_config(dir: &std::path::Path) -> Result<()> {
     };
     let path = dir.join(".mcp.json");
     std::fs::write(&path, serde_json::to_vec_pretty(&config)?)?;
+    lock_config_perms(&path)?;
+    Ok(())
+}
+
+fn lock_config_perms(path: &std::path::Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&path)?.permissions();
+        let mut perms = std::fs::metadata(path)?.permissions();
         perms.set_mode(0o600);
-        std::fs::set_permissions(&path, perms)?;
+        std::fs::set_permissions(path, perms)?;
     }
+    let _ = path;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::HeaderValue;
+
+    #[test]
+    fn a_missing_or_wrong_bearer_is_refused() {
+        let mut headers = HeaderMap::new();
+        assert!(!bearer_ok(&headers, "secret"));
+
+        headers.insert("authorization", HeaderValue::from_static("Bearer other"));
+        assert!(!bearer_ok(&headers, "secret"));
+
+        headers.insert("authorization", HeaderValue::from_static("Bearer secret"));
+        assert!(bearer_ok(&headers, "secret"));
+    }
+
+    #[test]
+    fn tools_list_names_the_danger_tier() {
+        let listed = tools();
+        let names: Vec<&str> = listed
+            .iter()
+            .filter_map(|t| t.get("name").and_then(Value::as_str))
+            .collect();
+        for danger in DANGER {
+            assert!(names.contains(danger), "{danger} missing from tools/list");
+        }
+    }
+
+    #[test]
+    fn danger_tools_advertise_confirm() {
+        for tool in tools() {
+            let name = tool.get("name").and_then(Value::as_str).unwrap_or_default();
+            if !DANGER.contains(&name) {
+                continue;
+            }
+            let props = &tool["inputSchema"]["properties"];
+            assert!(
+                props.get("confirm").is_some(),
+                "{name} should advertise confirm in its schema"
+            );
+        }
+    }
+
+    #[test]
+    fn high_impact_writes_need_confirm_reads_do_not() {
+        assert!(tool_needs_confirm("open_prs", &json!({})));
+        assert!(tool_needs_confirm("forget_repo", &json!({})));
+        assert!(tool_needs_confirm("slack_delete", &json!({})));
+        assert!(tool_needs_confirm(
+            "jira_transition",
+            &json!({ "transition": "Done" })
+        ));
+        assert!(!tool_needs_confirm("jira_transition", &json!({ "key": "ACME-1" })));
+        assert!(!tool_needs_confirm("slack_cleanup", &json!({ "dry_run": true })));
+        assert!(tool_needs_confirm("slack_cleanup", &json!({})));
+        assert!(!tool_needs_confirm("list_tasks", &json!({})));
+        assert!(!tool_needs_confirm("slack_post", &json!({})));
+    }
+
+    #[test]
+    fn confirm_false_or_absent_changes_nothing() {
+        assert!(require_confirm(&json!({}), "open_prs").is_err());
+        assert!(require_confirm(&json!({ "confirm": false }), "open_prs").is_err());
+        assert!(require_confirm(&json!({ "confirm": true }), "open_prs").is_ok());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn mcp_json_on_disk_is_owner_readable_only() {
+        let path = std::env::temp_dir().join(format!(
+            "villain-mcp-perm-test-{}",
+            std::process::id()
+        ));
+        std::fs::write(&path, b"{}").unwrap();
+        lock_config_perms(&path).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(mode, 0o600);
+    }
 }

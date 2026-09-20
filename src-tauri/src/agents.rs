@@ -193,6 +193,27 @@ pub const AGENTS: &[AgentDef] = &[
         resume_args: None,
         session_store: None,
     },
+    AgentDef {
+        id: "copilot",
+        name: "GitHub Copilot CLI",
+        program: "copilot",
+        base_args: &[],
+        // `-i` starts the TUI and runs the prompt; `-p` would answer once and
+        // exit, which is no use for a pane you are going to talk to.
+        prompt: PromptMode::Flag("-i"),
+        // It reads a workspace `.mcp.json` on its own, which covers an agent
+        // started at the task root. Its flag for a config kept elsewhere,
+        // `--additional-mcp-config`, wants the path written `@/the/path`, and
+        // this struct has no way to say that — so an agent whose cwd is a
+        // worktree goes without, as it does for every other CLI here.
+        mcp_config_flag: None,
+        // It has `--continue`, but that resumes the most recent session
+        // anywhere rather than the most recent one *here*, and its transcripts
+        // are filed under a UUID with no directory in the name. Neither half
+        // of a per-directory resume is available, so it is not offered.
+        resume_args: None,
+        session_store: None,
+    },
 ];
 
 #[derive(Debug, Clone, Serialize)]

@@ -186,9 +186,9 @@ export default function App() {
   }, [prs, tasks, toast]);
 
   const totals = task ? taskTotals(task) : null;
-  // What the Diff tab actually lists: everything that differs from the base,
-  // committed or not. The uncommitted counts belong to the sidebar, and using
-  // them here put a 2 beside a list of forty files.
+  // What the Diff tab lists by default: files with uncommitted changes. The
+  // sidebar's counts split the same work into staged, unstaged and untracked,
+  // and adding those up put a 2 beside a list of forty files.
   const changed = totals?.changed ?? 0;
   // Chats have their own badge, so they must not be counted as work as well.
   const running = panes.filter(

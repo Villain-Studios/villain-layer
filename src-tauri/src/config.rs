@@ -326,7 +326,22 @@ impl ConfigStore {
 
         let mut inner: AppConfig = if path.exists() {
             let raw = std::fs::read_to_string(&path)?;
-            serde_json::from_str(&raw).unwrap_or_default()
+            match serde_json::from_str(&raw) {
+                Ok(cfg) => cfg,
+                Err(e) => {
+                    // Starting empty is the only way to start at all, but the
+                    // migration below writes straight back over this file —
+                    // so the original is kept beside it rather than lost to a
+                    // half-written save or a field this build cannot read.
+                    let kept = path.with_extension("json.unreadable");
+                    let _ = std::fs::copy(&path, &kept);
+                    eprintln!(
+                        "config.json could not be read ({e}); starting fresh, the old one is at {}",
+                        kept.display()
+                    );
+                    AppConfig::default()
+                }
+            }
         } else {
             AppConfig::default()
         };

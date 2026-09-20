@@ -793,7 +793,16 @@ pub fn remove_checkout(state: State<AppState>, checkout_id: String, force: bool)
     let project = state.config.project(&checkout.project_id)?;
 
     state.ptys.close_checkout(&checkout_id);
-    let _ = git::remove_worktree(&PathBuf::from(&project.path), &checkout.path, force);
+    let repo = PathBuf::from(&project.path);
+    if Path::new(&checkout.path).exists() {
+        // A refusal — uncommitted work, without force — keeps the record too:
+        // dropping it would leave the worktree on disk with nothing pointing
+        // at it, which is the orphan delete_task already learned not to make.
+        git::remove_worktree(&repo, &checkout.path, force)?;
+    } else {
+        // Already removed by hand; just tidy the admin files.
+        let _ = git::run(&repo, &["worktree", "prune"]);
+    }
 
     state
         .config
@@ -1826,8 +1835,6 @@ pub async fn jira_connect(
     Ok(who.display_name)
 }
 
-/// Every issue type this Jira defines, with its own icon. Nothing about types
-/// is hardcoded — a site with custom types renders exactly as it does in Jira.
 /// Every epic on a project, not just the ones already carrying work.
 ///
 /// The New task dialog offered whatever epics happened to appear in the user's
@@ -1859,6 +1866,8 @@ pub async fn jira_epics(
     Ok(client.search(&jql, 200).await?.issues)
 }
 
+/// Every issue type this Jira defines, with its own icon. Nothing about types
+/// is hardcoded — a site with custom types renders exactly as it does in Jira.
 #[tauri::command]
 pub async fn jira_issue_types(
     state: State<'_, AppState>,
@@ -2095,6 +2104,7 @@ struct Reviewed {
     repo: String,
     dir: PathBuf,
     base: String,
+    base_commit: Option<String>,
 }
 
 fn reviewed_repos(state: &AppState, task: &Task) -> Vec<Reviewed> {
@@ -2110,6 +2120,7 @@ fn reviewed_repos(state: &AppState, task: &Task) -> Vec<Reviewed> {
                 .unwrap_or_else(|_| "repo".into()),
             dir: PathBuf::from(&c.path),
             base: c.base,
+            base_commit: c.base_commit,
         })
         .collect()
 }
@@ -2127,11 +2138,9 @@ fn review_context(repos: &[Reviewed]) -> String {
     for checkout in repos {
         let dir = checkout.dir.clone();
         let repo = checkout.repo.clone();
-        let base = format!("origin/{}", checkout.base);
-        let merge_base = git::run(&dir, &["merge-base", &base, "HEAD"])
-            .or_else(|_| git::run(&dir, &["merge-base", &checkout.base, "HEAD"]))
-            .map(|s| s.trim().to_string())
-            .unwrap_or_else(|_| checkout.base.clone());
+        // The recorded branch point where there is one, so the description
+        // covers what this branch did and not what its base has done since.
+        let merge_base = git::baseline(&dir, &checkout.base, checkout.base_commit.as_deref());
 
         out.push_str(&format!("\n## {repo}\n\n"));
         if let Ok(log) = git::run(&dir, &["log", "--no-color", "--format=- %s", &format!("{merge_base}..HEAD")]) {
@@ -2463,9 +2472,13 @@ pub async fn handoff_prompt(state: State<'_, AppState>, pane_id: String) -> Resu
             .map(|p| p.name)
             .unwrap_or_else(|_| "unknown".into());
 
+        // From the branch point, like the file list under it: measured against
+        // the base branch itself, every commit merged in from elsewhere since
+        // would be listed as this branch's own work.
+        let point = git::baseline(&dir, &checkout.base, checkout.base_commit.as_deref());
         let commits = git::run(
             &dir,
-            &["log", "--oneline", "--no-decorate", &format!("{}..HEAD", checkout.base)],
+            &["log", "--oneline", "--no-decorate", &format!("{point}..HEAD")],
         )
         .unwrap_or_default();
         let files = git::changed_files(
@@ -3118,38 +3131,52 @@ pub async fn github_open_prs(
             continue;
         }
 
-        let outcome: Result<OpenedPr> = async {
+        // Whether the PR came out of this call or was already there. Only the
+        // new ones are announced: an existing PR was posted to the ticket and
+        // the channel when it was opened, and saying so again on every press
+        // of the button is noise that makes the real announcements look alike.
+        let outcome: Result<(OpenedPr, bool)> = async {
             git::push(&dir, &task.branch)?;
             let (owner, name) = git::origin_slug(&dir)?;
 
-            let pr = match client.pull_for_branch(&owner, &name, &task.branch).await? {
-                Some(existing) => existing,
-                None => {
+            let (pr, new) = match client.pull_for_branch(&owner, &name, &task.branch).await? {
+                Some(existing) => (existing, false),
+                None => (
                     client
                         .create_pull(
                             &owner, &name, &title, &body, &task.branch,
                             &checkout.base, draft,
                         )
-                        .await?
-                }
+                        .await?,
+                    true,
+                ),
             };
-            Ok(OpenedPr {
-                repo: repo.clone(),
-                url: pr.url,
-                number: pr.number,
-            })
+            Ok((
+                OpenedPr {
+                    repo: repo.clone(),
+                    url: pr.url,
+                    number: pr.number,
+                },
+                new,
+            ))
         }
         .await;
 
         match outcome {
-            Ok(pr) => {
+            Ok((pr, new)) => {
                 results.push(RepoResult {
                     checkout_id: checkout.id,
                     repo,
                     ok: true,
-                    detail: format!("#{}", pr.number),
+                    detail: if new {
+                        format!("#{}", pr.number)
+                    } else {
+                        format!("#{} already open, pushed", pr.number)
+                    },
                 });
-                opened.push(pr);
+                if new {
+                    opened.push(pr);
+                }
             }
             Err(e) => results.push(RepoResult {
                 checkout_id: checkout.id,
@@ -3363,9 +3390,11 @@ pub async fn slack_connect(
     secret: String,
     channel: String,
 ) -> Result<()> {
+    // Reconnecting is how the channel or token gets changed; the switches
+    // under it were chosen separately and should not have to be chosen again.
     let cfg = SlackConfig {
         channel: channel.clone(),
-        ..SlackConfig::default()
+        ..state.config.read().slack.unwrap_or_default()
     };
     let posted = Slack::new(&secret)
         .post(&channel, "Villain Layer connected. :white_check_mark:", None)

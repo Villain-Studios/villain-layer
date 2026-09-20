@@ -171,7 +171,11 @@ export function DiffView({ task }: { task: TaskView }) {
     }
   }
 
-  useEffect(() => { void load(); /* eslint-disable-next-line */ }, [task.id, scope]);
+  // Reloaded when the task's own count of changed files moves, which the
+  // sidebar polls every few seconds: an agent that just saved a file should
+  // show up here without a hand on the Refresh button.
+  const changedCount = task.checkouts.reduce((n, c) => n + c.changed, 0);
+  useEffect(() => { void load(); /* eslint-disable-next-line */ }, [task.id, scope, changedCount]);
 
   // What the numbers are measured against. Asked of git rather than worked out
   // from the file list, and reloaded with it so the two always agree.
@@ -179,10 +183,13 @@ export function DiffView({ task }: { task: TaskView }) {
     api.taskBranchFacts(task.id).then(setFacts).catch(() => setFacts([]));
   }, [task.id, files]);
 
+  // Keyed on the list as well as the selection: a reload that keeps the same
+  // file selected still has to fetch its patch again, or Refresh updates the
+  // numbers in the list beside a diff that has not moved.
   useEffect(() => {
     if (!current) { setPatch(""); return; }
     api.diffFile(current.checkout_id, current.path, scope).then(setPatch).catch(fail);
-  }, [current?.checkout_id, current?.path, scope, fail]);
+  }, [current?.checkout_id, current?.path, scope, fail, files]);
 
   useEffect(() => {
     if (!target || !agentPanes.some((p) => p.id === target)) {

@@ -147,7 +147,15 @@ export const useStore = create<State>((set, get) => ({
 
   refreshTasks: async () => {
     const tasks = await api.listTasks();
-    set((s) => ({ tasks, selectedTask: stillThere(tasks, s.selectedTask) }));
+    set((s) => ({
+      tasks,
+      selectedTask: stillThere(tasks, s.selectedTask),
+      // PR rows for a task that has been deleted have nothing to hang off any
+      // more, and the watch would keep comparing against them for good.
+      prs: Object.fromEntries(
+        Object.entries(s.prs).filter(([id]) => tasks.some((t) => t.id === id)),
+      ),
+    }));
   },
   refreshPanes: async () => set({ panes: await api.listPanes() }),
 
@@ -183,6 +191,11 @@ export const useStore = create<State>((set, get) => ({
     set({ settings });
     if (settings.jira_connected && get().issues.length === 0) {
       void get().refreshIssues();
+    }
+    // Disconnecting has to take the list with it, or the badge keeps counting
+    // tickets from a site the app can no longer reach.
+    if (!settings.jira_connected && get().issues.length > 0) {
+      set({ issues: [], issueTypes: [], issuesTruncated: false });
     }
   },
 

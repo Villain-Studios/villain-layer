@@ -1183,6 +1183,18 @@ textarea { resize: vertical; font-family: var(--mono); }
   background: var(--panel-2);
   border-color: var(--accent-dim);
 }
+/*
+  The way onto the whole board, sitting next to a tab that merely relabels
+  what is already on screen. Dimmed like its neighbour, it read as the less
+  interesting of the two, which is backwards.
+*/
+.subtabs button.call {
+  color: var(--accent);
+  border-color: var(--accent-dim);
+  background: var(--panel-2);
+}
+.subtabs button.call:hover { border-color: var(--accent); color: var(--accent); }
+
 .subtabs .badge { margin-left: 6px; font-size: 11px; color: var(--dimmer); font-family: var(--mono); }
 
 .browse-bar {

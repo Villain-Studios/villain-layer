@@ -73,7 +73,18 @@ export default function App() {
       // user most needs to hear about.
       const state = useStore.getState();
       const pane = state.panes.find((x) => x.id === e.payload.pane_id);
-      if (!pane || pane.kind !== "agent" || pane.task_id === CHAT_TASK_ID) return;
+      if (!pane) return;
+
+      // A shell you typed `exit` into has nothing left to show. Agents are
+      // left alone: their last screen is the point, and one that died holds
+      // the reason why.
+      if (pane.kind === "shell") {
+        await api.closePane(pane.id).catch(() => {});
+        await refreshPanes().catch(() => {});
+        return;
+      }
+
+      if (pane.kind !== "agent" || pane.task_id === CHAT_TASK_ID) return;
 
       const owner = state.tasks.find((t) => t.id === pane.task_id);
       state.toast(

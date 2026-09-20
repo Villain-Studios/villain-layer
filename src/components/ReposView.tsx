@@ -1,24 +1,18 @@
 import { useState, type ReactNode } from "react";
 import { api } from "../lib/api";
 import { groupProjects, useStore } from "../store";
-import type { MatchKind, Project } from "../lib/types";
+import type { Project } from "../lib/types";
 import { AddRepos } from "./AddRepos";
 import { Confirm } from "./ui";
-import { RepoPicker } from "./RepoPicker";
 
 export function ReposView() {
-  const { projects, repoSets, repoRules, tasks } = useStore();
+  const { projects, tasks } = useStore();
   const refreshRepos = useStore((s) => s.refreshRepos);
   const refreshAll = useStore((s) => s.refreshAll);
-  const toast = useStore((s) => s.toast);
   const fail = useStore((s) => s.fail);
 
   const [adding, setAdding] = useState(false);
   const [shut, setShut] = useState<Record<string, boolean>>({});
-  const [editingSet, setEditingSet] = useState<string | null>(null);
-  const [ruleKind, setRuleKind] = useState<MatchKind>("component");
-  const [ruleValue, setRuleValue] = useState("");
-  const [rulePicked, setRulePicked] = useState<string[]>([]);
   const [confirming, setConfirming] = useState<{
     title: string;
     body: ReactNode;
@@ -28,8 +22,6 @@ export function ReposView() {
 
   const groups = groupProjects(projects);
   const anyOpen = groups.some((g) => !(shut[g.group] ?? true));
-  const names = (ids: string[]) =>
-    ids.map((id) => projects.find((p) => p.id === id)?.name ?? "?").join(", ");
 
   async function setGroup(projectId: string, group: string) {
     try {
@@ -76,18 +68,6 @@ export function ReposView() {
         }
       },
     });
-  }
-
-  async function addRule() {
-    try {
-      await api.saveRepoRule(ruleKind, ruleValue.trim(), rulePicked);
-      await refreshRepos();
-      setRuleValue("");
-      setRulePicked([]);
-      toast("success", "Rule saved");
-    } catch (e) {
-      fail(e);
-    }
   }
 
   return (
@@ -189,94 +169,6 @@ export function ReposView() {
           <option key={g as string} value={g as string} />
         ))}
       </datalist>
-
-      <div className="card">
-        <h3>Saved sets</h3>
-        <div className="muted" style={{ marginBottom: 10, lineHeight: 1.55 }}>
-          Named repo combinations, applied with one click when starting a task. Create
-          them from the picker: select some repos, then “save these as a set”.
-        </div>
-        {repoSets.length === 0 && <div className="muted">None yet.</div>}
-        {repoSets.map((set) => (
-          <div key={set.id}>
-            <div className="rule-row">
-              <span className="val">{set.name}</span>
-              <span className="repos">{names(set.project_ids)}</span>
-              <button
-                className="btn btn-sm"
-                onClick={() => setEditingSet(editingSet === set.id ? null : set.id)}
-              >
-                {editingSet === set.id ? "Done" : "Edit"}
-              </button>
-              <button
-                className="btn btn-sm btn-danger"
-                onClick={() => void api.deleteRepoSet(set.id).then(refreshRepos).catch(fail)}
-              >
-                ✕
-              </button>
-            </div>
-            {editingSet === set.id && (
-              <div style={{ margin: "8px 0 14px" }}>
-                <RepoPicker
-                  projects={projects}
-                  picked={set.project_ids}
-                  onChange={(ids) => {
-                    void api.saveRepoSet(set.name, ids, set.id).then(refreshRepos).catch(fail);
-                  }}
-                />
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-
-      <div className="card">
-        <h3>Jira rules</h3>
-        <div className="muted" style={{ marginBottom: 10, lineHeight: 1.55 }}>
-          “Tickets with this component touch these repos.” Rules are explicit, so they
-          outrank what the last similar ticket happened to use.
-        </div>
-        {repoRules.length === 0 && <div className="muted">None yet.</div>}
-        {repoRules.map((rule) => (
-          <div key={rule.id} className="rule-row">
-            <span className="group-chip">{rule.kind}</span>
-            <span className="val">{rule.value}</span>
-            <span className="repos">→ {names(rule.project_ids)}</span>
-            <button
-              className="btn btn-sm btn-danger"
-              onClick={() => void api.deleteRepoRule(rule.id).then(refreshRepos).catch(fail)}
-            >
-              ✕
-            </button>
-          </div>
-        ))}
-
-        <div style={{ marginTop: 12 }}>
-          <div className="row" style={{ marginBottom: 8 }}>
-            <select
-              style={{ width: 140 }}
-              value={ruleKind}
-              onChange={(e) => setRuleKind(e.target.value as MatchKind)}
-            >
-              <option value="component">Component</option>
-              <option value="label">Label</option>
-            </select>
-            <input
-              placeholder="Payments"
-              value={ruleValue}
-              onChange={(e) => setRuleValue(e.target.value)}
-            />
-            <button
-              className="btn btn-primary"
-              disabled={!ruleValue.trim() || rulePicked.length === 0}
-              onClick={() => void addRule()}
-            >
-              Add rule
-            </button>
-          </div>
-          <RepoPicker projects={projects} picked={rulePicked} onChange={setRulePicked} />
-        </div>
-      </div>
 
       {adding && <AddRepos onClose={() => setAdding(false)} />}
 

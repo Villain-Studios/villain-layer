@@ -457,10 +457,11 @@ export function TicketsView() {
             Mine<span className="badge">{issues.length}</span>
           </button>
           <button
-            className={sub === "browse" ? "active" : ""}
+            className={sub === "browse" ? "active" : "call"}
             onClick={() => setSub("browse")}
+            title="Search the whole board, not just what is assigned to you"
           >
-            Find work
+            🔍 Find work
           </button>
         </div>
         <div className="spacer" />

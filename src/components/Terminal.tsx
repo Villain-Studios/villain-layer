@@ -73,7 +73,21 @@ export function TerminalPane({ pane, visible }: { pane: PaneInfo; visible: boole
     termRef.current = term;
     fitRef.current = fit;
 
-    try { fit.fit(); } catch { /* host not laid out yet */ }
+    /**
+     * Fit, and say so.
+     *
+     * `onResize` fires only when xterm's own grid changes, so a process
+     * spawned at the default size sits at that size forever if the fit
+     * happens to agree with where xterm started. Pushing the dimensions
+     * after every fit costs one call and means the child is never drawing
+     * to a window that is not the one on screen.
+     */
+    const fitAndTell = () => {
+      try { fit.fit(); } catch { return; /* not laid out yet */ }
+      void api.ptyResize(pane.id, term.rows, term.cols).catch(() => {});
+    };
+
+    fitAndTell();
 
     // Replay what the process printed before this component existed.
     api.ptyScrollback(pane.id)
@@ -96,9 +110,7 @@ export function TerminalPane({ pane, visible }: { pane: PaneInfo; visible: boole
     );
 
     const ro = new ResizeObserver(() => {
-      if (host.offsetParent !== null) {
-        try { fit.fit(); } catch { /* mid-layout */ }
-      }
+      if (host.offsetParent !== null) fitAndTell();
     });
     ro.observe(host);
 
@@ -126,11 +138,13 @@ export function TerminalPane({ pane, visible }: { pane: PaneInfo; visible: boole
   useEffect(() => {
     if (!visible) return;
     const id = requestAnimationFrame(() => {
+      const term = termRef.current;
       try { fitRef.current?.fit(); } catch { /* not laid out */ }
-      termRef.current?.focus();
+      if (term) void api.ptyResize(pane.id, term.rows, term.cols).catch(() => {});
+      term?.focus();
     });
     return () => cancelAnimationFrame(id);
-  }, [visible]);
+  }, [visible, pane.id]);
 
   return <div ref={hostRef} className={`term-host${visible ? "" : " hidden"}`} />;
 }

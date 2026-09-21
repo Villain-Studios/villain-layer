@@ -137,6 +137,34 @@ pub fn list_worktrees(repo: &Path) -> Result<Vec<WorktreeEntry>> {
     Ok(entries)
 }
 
+/// A start-point that `git worktree add -b` can resolve.
+///
+/// Prefer the remote-tracking tip over a local branch of the same name: the
+/// main checkout on disk is often weeks behind `origin/main`, and cutting a
+/// new worktree from that local tip is how new tasks quietly start outdated.
+/// Falls back to the local name when there is no remote (tests, fresh clones
+/// that have never fetched, repos with no `origin`).
+fn resolve_base(repo: &Path, base: &str) -> String {
+    let remote = format!("origin/{base}");
+    if run(repo, &["rev-parse", "--verify", "--quiet", &remote]).is_ok() {
+        return remote;
+    }
+    if run(repo, &["rev-parse", "--verify", "--quiet", base]).is_ok() {
+        return base.to_string();
+    }
+    // Last resort: hand git whatever was asked and let it explain the miss.
+    base.to_string()
+}
+
+/// Bring `origin/<base>` up to date before we cut from it.
+///
+/// Best-effort: offline laptops and repos without an `origin` still create
+/// the worktree from whatever tip they already have. A failure here is not a
+/// reason to refuse the task — starting slightly stale beats not starting.
+fn fetch_base(repo: &Path, base: &str) {
+    let _ = run(repo, &["fetch", "--quiet", "origin", base]);
+}
+
 /// Create a worktree at `path`. Creates `branch` from `base` when it does not
 /// already exist, otherwise checks the existing branch out.
 /// Returns the commit the worktree starts at, so the diff has a fixed point.
@@ -150,17 +178,19 @@ pub fn add_worktree(
         std::fs::create_dir_all(parent)?;
     }
     let path_s = path.to_string_lossy().to_string();
+    fetch_base(repo, base);
+    let start = resolve_base(repo, base);
 
     if branch_exists(repo, branch) {
         run(repo, &["worktree", "add", &path_s, branch])?;
         // An existing branch has its own history; what it forked from is the
         // best available answer, not wherever the base happens to be today.
-        Ok(run(repo, &["merge-base", base, branch])
+        Ok(run(repo, &["merge-base", &start, branch])
             .or_else(|_| run(repo, &["rev-parse", branch]))
             .map(|s| s.trim().to_string())
             .unwrap_or_default())
     } else {
-        run(repo, &["worktree", "add", "-b", branch, &path_s, base])?;
+        run(repo, &["worktree", "add", "-b", branch, &path_s, &start])?;
         Ok(run(path, &["rev-parse", "HEAD"])
             .map(|s| s.trim().to_string())
             .unwrap_or_default())
@@ -187,6 +217,9 @@ pub struct WorktreeStatus {
     pub unstaged: u32,
     pub untracked: u32,
     pub conflicted: u32,
+    /// Distinct paths with any uncommitted change — what the sidebar badge
+    /// wants. Cheaper than a second `git diff`/`ls-files` pass on every poll.
+    pub dirty_files: u32,
 }
 
 pub fn status(dir: &Path) -> Result<WorktreeStatus> {
@@ -199,6 +232,7 @@ pub fn status(dir: &Path) -> Result<WorktreeStatus> {
         unstaged: 0,
         untracked: 0,
         conflicted: 0,
+        dirty_files: 0,
     };
 
     for line in out.lines() {
@@ -215,9 +249,12 @@ pub fn status(dir: &Path) -> Result<WorktreeStatus> {
             }
         } else if line.starts_with("? ") {
             s.untracked += 1;
+            s.dirty_files += 1;
         } else if line.starts_with("u ") {
             s.conflicted += 1;
+            s.dirty_files += 1;
         } else if line.starts_with("1 ") || line.starts_with("2 ") {
+            s.dirty_files += 1;
             // Field 2 is the two-character XY staged/unstaged code.
             if let Some(xy) = line.split_whitespace().nth(1) {
                 let b = xy.as_bytes();
@@ -242,6 +279,9 @@ pub struct ChangedFile {
     /// "tracked" for anything git already knows about, "untracked" otherwise.
     pub origin: String,
 }
+
+/// Untracked files larger than this are listed but not read for a line count.
+const UNTRACKED_COUNT_LIMIT: u64 = 4 * 1024 * 1024;
 
 /// Every file that differs from `base`, including uncommitted and untracked work.
 pub fn changed_files(
@@ -276,20 +316,53 @@ pub fn changed_files(
         if path.is_empty() {
             continue;
         }
-        let added = std::fs::read_to_string(dir.join(path))
-            .map(|c| c.lines().count() as u32)
-            .unwrap_or(0);
+        // Counting lines means reading the whole file, and this runs on every
+        // refresh of the list. An untracked dump or archive of tens of
+        // megabytes is not something anyone reviews line by line, so past a
+        // few megabytes it is listed as binary and not read at all.
+        let full = dir.join(path);
+        let small = std::fs::metadata(&full)
+            .map(|m| m.len() <= UNTRACKED_COUNT_LIMIT)
+            .unwrap_or(false);
+        let added = if small {
+            std::fs::read_to_string(&full)
+                .map(|c| c.lines().count() as u32)
+                .unwrap_or(0)
+        } else {
+            0
+        };
         files.push(ChangedFile {
             path: path.to_string(),
             additions: added,
             deletions: 0,
-            binary: false,
+            binary: !small,
             origin: "untracked".into(),
         });
     }
 
     files.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(files)
+}
+
+/// How many files differ from the baseline, committed or not.
+///
+/// The same set `changed_files` lists, counted without building it: no file
+/// is opened, which is what makes this safe to call for every repository of
+/// every task on the pull-request watch's timer.
+pub fn changed_count(
+    dir: &Path,
+    base: &str,
+    base_commit: Option<&str>,
+    scope: Scope,
+) -> usize {
+    let merge_base = compare_against(dir, base, base_commit, scope);
+    let tracked = run(dir, &["diff", "--name-only", &merge_base])
+        .map(|o| o.lines().filter(|l| !l.trim().is_empty()).count())
+        .unwrap_or(0);
+    let untracked = run(dir, &["ls-files", "--others", "--exclude-standard"])
+        .map(|o| o.lines().filter(|l| !l.trim().is_empty()).count())
+        .unwrap_or(0);
+    tracked + untracked
 }
 
 /// What the diff is measured against.
@@ -402,28 +475,6 @@ pub fn branch_facts(
     }
 }
 
-/// How many files differ from the baseline, committed or not.
-///
-/// The same set `changed_files` lists, counted without building it: the Diff
-/// tab's badge is drawn on every poll, and a list of paths is not needed to
-/// say how many there are.
-pub fn changed_count(
-    dir: &Path,
-    base: &str,
-    base_commit: Option<&str>,
-    scope: Scope,
-) -> u32 {
-    let merge_base = compare_against(dir, base, base_commit, scope);
-
-    let tracked = run(dir, &["diff", "--name-only", &merge_base])
-        .map(|o| o.lines().filter(|l| !l.trim().is_empty()).count())
-        .unwrap_or(0);
-    let untracked = run(dir, &["ls-files", "--others", "--exclude-standard"])
-        .map(|o| o.lines().filter(|l| !l.trim().is_empty()).count())
-        .unwrap_or(0);
-    (tracked + untracked) as u32
-}
-
 /// Unified patch for one file, against the baseline. Untracked files are
 /// rendered as an all-additions patch so the review UI has one code path.
 pub fn file_diff(
@@ -453,6 +504,113 @@ pub fn file_diff(
         out.push('\n');
     }
     Ok(out)
+}
+
+/// One commit on the branch, for the Diff view's commit picker.
+#[derive(Debug, Clone, Serialize)]
+pub struct CommitInfo {
+    pub sha: String,
+    pub short: String,
+    pub subject: String,
+}
+
+/// Commits made on this task's branch since the baseline, newest first.
+///
+/// `--first-parent` is required: without it, every merge of the base branch
+/// into this one dumps that branch's history into the picker, which is how a
+/// two-commit task ends up listing a hundred commits from elsewhere. Cap keeps
+/// a runaway still from drowning the menu.
+pub fn commits_since(
+    dir: &Path,
+    base: &str,
+    base_commit: Option<&str>,
+) -> Result<Vec<CommitInfo>> {
+    let point = baseline(dir, base, base_commit);
+    let out = run(
+        dir,
+        &[
+            "log",
+            "--first-parent",
+            "--format=%H\t%h\t%s",
+            "--no-decorate",
+            "-n",
+            "100",
+            &format!("{point}..HEAD"),
+        ],
+    )?;
+    Ok(out
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.splitn(3, '\t');
+            let sha = parts.next()?.to_string();
+            let short = parts.next()?.to_string();
+            let subject = parts.next()?.to_string();
+            if sha.is_empty() {
+                return None;
+            }
+            Some(CommitInfo { sha, short, subject })
+        })
+        .collect())
+}
+
+/// Files changed in a single commit, with the same shape as `changed_files`.
+pub fn commit_files(dir: &Path, sha: &str) -> Result<Vec<ChangedFile>> {
+    // Empty format: we only want the numstat body, not the commit header.
+    let numstat = run(dir, &["show", "--numstat", "--format=", "--diff-filter=AMDR", sha])?;
+    let mut files = Vec::new();
+    for line in numstat.lines() {
+        let mut parts = line.split('\t');
+        let (a, d, path) = (parts.next(), parts.next(), parts.next());
+        let (Some(a), Some(d), Some(path)) = (a, d, path) else {
+            continue;
+        };
+        // Renames: the Diff view wants the new path.
+        let path = rename_target(path);
+        if path.is_empty() {
+            continue;
+        }
+        let binary = a == "-" || d == "-";
+        files.push(ChangedFile {
+            path: path.to_string(),
+            additions: a.parse().unwrap_or(0),
+            deletions: d.parse().unwrap_or(0),
+            binary,
+            origin: "tracked".into(),
+        });
+    }
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(files)
+}
+
+/// The new side of a rename as `git show --numstat` prints it.
+///
+/// git abbreviates a rename to the part that changed: `src/{old => new}/x.rs`
+/// for a directory, `old.rs => new.rs` for a file. Stripping braces off the
+/// ends handled neither — the brace closing the changed part sits in the
+/// middle of the path, and taking the right-hand side of `=>` dropped the
+/// prefix. The braces are expanded, and an empty side collapses so
+/// `src/{sub => }/x` reads `src/x`.
+fn rename_target(path: &str) -> String {
+    if let (Some(lb), Some(rb)) = (path.find('{'), path.rfind('}')) {
+        if lb < rb {
+            if let Some((_, new)) = path[lb + 1..rb].split_once(" => ") {
+                let joined = format!("{}{}{}", &path[..lb], new, &path[rb + 1..]);
+                return joined.replace("//", "/");
+            }
+        }
+    }
+    path.rsplit_once(" => ")
+        .map(|(_, n)| n)
+        .unwrap_or(path)
+        .to_string()
+}
+
+/// Unified patch for one file as it changed in `sha`.
+pub fn commit_file_diff(dir: &Path, sha: &str, path: &str) -> Result<String> {
+    // `--pretty=format:` drops the commit header so the UI gets a bare patch,
+    // the same shape `file_diff` returns for working-tree changes.
+    let patch = run(dir, &["show", "--no-color", "--pretty=format:", sha, "--", path])?;
+    Ok(patch)
 }
 
 pub fn commit_all(dir: &Path, message: &str) -> Result<String> {
@@ -557,6 +715,49 @@ mod tests {
         std::fs::remove_dir_all(repo.parent().unwrap()).ok();
     }
 
+    /// The bug: a local `main` that nobody had pulled recently was preferred
+    /// over `origin/main`, so every new task started days or weeks behind.
+    #[test]
+    fn new_worktree_starts_at_the_newest_remote_base() {
+        let root = sandbox();
+        let bare = root.join("remote.git");
+        std::fs::create_dir_all(&bare).unwrap();
+        run(&bare, &["init", "-q", "-b", "main", "--bare"]).unwrap();
+
+        let seed = root.join("seed");
+        run(&root, &["clone", "-q", bare.to_str().unwrap(), seed.to_str().unwrap()]).unwrap();
+        run(&seed, &["config", "user.email", "test@villain.local"]).unwrap();
+        run(&seed, &["config", "user.name", "Test"]).unwrap();
+        std::fs::write(seed.join("a.txt"), "old\n").unwrap();
+        run(&seed, &["add", "-A"]).unwrap();
+        run(&seed, &["commit", "-qm", "old tip"]).unwrap();
+        run(&seed, &["push", "-q", "-u", "origin", "main"]).unwrap();
+
+        let local = root.join("local");
+        run(&root, &["clone", "-q", bare.to_str().unwrap(), local.to_str().unwrap()]).unwrap();
+        run(&local, &["config", "user.email", "test@villain.local"]).unwrap();
+        run(&local, &["config", "user.name", "Test"]).unwrap();
+        let stale = run(&local, &["rev-parse", "HEAD"]).unwrap().trim().to_string();
+
+        // Advance origin/main without updating the local clone's main tip.
+        std::fs::write(seed.join("a.txt"), "new\n").unwrap();
+        run(&seed, &["commit", "-am", "new tip"]).unwrap();
+        run(&seed, &["push", "-q"]).unwrap();
+        let newest = run(&seed, &["rev-parse", "HEAD"]).unwrap().trim().to_string();
+        assert_ne!(stale, newest);
+
+        let wt = root.join("wt");
+        let point = add_worktree(&local, &wt, "feature/fresh", "main").unwrap();
+        assert_eq!(point, newest);
+        assert_eq!(
+            run(&wt, &["rev-parse", "HEAD"]).unwrap().trim(),
+            newest.as_str()
+        );
+        assert_eq!(std::fs::read_to_string(wt.join("a.txt")).unwrap(), "new\n");
+
+        std::fs::remove_dir_all(root).ok();
+    }
+
     #[test]
     fn reports_committed_and_untracked_changes() {
         let repo = fixture();
@@ -584,6 +785,78 @@ mod tests {
         let st = status(&wt).unwrap();
         assert_eq!(st.branch, "feature/y");
         assert_eq!((st.unstaged, st.untracked), (1, 1));
+
+        remove_worktree(&repo, &wt.to_string_lossy(), true).ok();
+        std::fs::remove_dir_all(repo.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn lists_and_diffs_a_single_commit() {
+        let repo = fixture();
+        let wt = repo.parent().unwrap().join("wt");
+        add_worktree(&repo, &wt, "feature/commits", "main").unwrap();
+
+        std::fs::write(wt.join("a.txt"), "one\n").unwrap();
+        commit_all(&wt, "first").unwrap();
+        std::fs::write(wt.join("a.txt"), "one\ntwo\n").unwrap();
+        std::fs::write(wt.join("b.txt"), "new\n").unwrap();
+        let sha = commit_all(&wt, "second").unwrap();
+
+        let log = commits_since(&wt, "main", None).unwrap();
+        assert!(log.iter().any(|c| c.sha == sha));
+        assert!(log.iter().any(|c| c.subject == "second"));
+
+        let files = commit_files(&wt, &sha).unwrap();
+        let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, vec!["a.txt", "b.txt"]);
+
+        let patch = commit_file_diff(&wt, &sha, "b.txt").unwrap();
+        assert!(patch.contains("+new"));
+
+        remove_worktree(&repo, &wt.to_string_lossy(), true).ok();
+        std::fs::remove_dir_all(repo.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn renames_resolve_to_the_new_path() {
+        assert_eq!(rename_target("a/{b => c}/d.rs"), "a/c/d.rs");
+        assert_eq!(rename_target("old.rs => new.rs"), "new.rs");
+        assert_eq!(rename_target("src/{ => sub}/x.rs"), "src/sub/x.rs");
+        assert_eq!(rename_target("src/{sub => }/x.rs"), "src/x.rs");
+        assert_eq!(rename_target("plain/path.rs"), "plain/path.rs");
+    }
+
+    #[test]
+    fn commit_picker_skips_history_brought_in_by_a_merge() {
+        let repo = fixture();
+        // Commits on main after the branch was cut — without --first-parent
+        // these would show up on the feature branch's log after a merge.
+        for i in 1..=5 {
+            std::fs::write(repo.join("main.txt"), format!("m{i}\n")).unwrap();
+            run(&repo, &["add", "main.txt"]).unwrap();
+            run(&repo, &["commit", "-m", &format!("main-{i}")]).unwrap();
+        }
+        let wt = repo.parent().unwrap().join("wt");
+        let point = add_worktree(&repo, &wt, "feature/merge", "main").unwrap();
+        std::fs::write(wt.join("feat.txt"), "f\n").unwrap();
+        commit_all(&wt, "feature work").unwrap();
+
+        // More main commits, then merge them into the feature branch.
+        for i in 6..=10 {
+            std::fs::write(repo.join("main.txt"), format!("m{i}\n")).unwrap();
+            run(&repo, &["add", "main.txt"]).unwrap();
+            run(&repo, &["commit", "-m", &format!("main-{i}")]).unwrap();
+        }
+        run(&wt, &["merge", "--no-ff", "main", "-m", "merge main"]).unwrap();
+
+        let log = commits_since(&wt, "main", Some(&point)).unwrap();
+        let subjects: Vec<&str> = log.iter().map(|c| c.subject.as_str()).collect();
+        assert!(subjects.contains(&"feature work"));
+        assert!(subjects.contains(&"merge main"));
+        assert!(
+            !subjects.iter().any(|s| s.starts_with("main-")),
+            "picker listed main's history: {subjects:?}"
+        );
 
         remove_worktree(&repo, &wt.to_string_lossy(), true).ok();
         std::fs::remove_dir_all(repo.parent().unwrap()).ok();

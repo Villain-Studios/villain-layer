@@ -45,17 +45,28 @@ interface State {
   tab: Tab;
   sidebarHidden: boolean;
   settingsOpen: boolean;
+  /** Ticket key to scroll to and highlight in the Tickets view, then clear. */
+  focusIssueKey: string | null;
   toasts: Toast[];
   /** Background task/pane polls have failed repeatedly — not a toast every few seconds. */
   watchFailing: boolean;
   /** Cursor IDE (the editor app / `cursor` CLI), not the cursor-agent agent. */
   cursorIde: boolean;
+  /**
+   * False while the window is unfocused or minimized. Polls pause and hidden
+   * terminals stop painting; coming back flips this and catches up once.
+   */
+  appActive: boolean;
 
   select: (id: string | null) => void;
   setView: (v: View) => void;
   setTab: (t: Tab) => void;
   toggleSidebar: () => void;
   toggleSettings: (open?: boolean) => void;
+  /** Jump to Tickets and highlight this key — for a task that already has one. */
+  showIssue: (key: string) => void;
+  clearFocusIssue: () => void;
+  setAppActive: (active: boolean) => void;
 
   toast: (kind: Toast["kind"], text: string) => void;
   dismissToast: (id: number) => void;
@@ -63,8 +74,14 @@ interface State {
 
   refreshAll: () => Promise<void>;
   refreshRepos: () => Promise<void>;
-  refreshTasks: () => Promise<void>;
-  refreshPanes: () => Promise<void>;
+  /**
+   * `poll` marks a timer tick: one that lands while another is still out
+   * reuses its answer. An explicit refresh — after a delete, a commit, a
+   * spawn — never does: it is asking about the world after something
+   * changed, and the call already in flight was asked before it did.
+   */
+  refreshTasks: (opts?: { poll?: boolean }) => Promise<void>;
+  refreshPanes: (opts?: { poll?: boolean }) => Promise<void>;
   refreshPrs: () => Promise<void>;
   /** Replace one task's PR rows, for a panel that fetched them itself. */
   setTaskPrs: (taskId: string, rows: CheckoutPr[]) => void;
@@ -83,6 +100,103 @@ let toastSeq = 0;
  * one land last, taking the store backwards.
  */
 let sweeping = false;
+
+/**
+ * The task and pane calls currently out, so overlapping requests can be
+ * coalesced rather than stacked: wake-from-sleep often fires several polls at
+ * once, and each would be a git status of every hot worktree.
+ *
+ * Dropping the later call outright was the first version, and it dropped the
+ * refresh that mattered: a task deleted while a poll happened to be in flight
+ * stayed in the sidebar until the next tick, up to a minute off the Work view.
+ */
+let tasksInflight: Promise<void> | null = null;
+let panesInflight: Promise<void> | null = null;
+
+/**
+ * Run `work` once, sharing it with polls that overlap and queueing behind it
+ * for anything that is not a poll.
+ */
+async function coalesce(
+  slot: { get: () => Promise<void> | null; set: (p: Promise<void> | null) => void },
+  poll: boolean,
+  work: () => Promise<void>,
+): Promise<void> {
+  const current = slot.get();
+  if (current) {
+    if (poll) return current;
+    // Wait the in-flight one out, then ask again: what it returns was asked
+    // for before whatever just changed.
+    await current.catch(() => {});
+    if (slot.get()) return coalesce(slot, poll, work);
+  }
+  const run = work();
+  slot.set(run);
+  try {
+    await run;
+  } finally {
+    if (slot.get() === run) slot.set(null);
+  }
+}
+
+const tasksSlot = { get: () => tasksInflight, set: (p: Promise<void> | null) => { tasksInflight = p; } };
+const panesSlot = { get: () => panesInflight, set: (p: Promise<void> | null) => { panesInflight = p; } };
+
+/** Skip a React storm when a poll returns the same world we already have. */
+function samePanes(a: PaneInfo[], b: PaneInfo[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i];
+    const y = b[i];
+    if (
+      x.id !== y.id ||
+      x.running !== y.running ||
+      x.exit_code !== y.exit_code ||
+      x.notice !== y.notice ||
+      x.last_output_at !== y.last_output_at ||
+      x.title !== y.title ||
+      x.task_id !== y.task_id
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function sameTasks(a: TaskView[], b: TaskView[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i];
+    const y = b[i];
+    if (
+      x.id !== y.id ||
+      x.name !== y.name ||
+      x.branch !== y.branch ||
+      x.pane_count !== y.pane_count ||
+      x.checkouts.length !== y.checkouts.length
+    ) {
+      return false;
+    }
+    for (let j = 0; j < x.checkouts.length; j++) {
+      const cx = x.checkouts[j];
+      const cy = y.checkouts[j];
+      if (
+        cx.id !== cy.id ||
+        cx.changed !== cy.changed ||
+        cx.exists !== cy.exists ||
+        cx.status?.staged !== cy.status?.staged ||
+        cx.status?.unstaged !== cy.status?.unstaged ||
+        cx.status?.untracked !== cy.status?.untracked ||
+        cx.status?.ahead !== cy.status?.ahead ||
+        cx.status?.behind !== cy.status?.behind ||
+        cx.status?.conflicted !== cy.status?.conflicted
+      ) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
 
 /**
  * Consecutive quiet failures of the task/pane polls. One blip is noise; two
@@ -131,9 +245,11 @@ export const useStore = create<State>((set, get) => {
   tab: readOneOf("tab", TABS, "terminals"),
   sidebarHidden: read("sidebarHidden", false),
   settingsOpen: false,
+  focusIssueKey: null,
   toasts: [],
   watchFailing: false,
   cursorIde: false,
+  appActive: true,
 
   // Selecting a task is always a request to look at it.
   select: (id) => set({ selectedTask: id, tab: "terminals", view: "work" }),
@@ -141,6 +257,15 @@ export const useStore = create<State>((set, get) => {
   setTab: (tab) => set({ tab }),
   toggleSidebar: () => set((s) => ({ sidebarHidden: !s.sidebarHidden })),
   toggleSettings: (open) => set((s) => ({ settingsOpen: open ?? !s.settingsOpen })),
+  showIssue: (key) => set({ view: "tickets", focusIssueKey: key }),
+  clearFocusIssue: () => set({ focusIssueKey: null }),
+  setAppActive: (appActive) => {
+    if (get().appActive === appActive) return;
+    set({ appActive });
+    // Tell the PTY layer too: otherwise agent redraws keep crossing the IPC
+    // bridge into a webview nobody is looking at.
+    void api.setUiAwake(appActive).catch(() => {});
+  },
 
   toast: (kind, text) => {
     const id = ++toastSeq;
@@ -151,47 +276,64 @@ export const useStore = create<State>((set, get) => {
   fail: (e) => get().toast("error", errMessage(e)),
 
   refreshAll: async () => {
-    const [projects, tasks, panes, agents, cursorIde] = await Promise.all([
-      api.listProjects(), api.listTasks(), api.listPanes(), api.listAgents(),
+    // Settings (and with them the Jira list) must not wait on a full git-status
+    // of every worktree: that is the slow part of boot, and Tickets used to
+    // sit black until it finished. Kick both off together.
+    const settingsP = get().refreshSettings();
+    const focus = get().selectedTask;
+    const coreP = Promise.all([
+      api.listProjects(),
+      api.listTasks(focus),
+      api.listPanes(),
+      api.listAgents(),
       api.cursorIdeInstalled().catch(() => false),
-    ]);
-    set((s) => ({
-      projects, tasks, panes, agents, cursorIde,
-      selectedTask: stillThere(tasks, s.selectedTask),
-    }));
-    watchOk();
-    await get().refreshSettings();
+    ]).then(([projects, tasks, panes, agents, cursorIde]) => {
+      set((s) => ({
+        projects, tasks, panes, agents, cursorIde,
+        selectedTask: stillThere(tasks, s.selectedTask),
+      }));
+      watchOk();
+    });
+    await Promise.all([settingsP, coreP]);
   },
 
   refreshRepos: async () => set({ projects: await api.listProjects() }),
 
-  refreshTasks: async () => {
-    try {
-      const tasks = await api.listTasks();
-      set((s) => ({
-        tasks,
-        selectedTask: stillThere(tasks, s.selectedTask),
-        // PR rows for a task that has been deleted have nothing to hang off any
-        // more, and the watch would keep comparing against them for good.
-        prs: Object.fromEntries(
-          Object.entries(s.prs).filter(([id]) => tasks.some((t) => t.id === id)),
-        ),
-      }));
-      watchOk();
-    } catch (e) {
-      watchFail();
-      throw e;
-    }
-  },
-  refreshPanes: async () => {
-    try {
-      set({ panes: await api.listPanes() });
-      watchOk();
-    } catch (e) {
-      watchFail();
-      throw e;
-    }
-  },
+  refreshTasks: (opts) =>
+    coalesce(tasksSlot, opts?.poll ?? false, async () => {
+      try {
+        // Focus the selected task so its worktrees stay fresh; everything else
+        // reuses the backend status cache unless it has a running agent.
+        const tasks = await api.listTasks(get().selectedTask);
+        set((s) => {
+          if (sameTasks(s.tasks, tasks)) return s;
+          return {
+            tasks,
+            selectedTask: stillThere(tasks, s.selectedTask),
+            // PR rows for a task that has been deleted have nothing to hang off any
+            // more, and the watch would keep comparing against them for good.
+            prs: Object.fromEntries(
+              Object.entries(s.prs).filter(([id]) => tasks.some((t) => t.id === id)),
+            ),
+          };
+        });
+        watchOk();
+      } catch (e) {
+        watchFail();
+        throw e;
+      }
+    }),
+  refreshPanes: (opts) =>
+    coalesce(panesSlot, opts?.poll ?? false, async () => {
+      try {
+        const panes = await api.listPanes();
+        set((s) => (samePanes(s.panes, panes) ? s : { panes }));
+        watchOk();
+      } catch (e) {
+        watchFail();
+        throw e;
+      }
+    }),
 
   /**
    * Ask GitHub what has happened to every task's pull requests.

@@ -129,6 +129,17 @@ textarea { resize: vertical; font-family: var(--mono); }
 }
 .ws:hover { background: var(--panel-2); }
 .ws.active { background: var(--panel-2); border-color: var(--accent-dim); }
+.ws.deleting {
+  opacity: 0.55;
+  pointer-events: none;
+  cursor: default;
+}
+.ws.deleting .ws-title .spin {
+  width: 10px;
+  height: 10px;
+  border-width: 1.5px;
+  flex: none;
+}
 .ws-title {
   display: flex;
   align-items: center;
@@ -304,7 +315,7 @@ textarea { resize: vertical; font-family: var(--mono); }
 .diff-dir {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   padding: 3px 6px;
   border-radius: var(--radius);
   font-size: 12.5px;
@@ -312,6 +323,7 @@ textarea { resize: vertical; font-family: var(--mono); }
   color: var(--dim);
   cursor: pointer;
   white-space: nowrap;
+  line-height: 1.35;
 }
 .diff-dir:hover { background: var(--panel-2); }
 .diff-dir .p { overflow: hidden; text-overflow: ellipsis; }
@@ -331,12 +343,13 @@ textarea { resize: vertical; font-family: var(--mono); }
 .diff-file {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 6px;
+  gap: 4px;
+  padding: 3px 6px;
   border-radius: var(--radius);
   font-size: 12.5px;
   font-family: var(--mono);
   cursor: pointer;
+  line-height: 1.35;
 }
 .diff-file:hover { background: var(--panel-2); }
 .diff-file.active { background: var(--panel-2); color: var(--accent); }
@@ -479,6 +492,41 @@ textarea { resize: vertical; font-family: var(--mono); }
   z-index: 50;
   padding: 40px;
 }
+.deleting-overlay {
+  /* Keep the spinner visible over confirm/menus; delete cannot be cancelled mid-flight. */
+  z-index: 60;
+  pointer-events: all;
+}
+.deleting-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 18px 22px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  max-width: 360px;
+}
+.deleting-card .spin {
+  width: 18px;
+  height: 18px;
+  border-width: 2px;
+  flex: none;
+}
+.deleting-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13.5px;
+  min-width: 0;
+}
+.deleting-copy > div:first-child {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .modal {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -593,14 +641,24 @@ textarea { resize: vertical; font-family: var(--mono); }
 }
 .section-head .count { color: var(--dimmer); }
 
-.chev {
+.chev,
+.chev-spacer {
   flex: none;
-  width: 11px;
+  width: 12px;
+  height: 12px;
+}
+.chev {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   color: var(--dimmer);
-  font-size: 9.0px;
+  font-size: 8px;
+  line-height: 1;
+  /* The glyph sits high in its em box; nudge it onto the text midline. */
+  transform: translateY(0.5px);
   transition: transform 0.12s;
 }
-.chev.open { transform: rotate(90deg); }
+.chev.open { transform: translateY(0.5px) rotate(90deg); }
 
 .repo-row {
   display: flex;
@@ -676,6 +734,26 @@ textarea { resize: vertical; font-family: var(--mono); }
   font-family: var(--mono);
 }
 .diff-summary b { font-family: var(--sans); }
+
+.diff-commit-picker {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  min-width: 0;
+}
+.diff-commit-picker select {
+  width: auto;
+  max-width: 340px;
+  min-width: 140px;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.diff-commit-picker .btn {
+  padding: 2px 8px;
+  font-size: 14px;
+  line-height: 1.2;
+}
 
 .diff-repo-banner {
   flex: none;
@@ -889,6 +967,11 @@ textarea { resize: vertical; font-family: var(--mono); }
 .ticket.lvl-epic { border-left-color: var(--accent); }
 .ticket.lvl-sub { border-left-color: var(--border); }
 .ticket:hover { border-color: var(--accent-dim); }
+.ticket.focused {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-dim);
+  background: var(--panel-2);
+}
 .ticket .top { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; flex-wrap: wrap; }
 .ticket .summary { font-size: 13px; line-height: 1.45; }
 .ticket .bottom {

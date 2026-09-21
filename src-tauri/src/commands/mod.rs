@@ -7,6 +7,8 @@
 use crate::config::ConfigStore;
 use crate::pty::PtyManager;
 use serde::Serialize;
+use std::collections::HashMap;
+use std::time::Instant;
 
 pub struct AppState {
     pub config: ConfigStore,
@@ -16,6 +18,17 @@ pub struct AppState {
     pub jira_types: parking_lot::Mutex<Option<Vec<crate::integrations::jira::IssueType>>>,
     /// Notices raised before the UI is listening. Drained once on boot.
     pub pending_notices: parking_lot::Mutex<Vec<AppNotice>>,
+    /// Last git-status per checkout. Cold tasks reuse this so a poll does not
+    /// shell out once per every worktree the user has ever opened.
+    pub status_cache: parking_lot::Mutex<HashMap<String, CachedStatus>>,
+}
+
+/// Snapshot of one checkout's status, reused until it goes hot or ages out.
+pub struct CachedStatus {
+    pub status: Option<crate::git::WorktreeStatus>,
+    pub changed: u32,
+    pub exists: bool,
+    pub at: Instant,
 }
 
 #[derive(Clone, Debug, Serialize)]

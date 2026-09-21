@@ -123,7 +123,6 @@ export function ReposView() {
             <span className="muted">{g.projects.length}</span>
             <div className="spacer" />
             {/* Renaming must not toggle the section underneath it. */}
-            {/* Renaming must not toggle the section underneath it. */}
             <div onClick={(e) => e.stopPropagation()}>
               <Combo
                 value={g.group}

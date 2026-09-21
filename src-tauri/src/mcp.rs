@@ -379,7 +379,8 @@ fn tools() -> Vec<Value> {
                     "description": "Repository names from list_repos"
                 },
                 "agent": str_prop("Agent id to launch, e.g. claude. Omit for worktrees only."),
-                "branch_suffix": str_prop("Optional suffix appended to the ticket key")
+                "branch_suffix": str_prop("Optional suffix appended to the ticket key"),
+                "base": str_prop("Branch to cut from in every repo. Each repo's default when omitted.")
             }),
             vec!["issue_key", "repos"],
         ),
@@ -454,7 +455,8 @@ fn tools() -> Vec<Value> {
                     "items": { "type": "string" },
                     "description": "Repository names from list_repos"
                 },
-                "branch": str_prop("Explicit branch name, overriding the derived one")
+                "branch": str_prop("Explicit branch name, overriding the derived one"),
+                "base": str_prop("Branch to cut from in every repo. Each repo's default when omitted.")
             }),
             vec!["name", "repos"],
         ),
@@ -517,7 +519,7 @@ async fn call(app: &AppHandle, name: &str, args: Value) -> Result<Value> {
     }
 
     match name {
-        "list_tasks" => Ok(serde_json::to_value(commands::list_tasks(state))?),
+        "list_tasks" => Ok(serde_json::to_value(commands::list_tasks(state, None))?),
 
         "list_repos" => Ok(serde_json::to_value(commands::list_projects(state))?),
 
@@ -529,6 +531,8 @@ async fn call(app: &AppHandle, name: &str, args: Value) -> Result<Value> {
                 state,
                 id,
                 Some(crate::git::Scope::Branch),
+                None,
+                None,
             )?)?)
         }
 
@@ -706,6 +710,7 @@ async fn call(app: &AppHandle, name: &str, args: Value) -> Result<Value> {
                     project_ids: ids,
                     branch: arg(&args, "branch").map(str::to_string),
                     branch_suffix: None,
+                    base: arg(&args, "base").map(str::to_string),
                     issue_key: None,
                     issue_url: None,
                     epic_key: None,
@@ -744,6 +749,7 @@ async fn call(app: &AppHandle, name: &str, args: Value) -> Result<Value> {
                 ids,
                 arg(&args, "agent").map(str::to_string),
                 arg(&args, "branch_suffix").map(str::to_string),
+                arg(&args, "base").map(str::to_string),
             )
             .await?;
             Ok(serde_json::to_value(task)?)

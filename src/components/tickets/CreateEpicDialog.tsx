@@ -1,60 +1,68 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../../lib/api";
+import { read, write } from "../../lib/persist";
 import { useStore } from "../../store";
 import type { CreateField, JiraIssue, JiraIssueType } from "../../lib/types";
-import { Field, Modal } from "../ui";
+import { Combo, Field, Modal } from "../ui";
 import { IssueTypeIcon, type TypeMap } from "../IssueType";
-import { creatableTypes, preferredCreatable } from "../task-forms/creatable";
+import { epicTypes, preferredEpic } from "../task-forms/creatable";
 import { OptimizeDescription } from "./OptimizeDescription";
 
-export function FileIssueDialog({
-  epic,
+export function CreateEpicDialog({
   issueTypes,
   types,
+  issues,
   onClose,
-  onFiled,
 }: {
-  epic: { key: string; summary: string };
   issueTypes: JiraIssueType[];
   types: TypeMap;
+  issues: JiraIssue[];
   onClose: () => void;
-  onFiled: (issue: JiraIssue) => void;
 }) {
+  const settings = useStore((s) => s.settings);
   const refreshIssues = useStore((s) => s.refreshIssues);
   const toast = useStore((s) => s.toast);
   const fail = useStore((s) => s.fail);
 
-  const [newSummary, setNewSummary] = useState("");
-  const [newDesc, setNewDesc] = useState("");
-  const [newType, setNewType] = useState("");
-  const [filingBusy, setFilingBusy] = useState(false);
-  // What this project insists on, asked of Jira rather than assumed.
+  const [summary, setSummary] = useState("");
+  const [desc, setDesc] = useState("");
+  const [epicType, setEpicType] = useState("");
+  const [project, setProject] = useState(() => read("jiraProject", ""));
+  const [busy, setBusy] = useState(false);
   const [needed, setNeeded] = useState<CreateField[]>([]);
   const [neededLoading, setNeededLoading] = useState(false);
   const [extra, setExtra] = useState<Record<string, string[]>>({});
 
-  const creatable = useMemo(() => creatableTypes(issueTypes), [issueTypes]);
+  const epics = useMemo(() => epicTypes(issueTypes), [issueTypes]);
+  const boardKeys = useMemo(
+    () => [...new Set(issues.map((i) => i.key.split("-")[0]).filter(Boolean))],
+    [issues],
+  );
+  const defaultProject = settings?.jira?.project_key ?? boardKeys[0] ?? "";
 
   useEffect(() => {
-    if (newType && creatable.some((t) => t.name === newType)) return;
-    setNewType(preferredCreatable(creatable)?.name ?? "");
-  }, [creatable, newType]);
+    setProject((current) => current || defaultProject);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
-    const project = epic.key.split("-")[0];
-    const typeId = creatable.find((t) => t.name === newType)?.id;
-    if (!project || !typeId) { setNeeded([]); return; }
+    if (epicType && epics.some((t) => t.name === epicType)) return;
+    setEpicType(preferredEpic(epics)?.name ?? "");
+  }, [epics, epicType]);
+
+  useEffect(() => {
+    const typeId = epics.find((t) => t.name === epicType)?.id;
+    if (!project.trim() || !typeId) { setNeeded([]); return; }
     setNeededLoading(true);
     setExtra({});
-    api.jiraCreateFields(project, typeId)
+    api.jiraCreateFields(project.trim(), typeId)
       .then((f) => setNeeded(f.filter((x) => x.required)))
       // A site that will not describe its own form is no reason to block the
       // dialog: Jira still says what is missing if the create is refused.
       .catch(() => setNeeded([]))
       .finally(() => setNeededLoading(false));
-  }, [epic.key, newType, creatable]);
+  }, [project, epicType, epics]);
 
-  /// Shaped the way Jira wants each field, from the metadata it gave us.
   function extraFields(): Record<string, unknown> {
     const out: Record<string, unknown> = {};
     for (const field of needed) {
@@ -68,90 +76,103 @@ export function FileIssueDialog({
 
   // Fields the dialog fills itself, whether or not Jira calls them required.
   const OWN = ["summary", "description", "issuetype", "project", "parent", "reporter"];
-  // Required, and a closed set of values, so it can be offered as a choice.
   const pickable = needed.filter((f) => !OWN.includes(f.id) && f.allowed.length > 0);
-  // Required, free-form, and not something this dialog asks for. Nothing
-  // sensible can be invented for these, so say so rather than failing at Jira.
   const unsupported = needed.filter((f) => !OWN.includes(f.id) && f.allowed.length === 0);
   const descriptionRequired = needed.some((f) => f.id === "description");
 
   const missing = [
     ...pickable.filter((f) => (extra[f.id] ?? []).length === 0),
-    ...(descriptionRequired && !newDesc.trim()
+    ...(descriptionRequired && !desc.trim()
       ? [{ id: "description", name: "Description" }]
       : []),
   ];
 
-  async function fileIssue() {
-    if (!newSummary.trim() || !newType) return;
-    setFilingBusy(true);
+  async function createEpic() {
+    if (!summary.trim() || !epicType || !project.trim()) return;
+    setBusy(true);
     try {
       const issue = await api.jiraCreateIssue({
-        summary: newSummary.trim(),
-        description: newDesc.trim(),
-        issue_type: newType,
-        project_key: null,
-        parent_key: epic.key,
+        summary: summary.trim(),
+        description: desc.trim(),
+        issue_type: epicType,
+        project_key: project.trim(),
+        parent_key: null,
         fields: extraFields(),
       });
-      toast("success", `Filed ${issue.key} under ${epic.key}`);
+      toast("success", `Created ${issue.key}`);
       onClose();
       await refreshIssues();
-      // Straight into the start-work dialog: filing it is usually the first
-      // half of picking it up.
-      onFiled(issue);
     } catch (e) {
       fail(e);
     } finally {
-      setFilingBusy(false);
+      setBusy(false);
     }
   }
 
   return (
     <Modal
-      title={`New ticket in ${epic.key}`}
+      title="New epic"
       onClose={onClose}
       footer={
         <>
           <button className="btn" onClick={onClose}>Cancel</button>
           <button
             className="btn btn-primary"
-            disabled={filingBusy || !newSummary.trim() || !newType || missing.length > 0}
+            disabled={
+              busy ||
+              !summary.trim() ||
+              !epicType ||
+              !project.trim() ||
+              missing.length > 0
+            }
             title={
               missing.length > 0
                 ? `${missing.map((f) => f.name).join(", ")} required by this project`
                 : undefined
             }
-            onClick={() => void fileIssue()}
+            onClick={() => void createEpic()}
           >
-            {filingBusy ? "Filing…" : "File ticket"}
+            {busy ? "Creating…" : "Create epic"}
           </button>
         </>
       }
     >
       <div className="muted" style={{ marginBottom: 12, lineHeight: 1.6 }}>
-        Filed under <b>{epic.key}</b>
-        {epic.summary ? ` — ${epic.summary}` : ""}, in that epic's own project.
-        Nothing is checked out; the start-work dialog opens once it exists.
+        Creates a top-level epic in the project you pick. Nothing is checked out;
+        file tickets under it once it exists.
       </div>
+
+      <Field label="Project" hint="The key the epic is filed under.">
+        <Combo
+          value={project}
+          options={boardKeys}
+          placeholder="ACME"
+          width="100%"
+          onChange={(raw) => {
+            const v = raw.trim().toUpperCase();
+            setProject(v);
+            write("jiraProject", v);
+          }}
+        />
+      </Field>
 
       <Field label="Summary">
         <input
           autoFocus
-          value={newSummary}
-          onChange={(e) => setNewSummary(e.target.value)}
-          placeholder="What needs doing"
-          onKeyDown={(e) => { if (e.key === "Enter") void fileIssue(); }}
+          value={summary}
+          onChange={(e) => setSummary(e.target.value)}
+          placeholder="What this epic covers"
+          onKeyDown={(e) => { if (e.key === "Enter") void createEpic(); }}
         />
       </Field>
 
       <Field label="Type">
         <div className="type-row">
-          {creatable.map((t) => (
+          {epics.map((t) => (
             <button
               key={t.id}
-              className={`type-pick${newType === t.name ? " active" : ""}`}
-              onClick={() => setNewType(t.name)}
+              className={`type-pick${epicType === t.name ? " active" : ""}`}
+              onClick={() => setEpicType(t.name)}
             >
               <IssueTypeIcon types={types} name={t.name} size={15} />
               {t.name}
@@ -168,7 +189,7 @@ export function FileIssueDialog({
       {unsupported.length > 0 && (
         <div className="confirm-detail" style={{ marginBottom: 12 }}>
           This project also requires {unsupported.map((f) => f.name).join(", ")},
-          which this dialog cannot fill in. Jira will refuse the ticket — file it
+          which this dialog cannot fill in. Jira will refuse the epic — create it
           in Jira instead, and it will show up here on the next refresh.
         </div>
       )}
@@ -212,22 +233,22 @@ export function FileIssueDialog({
         label="Description"
         hint={
           descriptionRequired
-            ? "Required by this project. Becomes the ticket body and an agent's briefing."
-            : "Optional. Becomes the ticket body and an agent's briefing."
+            ? "Required by this project."
+            : "Optional. Becomes the epic body."
         }
       >
         <textarea
           rows={5}
-          value={newDesc}
-          onChange={(e) => setNewDesc(e.target.value)}
-          placeholder="What needs doing, and how you would know it is done."
+          value={desc}
+          onChange={(e) => setDesc(e.target.value)}
+          placeholder="Scope, outcomes, and anything an agent should know."
         />
         <OptimizeDescription
-          summary={newSummary}
-          description={newDesc}
-          kind="ticket"
-          onChange={setNewDesc}
-          disabled={filingBusy}
+          summary={summary}
+          description={desc}
+          kind="epic"
+          onChange={setDesc}
+          disabled={busy}
         />
       </Field>
     </Modal>

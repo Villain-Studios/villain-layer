@@ -1,9 +1,10 @@
 import { Fragment, useState, type ReactNode } from "react";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { api, errMessage } from "../../lib/api";
+import { copyText } from "../../lib/clipboard";
 import { paneState, taskReview, taskTotals, useStore, type TaskReview } from "../../store";
 import type { TaskView } from "../../lib/types";
-import { Confirm, ContextMenu, Field, Modal, type MenuItem } from "../ui";
+import { Confirm, ContextMenu, Field, Modal, Spinner, type MenuItem } from "../ui";
 import { RepoPicker } from "../RepoPicker";
 import { CreateTaskDialog } from "./CreateTaskDialog";
 
@@ -26,6 +27,7 @@ export function Sidebar() {
   const selected = useStore((s) => s.selectedTask);
   const select = useStore((s) => s.select);
   const setView = useStore((s) => s.setView);
+  const showIssue = useStore((s) => s.showIssue);
   const refreshTasks = useStore((s) => s.refreshTasks);
   const refreshPanes = useStore((s) => s.refreshPanes);
   const toast = useStore((s) => s.toast);
@@ -44,8 +46,10 @@ export function Sidebar() {
     label: string;
     run: () => void;
   } | null>(null);
+  const [deleting, setDeleting] = useState<{ id: string; name: string } | null>(null);
 
   function askDeleteTask(task: TaskView) {
+    if (deleting) return;
     const { dirty } = taskTotals(task);
     const repos = task.checkouts.length;
     setConfirming({
@@ -107,6 +111,8 @@ export function Sidebar() {
   /// git refuses to remove a worktree with uncommitted or untracked files. Say
   /// so and offer to force, rather than leaving an orphan nobody can see.
   async function runDelete(task: TaskView, force: boolean) {
+    setConfirming(null);
+    setDeleting({ id: task.id, name: task.name });
     try {
       const results = await api.deleteTask(task.id, force);
       const stuck = results.filter((r) => !r.ok);
@@ -115,6 +121,7 @@ export function Sidebar() {
 
       if (stuck.length === 0) {
         if (selected === task.id) select(null);
+        toast("success", `Deleted ${task.name}`);
         return;
       }
       setConfirming({
@@ -140,6 +147,8 @@ export function Sidebar() {
       });
     } catch (e) {
       fail(e);
+    } finally {
+      setDeleting(null);
     }
   }
 
@@ -191,12 +200,17 @@ export function Sidebar() {
         onSelect: () => void openUrl(task.issue_url!),
       });
     }
+    if (task.issue_key) {
+      items.push({
+        label: "Show in Tickets",
+        onSelect: () => showIssue(task.issue_key!),
+      });
+    }
     items.push(
       {
         label: "Copy branch name",
         onSelect: () => {
-          navigator.clipboard
-            .writeText(task.branch)
+          void copyText(task.branch)
             .then(() => toast("success", `Copied ${task.branch}`))
             .catch(() => toast("error", "Could not reach the clipboard"));
         },
@@ -235,14 +249,17 @@ export function Sidebar() {
   const fleet = panes.filter((p) => p.kind === "agent" && p.running);
   const fleetWaiting = fleet.some((p) => paneState(p).dot === "idle");
 
-  // Two lists, because they are two questions. A task with a PR open is no
-  // longer asking what to write — it is waiting on somebody, and what it is
-  // waiting on is what the second list says.
-  const reviewing = tasks.filter((t) =>
-    (prs[t.id] ?? []).some((r) => r.pr && r.pr.state === "open"),
+  // Three lists, because they are three questions. Writing, waiting on a
+  // reviewer, and landed (update the ticket) are not the same job — and a
+  // merged task in the first list looks like unfinished work.
+  const done = tasks.filter((t) => taskReview(prs[t.id] ?? []) === "merged");
+  const reviewing = tasks.filter(
+    (t) =>
+      !done.includes(t) &&
+      (prs[t.id] ?? []).some((r) => r.pr && r.pr.state === "open"),
   );
-  const working = tasks.filter((t) => !reviewing.includes(t));
-  const ordered = [...working, ...reviewing];
+  const working = tasks.filter((t) => !done.includes(t) && !reviewing.includes(t));
+  const ordered = [...working, ...reviewing, ...done];
 
   return (
     <div className="sidebar">
@@ -319,6 +336,7 @@ export function Sidebar() {
 
           const review = taskReview(prs[task.id] ?? []);
           const verdict = REVIEW_WORD[review];
+          const vanishing = deleting?.id === task.id;
 
           return (
             <Fragment key={task.id}>
@@ -328,11 +346,18 @@ export function Sidebar() {
                   <span className="count">{reviewing.length}</span>
                 </div>
               )}
+              {i === working.length + reviewing.length && done.length > 0 && (
+                <div className="section-head">
+                  Done
+                  <span className="count">{done.length}</span>
+                </div>
+              )}
             <div>
               <div
-                className={`ws${task.id === selected ? " active" : ""}`}
-                onClick={() => select(task.id)}
+                className={`ws${task.id === selected ? " active" : ""}${vanishing ? " deleting" : ""}`}
+                onClick={() => { if (!vanishing) select(task.id); }}
                 onContextMenu={(e) => {
+                  if (vanishing) return;
                   e.preventDefault();
                   setMenu({ x: e.clientX, y: e.clientY, task });
                 }}
@@ -349,17 +374,22 @@ export function Sidebar() {
                     className={`chev${isOpen ? " open" : ""}`}
                     onClick={(e) => {
                       e.stopPropagation();
+                      if (vanishing) return;
                       setExpanded((x) => ({ ...x, [task.id]: !isOpen }));
                     }}
                   >
                     ▶
                   </span>
+                  {vanishing ? (
+                    <Spinner />
+                  ) : (
                   <span
                     className={`dot ${
                       totals.missing ? "gone" : waiting ? "idle" : live ? "live" : ""
                     }`}
                     title={waiting ? "An agent has gone quiet — it may need you" : undefined}
                   />
+                  )}
                   {task.issue_key && <span className="key-chip">{task.issue_key}</span>}
                   <span className="label">
                     {task.issue_key ? task.name.replace(`${task.issue_key} `, "") : task.name}
@@ -447,6 +477,18 @@ export function Sidebar() {
           onConfirm={confirming.run}
           onCancel={() => setConfirming(null)}
         />
+      )}
+
+      {deleting && (
+        <div className="overlay deleting-overlay" aria-busy="true">
+          <div className="deleting-card">
+            <Spinner />
+            <div className="deleting-copy">
+              <div>Deleting {deleting.name}</div>
+              <div className="muted">Stopping agents and removing worktrees…</div>
+            </div>
+          </div>
+        </div>
       )}
 
       {addingRepoTo && (

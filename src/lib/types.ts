@@ -40,6 +40,8 @@ export interface WorktreeStatus {
   unstaged: number;
   untracked: number;
   conflicted: number;
+  /** Distinct paths with any uncommitted change. */
+  dirty_files: number;
 }
 
 export interface CheckoutView extends Checkout {
@@ -92,6 +94,19 @@ export interface Resumable {
 
 /** Which comparison the Diff tab is showing. */
 export type DiffScope = "uncommitted" | "branch";
+
+/** One commit on a task branch, for the Diff view's commit picker. */
+export interface CommitInfo {
+  sha: string;
+  short: string;
+  subject: string;
+}
+
+export interface RepoCommits {
+  checkout_id: string;
+  repo: string;
+  commits: CommitInfo[];
+}
 
 export interface ChangedFile {
   path: string;

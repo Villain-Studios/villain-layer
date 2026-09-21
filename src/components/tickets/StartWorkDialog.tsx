@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../../lib/api";
 import { useStore } from "../../store";
 import type { AgentStatus, JiraIssue, JiraTransition, Project } from "../../lib/types";
-import { Field, Modal } from "../ui";
+import { Combo, Field, Modal } from "../ui";
 import { RepoPicker } from "../RepoPicker";
 import { IssueTypeIcon, type TypeMap } from "../IssueType";
 
@@ -31,9 +31,14 @@ export function StartWorkDialog({
   const [reason, setReason] = useState<string | null>(null);
   const [agentId, setAgentId] = useState("");
   const [suffix, setSuffix] = useState("");
+  const [base, setBase] = useState("");
+  const [baseOptions, setBaseOptions] = useState<string[]>([]);
+  /** The base this dialog last filled in itself, as opposed to one typed. */
+  const autoBase = useRef("");
   const [starting, setStarting] = useState(false);
 
   const installed = agents.filter((a) => a.installed);
+  const selected = projects.filter((p) => picked.includes(p.id));
 
   useEffect(() => {
     if (!agentId && installed.length) setAgentId(installed[0].id);
@@ -43,17 +48,63 @@ export function StartWorkDialog({
     setTransitions([]);
     setReason(null);
     setSuffix("");
+    setBase("");
+    setBaseOptions([]);
     api.jiraTransitions(issue.key).then(setTransitions).catch(() => setTransitions([]));
     api.suggestRepos({ issueKey: issue.key, epicKey: issue.epic_key })
       .then((s) => { setPicked(s.project_ids); setReason(s.reason); })
       .catch(() => { setPicked([]); setReason(null); });
   }, [issue]);
 
+  // Prefill from the repos' defaults when they agree; load the union of their
+  // remote-tracking branches for the picker. Typing still works — a branch
+  // pushed since the last fetch will not be in the list.
+  useEffect(() => {
+    if (selected.length === 0) {
+      setBase("");
+      setBaseOptions([]);
+      return;
+    }
+    const defaults = [...new Set(selected.map((p) => p.default_branch))];
+    // Suggest, do not overwrite: a base typed by hand survives adding another
+    // repository. Only a box still showing the last suggestion follows it.
+    const suggested = defaults.length === 1 ? defaults[0] : "";
+    setBase((cur) => (cur === "" || cur === autoBase.current ? suggested : cur));
+    autoBase.current = suggested;
+    let cancelled = false;
+    Promise.all(selected.map((p) => api.projectBranches(p.id).catch(() => [] as string[])))
+      .then((lists) => {
+        if (cancelled) return;
+        const seen = new Set<string>();
+        const merged: string[] = [];
+        for (const list of lists) {
+          for (const b of list) {
+            if (!seen.has(b)) {
+              seen.add(b);
+              merged.push(b);
+            }
+          }
+        }
+        // Keep each repo's default near the top even when it is not the newest.
+        for (const d of defaults) {
+          if (!seen.has(d)) merged.unshift(d);
+        }
+        setBaseOptions(merged);
+      });
+    return () => { cancelled = true; };
+  }, [picked.join(","), projects]);
+
   async function startWork() {
     if (picked.length === 0) return;
     setStarting(true);
     try {
-      const task = await api.jiraStartWork(issue.key, picked, agentId || null, suffix || null);
+      const task = await api.jiraStartWork(
+        issue.key,
+        picked,
+        agentId || null,
+        suffix || null,
+        base.trim() || null,
+      );
       // Refresh the issues too: the ticket has usually just moved, and the
       // status on the card is the thing the move was meant to correct.
       await Promise.all([refreshTasks(), refreshPanes(), refreshIssues()]);
@@ -81,6 +132,12 @@ export function StartWorkDialog({
       fail(e);
     }
   }
+
+  const baseHint = selected.length === 0
+    ? "Pick repositories first."
+    : selected.length === 1
+      ? `New branch starts at this tip in ${selected[0].name}.`
+      : "Created from this tip in every repo you picked. Blank uses each repo's own default.";
 
   return (
     <Modal
@@ -145,6 +202,20 @@ export function StartWorkDialog({
             placeholder="optional suffix"
           />
         </div>
+      </Field>
+
+      <Field label="Branch from" hint={baseHint}>
+        <Combo
+          value={base}
+          options={baseOptions}
+          placeholder={
+            selected.length > 1 && !base
+              ? "(each repo's default)"
+              : selected[0]?.default_branch ?? "main"
+          }
+          empty="No branch matches"
+          onChange={setBase}
+        />
       </Field>
 
       <Field

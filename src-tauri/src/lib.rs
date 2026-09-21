@@ -84,6 +84,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
             let handle = app.handle();
             let state = AppState {
@@ -91,6 +92,7 @@ pub fn run() {
                 ptys: PtyManager::default(),
                 jira_types: Default::default(),
                 pending_notices: Default::default(),
+                status_cache: Default::default(),
             };
             app.manage(state);
 
@@ -141,6 +143,7 @@ pub fn run() {
             commands::add_projects,
             commands::scan_repos,
             commands::remove_project,
+            commands::project_branches,
             commands::list_tasks,
             commands::create_task,
             commands::delete_task,
@@ -159,8 +162,10 @@ pub fn run() {
             commands::pty_scrollback,
             commands::close_pane,
             commands::kill_pane,
+            commands::set_ui_awake,
             commands::diff_files,
             commands::diff_file,
+            commands::task_commits,
             commands::send_review,
             commands::commit_task,
             commands::push_task,
@@ -179,6 +184,7 @@ pub fn run() {
             commands::task_prompt,
             commands::handoff_prompt,
             commands::draft_pr_description,
+            commands::optimize_issue_description,
             commands::request_pr_description,
             commands::take_pr_description,
             commands::github_connect,

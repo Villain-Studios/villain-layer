@@ -2,8 +2,8 @@ import { useEffect, useRef } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
-import { listen } from "@tauri-apps/api/event";
 import { api } from "../lib/api";
+import { onPtyOutput } from "../lib/ptyOutput";
 import { useStore } from "../store";
 import type { PaneInfo } from "../lib/types";
 
@@ -30,6 +30,11 @@ function decode(b64: string): Uint8Array {
 /**
  * One xterm instance per pane, kept mounted across tab switches so scrollback
  * and cursor state survive. Hidden panes are visually hidden, never unmounted.
+ *
+ * Writes are skipped while the pane is off-screen or the window is in the
+ * background — xterm still pays for every byte, and a long idle with agents
+ * running is how coming back feels stuck. The backend keeps the real
+ * scrollback; becoming visible again replays it.
  */
 export function TerminalPane({ pane, visible }: { pane: PaneInfo; visible: boolean }) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -40,6 +45,11 @@ export function TerminalPane({ pane, visible }: { pane: PaneInfo; visible: boole
   const fontSize = useStore((s) => s.settings?.ui.terminal_font_size ?? 13);
   const fontRef = useRef(fontSize);
   fontRef.current = fontSize;
+  const appActive = useStore((s) => s.appActive);
+  const liveRef = useRef(visible && appActive);
+  const syncingRef = useRef(false);
+  liveRef.current = visible && appActive && !syncingRef.current;
+  const needsResync = useRef(false);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -53,7 +63,9 @@ export function TerminalPane({ pane, visible }: { pane: PaneInfo; visible: boole
       theme: THEME,
       cursorBlink: true,
       allowProposedApi: true,
-      scrollback: 20000,
+      // Backend scrollback is the source of truth (~256KB). Keeping a huge
+      // local buffer just burns memory across every mounted pane.
+      scrollback: 5000,
       macOptionIsMeta: true,
     });
     const fit = new FitAddon();
@@ -99,15 +111,16 @@ export function TerminalPane({ pane, visible }: { pane: PaneInfo; visible: boole
       void api.ptyResize(pane.id, rows, cols).catch(() => {});
     });
 
-    // `disposed` matters here as well as for the scrollback: unlisten resolves
-    // asynchronously, so an event can still arrive after term.dispose().
-    const unlistenPromise = listen<{ pane_id: string; data: string }>(
-      "pty:output",
-      (e) => {
-        if (disposed || e.payload.pane_id !== pane.id) return;
-        term.write(decode(e.payload.data));
-      },
-    );
+    // `disposed` matters here as well as for the scrollback: output can still
+    // arrive after term.dispose() if a chunk was already in flight.
+    const stopOutput = onPtyOutput(pane.id, (data) => {
+      if (disposed) return;
+      if (!liveRef.current) {
+        needsResync.current = true;
+        return;
+      }
+      term.write(decode(data));
+    });
 
     const ro = new ResizeObserver(() => {
       if (host.offsetParent !== null) fitAndTell();
@@ -119,12 +132,21 @@ export function TerminalPane({ pane, visible }: { pane: PaneInfo; visible: boole
       ro.disconnect();
       onData.dispose();
       onResize.dispose();
-      void unlistenPromise.then((un) => un());
+      stopOutput();
       term.dispose();
       termRef.current = null;
       fitRef.current = null;
     };
   }, [pane.id]);
+
+  // While the window sleeps the backend stops emitting output altogether, so
+  // nothing arrives to raise the flag in the handler above — and the process
+  // has kept printing into the scrollback all the same. Without this the
+  // pane came back showing whatever was on screen when the window went into
+  // the background, with everything since missing until the next reset.
+  useEffect(() => {
+    if (!appActive) needsResync.current = true;
+  }, [appActive]);
 
   // Live-apply a font size change without tearing the session down.
   useEffect(() => {
@@ -134,17 +156,43 @@ export function TerminalPane({ pane, visible }: { pane: PaneInfo; visible: boole
     try { fitRef.current?.fit(); } catch { /* not laid out */ }
   }, [fontSize]);
 
-  // Re-fit and focus when this pane comes to the front.
+  // Re-fit, focus, and catch up scrollback when this pane is on screen again.
   useEffect(() => {
-    if (!visible) return;
-    const id = requestAnimationFrame(() => {
-      const term = termRef.current;
+    if (!visible || !appActive) return;
+    const term = termRef.current;
+    if (!term) return;
+    let cancelled = false;
+
+    const show = async () => {
+      if (needsResync.current) {
+        // Hold live writes until the replay lands, or a chunk arriving mid-
+        // reset would paint over (or under) the scrollback we just fetched.
+        syncingRef.current = true;
+        liveRef.current = false;
+        needsResync.current = false;
+        try {
+          const b64 = await api.ptyScrollback(pane.id);
+          if (cancelled || !termRef.current) return;
+          term.reset();
+          if (b64) term.write(decode(b64));
+        } catch { /* leave whatever was there */ }
+        finally {
+          syncingRef.current = false;
+          liveRef.current = visible && appActive;
+        }
+      }
+      if (cancelled) return;
       try { fitRef.current?.fit(); } catch { /* not laid out */ }
-      if (term) void api.ptyResize(pane.id, term.rows, term.cols).catch(() => {});
-      term?.focus();
-    });
-    return () => cancelAnimationFrame(id);
-  }, [visible, pane.id]);
+      void api.ptyResize(pane.id, term.rows, term.cols).catch(() => {});
+      term.focus();
+    };
+
+    const id = requestAnimationFrame(() => { void show(); });
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(id);
+    };
+  }, [visible, appActive, pane.id]);
 
   return <div ref={hostRef} className={`term-host${visible ? "" : " hidden"}`} />;
 }

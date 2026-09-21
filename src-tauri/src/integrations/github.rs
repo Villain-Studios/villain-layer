@@ -296,7 +296,13 @@ fn to_pr(v: &Value) -> PullRequest {
             .get("mergeable_state")
             .and_then(|m| m.as_str())
             .map(str::to_string),
-        merged: v.get("merged").and_then(|m| m.as_bool()).unwrap_or(false),
+        // The list endpoint has no `merged`, only `merged_at`; the detail
+        // endpoint has both. Reading either means a listing is enough to say
+        // what became of a closed PR, without a second call per repository.
+        merged: v
+            .get("merged")
+            .and_then(|m| m.as_bool())
+            .unwrap_or_else(|| v.get("merged_at").and_then(|m| m.as_str()).is_some()),
         comments: n(v, "comments"),
         review_comments: n(v, "review_comments"),
     }

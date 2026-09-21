@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { copyText } from "../../lib/clipboard";
 import { api } from "../../lib/api";
 import { groupByEpic, useStore } from "../../store";
 import type { JiraIssue, JiraPage } from "../../lib/types";
 import { ContextMenu, Spinner, type MenuItem } from "../ui";
 import { IssueTypeIcon, isEpicType, typeMap } from "../IssueType";
 import { BrowsePanel } from "./BrowsePanel";
+import { CreateEpicDialog } from "./CreateEpicDialog";
 import { FileIssueDialog } from "./FileIssueDialog";
 import { ReadTicketDialog } from "./ReadTicketDialog";
 import { StartWorkDialog } from "./StartWorkDialog";
@@ -26,6 +28,8 @@ export function TicketsView() {
   const select = useStore((s) => s.select);
   const toast = useStore((s) => s.toast);
   const fail = useStore((s) => s.fail);
+  const focusIssueKey = useStore((s) => s.focusIssueKey);
+  const clearFocusIssue = useStore((s) => s.clearFocusIssue);
 
   const [open, setOpen] = useState<JiraIssue | null>(null);
   // Reading a ticket is not starting one. Jira already sent the description
@@ -47,6 +51,7 @@ export function TicketsView() {
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
   // Filing under an epic: the parent is fixed, everything else is asked for.
   const [filing, setFiling] = useState<{ key: string; summary: string } | null>(null);
+  const [creatingEpic, setCreatingEpic] = useState(false);
 
   const jiraBase = settings?.jira?.base_url.replace(/\/+$/, "") ?? "";
   const types = useMemo(() => typeMap(issueTypes), [issueTypes]);
@@ -67,9 +72,62 @@ export function TicketsView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sub]);
 
+  // Jump from a task's context menu: land on the ticket, open its epic, and
+  // light it up briefly so the eye finds it among the board.
+  useEffect(() => {
+    if (!focusIssueKey) return;
+    const key = focusIssueKey;
+    const inMine = issues.some((i) => i.key === key);
+
+    if (inMine) {
+      setSub("mine");
+      setQuery(key);
+      setKinds([]);
+      const epicKey = issues.find((i) => i.key === key)?.epic_key;
+      if (epicKey) setShut((c) => ({ ...c, [epicKey]: false }));
+    } else {
+      // Not on the Mine list (common once a Done ticket is unassigned) — ask
+      // Jira for that key specifically, including Done.
+      setSub("browse");
+      setBrowseText(key);
+      setWhose("anyone");
+      setIncludeDone(true);
+      setKinds([]);
+      setSearching(true);
+      void api.jiraBrowse(key, "anyone", true, [])
+        .then((page) => {
+          setFound(page);
+          window.setTimeout(() => {
+            document
+              .querySelector(`[data-issue-key="${CSS.escape(key)}"]`)
+              ?.scrollIntoView({ block: "center", behavior: "smooth" });
+          }, 80);
+        })
+        .catch((e) => {
+          setFound({ issues: [], more: false });
+          fail(e);
+        })
+        .finally(() => setSearching(false));
+      const clear = window.setTimeout(() => clearFocusIssue(), 2200);
+      return () => window.clearTimeout(clear);
+    }
+
+    const scroll = window.setTimeout(() => {
+      document
+        .querySelector(`[data-issue-key="${CSS.escape(key)}"]`)
+        ?.scrollIntoView({ block: "center", behavior: "smooth" });
+    }, 80);
+    const clear = window.setTimeout(() => clearFocusIssue(), 2200);
+    return () => {
+      window.clearTimeout(scroll);
+      window.clearTimeout(clear);
+    };
+    // issues / fail deliberately omitted: this runs once per focus request.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusIssueKey]);
+
   function copy(text: string, what: string) {
-    navigator.clipboard
-      .writeText(text)
+    void copyText(text)
       .then(() => toast("success", `Copied ${what}`))
       .catch(() => toast("error", "Could not reach the clipboard"));
   }
@@ -96,10 +154,11 @@ export function TicketsView() {
     ];
   }
 
-  /// What you can do with a ticket without opening it.
+  /// What you can do with a ticket without opening it. Status moves live in
+  /// Read ticket — packing every transition into this menu grows it too tall.
   function issueMenu(issue: JiraIssue): MenuItem[] {
     const task = taskFor(issue.key);
-    const items: MenuItem[] = [
+    return [
       {
         label: task ? "Open task" : "Start work…",
         onSelect: () => (task ? select(task) : setOpen(issue)),
@@ -108,14 +167,6 @@ export function TicketsView() {
       ...(isEpicType(types, issue.issue_type) ? epicItems(issue.key, issue.summary) : []),
       ...linkItems(issue.key, issue.summary),
     ];
-    if (task && issue.status_category !== "indeterminate") {
-      items.push({
-        label: "Move to in progress",
-        separated: true,
-        onSelect: () => void syncStatus(issue.key),
-      });
-    }
-    return items;
   }
 
   /// Bring a ticket back into step with the work already happening here.
@@ -126,6 +177,7 @@ export function TicketsView() {
       if (moved) {
         toast("success", `${key} → ${moved}`);
         await refreshIssues();
+        if (sub === "browse") void browse();
       } else {
         toast("info", `${key} offers no transition into progress.`);
       }
@@ -148,7 +200,15 @@ export function TicketsView() {
     }
   }
 
-  if (!settings?.jira_connected) {
+  if (!settings) {
+    return (
+      <div className="empty">
+        <h2>Loading…</h2>
+      </div>
+    );
+  }
+
+  if (!settings.jira_connected) {
     return (
       <div className="empty">
         <h2>Jira not connected</h2>
@@ -186,6 +246,7 @@ export function TicketsView() {
         types={types}
         taskId={taskFor(issue.key)}
         syncing={syncing === issue.key}
+        focused={focusIssueKey === issue.key}
         onOpen={() => setOpen(issue)}
         onSelectTask={select}
         onSync={() => void syncStatus(issue.key)}
@@ -244,6 +305,9 @@ export function TicketsView() {
             >
               {allShut ? "Expand all" : "Collapse all"}
             </button>
+            <button className="btn btn-sm" onClick={() => setCreatingEpic(true)}>
+              New epic…
+            </button>
             <button className="btn btn-sm" onClick={() => void refreshIssues()}>Refresh</button>
           </>
         ) : (
@@ -278,7 +342,9 @@ export function TicketsView() {
           onSelectTask={select}
           onSync={(key) => void syncStatus(key)}
           onFileUnder={setFiling}
+          focusIssueKey={focusIssueKey}
           onContextMenu={(e, issue) => {
+            e.preventDefault();
             setMenu({ x: e.clientX, y: e.clientY, items: issueMenu(issue) });
           }}
         />
@@ -299,6 +365,12 @@ export function TicketsView() {
             Your JQL matches more than the {issues.length} shown, so the epics below
             are missing some of their tickets. Narrow it in Settings.
           </div>
+        </div>
+      )}
+
+      {sub === "mine" && epics.length === 0 && issuesLoading && (
+        <div className="card">
+          <div className="muted">Loading tickets…</div>
         </div>
       )}
 
@@ -426,6 +498,15 @@ export function TicketsView() {
         />
       )}
 
+      {creatingEpic && (
+        <CreateEpicDialog
+          issueTypes={issueTypes}
+          types={types}
+          issues={issues}
+          onClose={() => setCreatingEpic(false)}
+        />
+      )}
+
       {menu && (
         <ContextMenu
           x={menu.x}
@@ -442,6 +523,12 @@ export function TicketsView() {
           hasTask={!!taskFor(reading.key)}
           onClose={() => setReading(null)}
           onStart={() => { setOpen(reading); setReading(null); }}
+          onMoved={(toStatus) => {
+            toast("success", `${reading.key} → ${toStatus}`);
+            setReading((r) => (r ? { ...r, status: toStatus } : r));
+            void refreshIssues();
+            if (sub === "browse") void browse();
+          }}
         />
       )}
 

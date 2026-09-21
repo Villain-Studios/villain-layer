@@ -220,14 +220,14 @@ pub(crate) async fn task_prs(state: &AppState, client: &GitHub, task_id: &str) -
             .project(&checkout.project_id)
             .map(|p| p.name)
             .unwrap_or_else(|_| "(unknown)".into());
-        let changed = git::changed_files(
+        // A count, not the list: this runs for every repository of every task
+        // on a timer, and building the list reads each untracked file.
+        let changed = git::changed_count(
             &dir,
             &checkout.base,
             checkout.base_commit.as_deref(),
             git::Scope::Branch,
-        )
-            .map(|f| f.len())
-            .unwrap_or(0);
+        );
 
         let mut row = CheckoutPr {
             checkout_id: checkout.id.clone(),
@@ -252,24 +252,35 @@ pub(crate) async fn task_prs(state: &AppState, client: &GitHub, task_id: &str) -
                         let at = all.iter().position(|p| p.state == "open").unwrap_or(0);
                         let found = all.remove(at);
 
-                        // None of the three needs anything from the others,
-                        // and this runs for every repository of every task on
-                        // a timer — so they go together rather than in turn.
-                        //
-                        // The listing carries no comment counts and no merged
-                        // flag, which is why the one being shown in full is
-                        // fetched again rather than reported with those
-                        // silently zeroed.
-                        let (checks, reviews, full) = tokio::join!(
-                            client.checks(&owner, &name, &task.branch),
-                            client.reviews(&owner, &name, found.number),
-                            client.pull(&owner, &name, found.number),
-                        );
+                        if found.state == "open" {
+                            // None of the three needs anything from the
+                            // others, and this runs for every repository of
+                            // every task on a timer — so they go together
+                            // rather than in turn.
+                            //
+                            // The listing carries no comment counts, which is
+                            // why the one being shown in full is fetched
+                            // again rather than reported with those silently
+                            // zeroed.
+                            let (checks, reviews, full) = tokio::join!(
+                                client.checks(&owner, &name, &task.branch),
+                                client.reviews(&owner, &name, found.number),
+                                client.pull(&owner, &name, found.number),
+                            );
 
-                        row.checks = checks.unwrap_or_default();
-                        row.reviews = reviews.unwrap_or_default();
-                        row.verdict = github::verdict(&row.reviews).to_string();
-                        row.pr = Some(full.ok().unwrap_or(found));
+                            row.checks = checks.unwrap_or_default();
+                            row.reviews = reviews.unwrap_or_default();
+                            row.verdict = github::verdict(&row.reviews).to_string();
+                            row.pr = Some(full.ok().unwrap_or(found));
+                        } else {
+                            // Closed is final: its checks and reviews will not
+                            // change, and nothing on screen reads them. Three
+                            // calls saved per finished repository, on every
+                            // sweep, for as long as the task is kept — which
+                            // is what keeps a dozen done tasks from eating
+                            // the API budget the open ones need.
+                            row.pr = Some(found);
+                        }
                         row.past = all;
                     }
                     Ok(_) => {}
@@ -312,14 +323,12 @@ pub async fn github_open_prs(
         let project = state.config.project(&checkout.project_id)?;
         let repo = project.name.clone();
 
-        let changed = git::changed_files(
+        let changed = git::changed_count(
             &dir,
             &checkout.base,
             checkout.base_commit.as_deref(),
             git::Scope::Branch,
-        )
-            .map(|f| f.len())
-            .unwrap_or(0);
+        );
         if changed == 0 {
             results.push(RepoResult {
                 checkout_id: checkout.id,

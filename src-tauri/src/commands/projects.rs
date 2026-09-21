@@ -18,6 +18,17 @@ pub fn list_projects(state: State<AppState>) -> Vec<Project> {
     state.config.read().projects
 }
 
+/// Branches a new worktree in this repository could be cut from.
+///
+/// Same shape as `checkout_branches` — remote-tracking names without the
+/// `origin/` prefix — so the start-work picker can offer them before any
+/// worktree exists yet.
+#[tauri::command]
+pub fn project_branches(state: State<AppState>, project_id: String) -> Result<Vec<String>> {
+    let project = state.config.project(&project_id)?;
+    git::remote_branches(&PathBuf::from(&project.path))
+}
+
 /// Register several repositories at once, skipping any that fail rather than
 /// failing the whole batch.
 #[tauri::command]
@@ -171,12 +182,21 @@ pub(crate) fn register_project(state: &AppState, path: &str, group: Option<&str>
 
 #[tauri::command]
 pub fn remove_project(state: State<AppState>, id: String) -> Result<()> {
-    state.config.update(|c| {
+    let gone: Vec<String> = state.config.update(|c| {
         c.projects.retain(|p| p.id != id);
+        let gone: Vec<String> = c
+            .checkouts
+            .iter()
+            .filter(|ch| ch.project_id == id)
+            .map(|ch| ch.id.clone())
+            .collect();
         c.checkouts.retain(|ch| ch.project_id != id);
         // Drop tasks that have no repositories left.
         let live: Vec<String> = c.checkouts.iter().map(|ch| ch.task_id.clone()).collect();
         c.tasks.retain(|t| live.contains(&t.id));
-    })
+        gone
+    })?;
+    state.status_cache.lock().retain(|cid, _| !gone.contains(cid));
+    Ok(())
 }
 

@@ -14,6 +14,7 @@ import type {
   PaneInfo,
   Project,
   RepoBranchFacts,
+  RepoCommits,
   RepoResult,
   RepoSuggestion,
   Resumable,
@@ -38,14 +39,18 @@ export const api = {
   scanRepos: (root: string, maxDepth?: number) =>
     invoke<FoundRepo[]>("scan_repos", { root, maxDepth: maxDepth ?? null }),
   removeProject: (id: string) => invoke<void>("remove_project", { id }),
+  projectBranches: (projectId: string) =>
+    invoke<string[]>("project_branches", { projectId }),
 
   // tasks
-  listTasks: () => invoke<TaskView[]>("list_tasks"),
+  listTasks: (focus?: string | null) =>
+    invoke<TaskView[]>("list_tasks", { focus: focus ?? null }),
   createTask: (req: {
     name: string;
     project_ids: string[];
     branch?: string | null;
     branch_suffix?: string | null;
+    base?: string | null;
     issue_key?: string | null;
     issue_url?: string | null;
   }) => invoke<Task>("create_task", { req }),
@@ -82,12 +87,34 @@ export const api = {
   ptyScrollback: (paneId: string) => invoke<string>("pty_scrollback", { paneId }),
   closePane: (paneId: string) => invoke<void>("close_pane", { paneId }),
   killPane: (paneId: string) => invoke<void>("kill_pane", { paneId }),
+  setUiAwake: (awake: boolean) => invoke<void>("set_ui_awake", { awake }),
 
   // diff + git
-  diffFiles: (taskId: string, scope: DiffScope) =>
-    invoke<ChangedFile[]>("diff_files", { taskId, scope }),
-  diffFile: (checkoutId: string, path: string, scope: DiffScope) =>
-    invoke<string>("diff_file", { checkoutId, path, scope }),
+  diffFiles: (
+    taskId: string,
+    scope: DiffScope,
+    commit?: { checkoutId: string; sha: string } | null,
+  ) =>
+    invoke<ChangedFile[]>("diff_files", {
+      taskId,
+      scope,
+      commit: commit?.sha ?? null,
+      checkoutId: commit?.checkoutId ?? null,
+    }),
+  diffFile: (
+    checkoutId: string,
+    path: string,
+    scope: DiffScope,
+    commitSha?: string | null,
+  ) =>
+    invoke<string>("diff_file", {
+      checkoutId,
+      path,
+      scope,
+      commit: commitSha ?? null,
+    }),
+  taskCommits: (taskId: string) =>
+    invoke<RepoCommits[]>("task_commits", { taskId }),
   sendReview: (paneId: string, comments: ReviewComment[]) =>
     invoke<string>("send_review", { paneId, comments }),
   commitTask: (taskId: string, message: string) =>
@@ -112,6 +139,18 @@ export const api = {
   handoffPrompt: (paneId: string) => invoke<string>("handoff_prompt", { paneId }),
   draftPrDescription: (taskId: string) =>
     invoke<string>("draft_pr_description", { taskId }),
+  optimizeIssueDescription: (args: {
+    requestId: string;
+    summary: string;
+    description: string;
+    kind: "epic" | "ticket";
+  }) =>
+    invoke<string>("optimize_issue_description", {
+      requestId: args.requestId,
+      summary: args.summary,
+      description: args.description,
+      kind: args.kind,
+    }),
   requestPrDescription: (taskId: string, paneId: string) =>
     invoke<string>("request_pr_description", { taskId, paneId }),
   takePrDescription: (taskId: string) =>
@@ -137,12 +176,14 @@ export const api = {
     parent_key: string | null;
     project_ids: string[];
     branch_suffix: string | null;
+    base?: string | null;
   }) => invoke<Started>("jira_create_task", { req }),
   jiraStartWork: (
     key: string, projectIds: string[],
-    agentId?: string | null, branchSuffix?: string | null,
+    agentId?: string | null, branchSuffix?: string | null, base?: string | null,
   ) => invoke<Started>("jira_start_work", {
     key, projectIds, agentId: agentId ?? null, branchSuffix: branchSuffix ?? null,
+    base: base ?? null,
   }),
 
   // github

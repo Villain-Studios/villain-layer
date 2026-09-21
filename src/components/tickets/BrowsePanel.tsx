@@ -25,6 +25,7 @@ export function BrowsePanel({
   onSync,
   onFileUnder,
   onContextMenu,
+  focusIssueKey,
 }: {
   issueTypes: JiraIssueType[];
   types: TypeMap;
@@ -46,6 +47,7 @@ export function BrowsePanel({
   onSync: (key: string) => void;
   onFileUnder: (epic: { key: string; summary: string }) => void;
   onContextMenu: (e: MouseEvent, issue: JiraIssue) => void;
+  focusIssueKey?: string | null;
 }) {
   return (
     <>
@@ -106,6 +108,7 @@ export function BrowsePanel({
                 types={types}
                 taskId={taskFor(issue.key)}
                 syncing={syncing === issue.key}
+                focused={focusIssueKey === issue.key}
                 onOpen={() => onOpen(issue)}
                 onSelectTask={onSelectTask}
                 onSync={() => onSync(issue.key)}

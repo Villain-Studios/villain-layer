@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../lib/api";
 import { useStore } from "../../store";
 import type { JiraIssue, JiraIssueType, Project, Settings } from "../../lib/types";
@@ -7,6 +7,7 @@ import { RepoPicker } from "../RepoPicker";
 import { read, write } from "../../lib/persist";
 import { IssueTypeIcon, typeMap } from "../IssueType";
 import { creatableTypes, preferredCreatable } from "../task-forms/creatable";
+import { OptimizeDescription } from "../tickets/OptimizeDescription";
 
 export function CreateTaskDialog({
   projects,
@@ -39,7 +40,12 @@ export function CreateTaskDialog({
   const [picked, setPicked] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [reason, setReason] = useState<string | null>(null);
+  const [base, setBase] = useState("");
+  const [baseOptions, setBaseOptions] = useState<string[]>([]);
+  /** The base this dialog last filled in itself, as opposed to one typed. */
+  const autoBase = useRef("");
 
+  const selected = projects.filter((p) => picked.includes(p.id));
   const tm = useMemo(() => typeMap(issueTypes), [issueTypes]);
   // Most sites never set a default project, so rather than disable the whole
   // feature the dialog asks — offering the keys already visible on the board.
@@ -94,10 +100,45 @@ export function CreateTaskDialog({
       .catch(() => setPicked([]));
   }, []);
 
+  useEffect(() => {
+    if (selected.length === 0) {
+      setBase("");
+      setBaseOptions([]);
+      return;
+    }
+    const defaults = [...new Set(selected.map((p) => p.default_branch))];
+    // Suggest, do not overwrite: a base typed by hand survives adding another
+    // repository. Only a box still showing the last suggestion follows it.
+    const suggested = defaults.length === 1 ? defaults[0] : "";
+    setBase((cur) => (cur === "" || cur === autoBase.current ? suggested : cur));
+    autoBase.current = suggested;
+    let cancelled = false;
+    Promise.all(selected.map((p) => api.projectBranches(p.id).catch(() => [] as string[])))
+      .then((lists) => {
+        if (cancelled) return;
+        const seen = new Set<string>();
+        const merged: string[] = [];
+        for (const list of lists) {
+          for (const b of list) {
+            if (!seen.has(b)) {
+              seen.add(b);
+              merged.push(b);
+            }
+          }
+        }
+        for (const d of defaults) {
+          if (!seen.has(d)) merged.unshift(d);
+        }
+        setBaseOptions(merged);
+      });
+    return () => { cancelled = true; };
+  }, [picked.join(","), projects]);
+
   async function createTask() {
     if (!name.trim() || picked.length === 0) return;
     setBusy(true);
     try {
+      const baseBranch = base.trim() || null;
       // With a ticket, the key it comes back with names the branch and the
       // folder, so the task cannot be built until Jira has answered.
       const task = withJira
@@ -109,11 +150,13 @@ export function CreateTaskDialog({
             parent_key: jiraParent || null,
             project_ids: picked,
             branch_suffix: branch.trim() || null,
+            base: baseBranch,
           })
         : await api.createTask({
             name: name.trim(),
             project_ids: picked,
             branch: branch.trim() || null,
+            base: baseBranch,
           });
       await refreshTasks();
       if (withJira) {
@@ -238,6 +281,13 @@ export function CreateTaskDialog({
               onChange={(e) => setJiraDesc(e.target.value)}
               placeholder="What needs doing, and how you would know it is done."
             />
+            <OptimizeDescription
+              summary={name}
+              description={jiraDesc}
+              kind="ticket"
+              onChange={setJiraDesc}
+              disabled={busy}
+            />
           </Field>
         </div>
       )}
@@ -266,6 +316,30 @@ export function CreateTaskDialog({
           value={branch}
           onChange={(e) => setBranch(e.target.value)}
           placeholder={withJira ? "(none)" : "(auto)"}
+        />
+      </Field>
+
+      <Field
+        label="Branch from"
+        hint={
+          selected.length === 0
+            ? "Pick repositories first."
+            : selected.length === 1
+              ? `New branch starts at this tip in ${selected[0].name}.`
+              : "Created from this tip in every repo you picked. Blank uses each repo's own default."
+        }
+      >
+        <Combo
+          value={base}
+          options={baseOptions}
+          placeholder={
+            selected.length > 1 && !base
+              ? "(each repo's default)"
+              : selected[0]?.default_branch ?? "main"
+          }
+          empty="No branch matches"
+          width="100%"
+          onChange={setBase}
         />
       </Field>
     </Modal>

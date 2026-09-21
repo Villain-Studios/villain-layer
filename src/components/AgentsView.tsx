@@ -95,7 +95,7 @@ export function AgentsView() {
             {pane.running && (
               <button
                 className="btn btn-sm btn-danger"
-                onClick={() => void api.killPane(pane.id).then(refreshPanes).catch(fail)}
+                onClick={() => void api.killPane(pane.id).then(() => refreshPanes()).catch(fail)}
               >
                 Stop
               </button>

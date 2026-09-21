@@ -630,6 +630,16 @@ pub fn close_pane(state: State<AppState>, pane_id: String) -> Result<()> {
     state.ptys.close(&pane_id)
 }
 
+/// Whether the window is in front and worth feeding terminal output.
+///
+/// Agents keep running either way. This only gates shipping their redraws to
+/// the webview — leaving that on while the app sits in the background is how
+/// a long idle ends in a hitch when you come back.
+#[tauri::command]
+pub fn set_ui_awake(state: State<AppState>, awake: bool) {
+    state.ptys.set_ui_awake(awake);
+}
+
 /// Put back what was open when the app last closed.
 ///
 /// Agents are resumed rather than restarted where their CLI can do it, so the

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
 
 use crate::config::{Checkout, ConfigStore, Project, Task};
 use crate::error::{Error, Result};
@@ -61,46 +61,86 @@ pub(crate) fn issue_project(issue_key: Option<&str>) -> String {
         .unwrap_or_default()
 }
 
-pub(crate) fn view_checkout(state: &AppState, checkout: Checkout) -> CheckoutView {
+/// How long a cold checkout may keep its last status before we ask git again.
+const COLD_STATUS_TTL: std::time::Duration = std::time::Duration::from_secs(90);
+
+fn view_checkout_cached(state: &AppState, checkout: Checkout, force: bool) -> CheckoutView {
+    let project_name = state
+        .config
+        .project(&checkout.project_id)
+        .map(|p| p.name)
+        .unwrap_or_else(|_| "(unknown repo)".into());
+
+    if !force {
+        if let Some(hit) = state.status_cache.lock().get(&checkout.id) {
+            if hit.at.elapsed() < COLD_STATUS_TTL {
+                return CheckoutView {
+                    project_name,
+                    status: hit.status.clone(),
+                    changed: hit.changed,
+                    exists: hit.exists,
+                    checkout,
+                };
+            }
+        }
+    }
+
     let dir = PathBuf::from(&checkout.path);
     let exists = dir.is_dir();
-    CheckoutView {
-        project_name: state
-            .config
-            .project(&checkout.project_id)
-            .map(|p| p.name)
-            .unwrap_or_else(|_| "(unknown repo)".into()),
-        status: exists.then(|| git::status(&dir).ok()).flatten(),
-        changed: if exists {
-            git::changed_count(
-                &dir,
-                &checkout.base,
-                checkout.base_commit.as_deref(),
-                git::Scope::Uncommitted,
-            )
-        } else {
-            0
+    let status = exists.then(|| git::status(&dir).ok()).flatten();
+    // One `git status` already enumerated every dirty path. A second
+    // `diff`/`ls-files` pass per checkout on every poll is what made the app
+    // feel busy just for sitting open.
+    let changed = status.as_ref().map(|s| s.dirty_files).unwrap_or(0);
+    state.status_cache.lock().insert(
+        checkout.id.clone(),
+        super::CachedStatus {
+            status: status.clone(),
+            changed,
+            exists,
+            at: std::time::Instant::now(),
         },
+    );
+    CheckoutView {
+        project_name,
+        status,
+        changed,
         exists,
         checkout,
     }
 }
 
 #[tauri::command]
-pub fn list_tasks(state: State<AppState>) -> Vec<TaskView> {
+pub fn list_tasks(state: State<AppState>, focus: Option<String>) -> Vec<TaskView> {
+    let panes = state.ptys.list(None);
+    let running: std::collections::HashSet<&str> = panes
+        .iter()
+        .filter(|p| p.running)
+        .map(|p| p.task_id.as_str())
+        .collect();
+    let mut pane_counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for p in &panes {
+        *pane_counts.entry(p.task_id.as_str()).or_insert(0) += 1;
+    }
+
     let cfg = state.config.read();
     cfg.tasks
         .iter()
-        .map(|t| TaskView {
-            checkouts: cfg
-                .checkouts
-                .iter()
-                .filter(|c| c.task_id == t.id)
-                .cloned()
-                .map(|c| view_checkout(&state, c))
-                .collect(),
-            pane_count: state.ptys.list(Some(&t.id)).len(),
-            task: t.clone(),
+        .map(|t| {
+            // Selected task and anything with a live agent stay fresh. The rest
+            // reuse the cache so a poll is not N git-status processes forever.
+            let hot = focus.as_deref() == Some(t.id.as_str()) || running.contains(t.id.as_str());
+            TaskView {
+                checkouts: cfg
+                    .checkouts
+                    .iter()
+                    .filter(|c| c.task_id == t.id)
+                    .cloned()
+                    .map(|c| view_checkout_cached(&state, c, hot))
+                    .collect(),
+                pane_count: pane_counts.get(t.id.as_str()).copied().unwrap_or(0),
+                task: t.clone(),
+            }
         })
         .collect()
 }
@@ -222,6 +262,9 @@ pub(crate) fn create_checkout(
     task: &Task,
     project: &Project,
     taken: &mut Vec<String>,
+    // When set, every repo in the task is cut from this; otherwise each uses
+    // its own default branch. Empty strings are treated as unset.
+    base: Option<&str>,
 ) -> Result<Checkout> {
     let root = PathBuf::from(&task.root);
     let path = checkout_path(&root, project, taken);
@@ -231,11 +274,17 @@ pub(crate) fn create_checkout(
             .unwrap_or_default(),
     );
 
+    let base = base
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(project.default_branch.as_str())
+        .to_string();
+
     let base_commit = git::add_worktree(
         &PathBuf::from(&project.path),
         &path,
         &task.branch,
-        &project.default_branch,
+        &base,
     )?;
 
     let checkout = Checkout {
@@ -243,7 +292,7 @@ pub(crate) fn create_checkout(
         task_id: task.id.clone(),
         project_id: project.id.clone(),
         path: path.to_string_lossy().to_string(),
-        base: project.default_branch.clone(),
+        base,
         base_commit: Some(base_commit).filter(|c| !c.is_empty()),
     };
     state
@@ -263,6 +312,10 @@ pub struct NewTask {
     /// Appended to the ticket key: ACME-1234 becomes ACME-1234-some-feature.
     #[serde(default)]
     pub branch_suffix: Option<String>,
+    /// Branch every worktree is cut from. When omitted, each repository uses
+    /// its own default branch.
+    #[serde(default)]
+    pub base: Option<String>,
     #[serde(default)]
     pub issue_key: Option<String>,
     #[serde(default)]
@@ -310,10 +363,16 @@ pub(crate) fn new_task(state: &AppState, req: NewTask) -> Result<Task> {
     };
     state.config.update(|c| c.tasks.push(task.clone()))?;
 
+    let base = req
+        .base
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+
     let mut taken = Vec::new();
     let mut created = Vec::new();
     for project in &projects {
-        match create_checkout(state, &task, project, &mut taken) {
+        match create_checkout(state, &task, project, &mut taken, base) {
             Ok(c) => created.push(c),
             Err(e) => {
                 // Leave nothing half-built: unwind the worktrees we just made.
@@ -378,9 +437,9 @@ pub(crate) fn pane_output(state: &AppState, pane_id: &str, lines: usize) -> Resu
 ///
 /// A worktree appearing beside a running agent is invisible to it: nothing
 /// prompts it to look at its surroundings again, so it carries on believing
-/// the repo it needs is not there. The note goes into the pane's input, which
-/// is the one channel an agent is actually listening on — a CLI queues it and
-/// picks it up when the current turn ends.
+/// the repo it needs is not there. The note is typed into the pane and
+/// submitted — the one channel an agent is actually listening on. A CLI
+/// queues it and picks it up when the current turn ends.
 ///
 /// Returns how many were told, so the app can say so rather than doing it
 /// silently.
@@ -390,7 +449,7 @@ pub(crate) fn tell_agents(state: &AppState, task_id: &str, text: &str) -> usize 
         if pane.kind != PaneKind::Agent || !pane.running {
             continue;
         }
-        if state.ptys.write(&pane.id, text).is_ok() && state.ptys.write(&pane.id, "\r").is_ok() {
+        if state.ptys.submit(&pane.id, text).is_ok() {
             told += 1;
         }
     }
@@ -489,7 +548,13 @@ pub(crate) fn add_checkout_inner(
                 .map(|n| n.to_string_lossy().to_string())
         })
         .collect();
-    create_checkout(state, &task, &project, &mut taken)
+    // Match whatever the rest of the task was cut from when they agree; a
+    // later repo joining work aimed at `develop` should not silently land on
+    // `main` just because that is its own default.
+    let shared = existing.first().map(|c| c.base.as_str()).filter(|&b| {
+        existing.iter().all(|c| c.base == b)
+    });
+    create_checkout(state, &task, &project, &mut taken, shared)
 }
 
 #[tauri::command]
@@ -512,6 +577,7 @@ pub fn remove_checkout(state: State<AppState>, checkout_id: String, force: bool)
     state
         .config
         .update(|c| c.checkouts.retain(|ch| ch.id != checkout_id))?;
+    state.status_cache.lock().remove(&checkout_id);
 
     // The folder lost a sibling, so the description of it is now wrong.
     if let Ok(task) = state.config.task(&checkout.task_id) {
@@ -527,7 +593,23 @@ pub fn remove_checkout(state: State<AppState>, checkout_id: String, force: bool)
 /// ignoring that left the worktree on disk with no task pointing at it — an
 /// orphan the app could not see and the user had to clean up by hand.
 #[tauri::command]
-pub fn delete_task(state: State<AppState>, id: String, force: bool) -> Result<Vec<RepoResult>> {
+pub async fn delete_task(
+    app: AppHandle,
+    id: String,
+    force: bool,
+) -> Result<Vec<RepoResult>> {
+    // git worktree remove and waiting on agents both sleep. Running them on
+    // the command thread freezes every other invoke — including the ones that
+    // keep the window painting — so the UI looks crashed until they finish.
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        delete_task_inner(&state, id, force)
+    })
+    .await
+    .map_err(|e| Error::Other(format!("delete task failed: {e}")))?
+}
+
+fn delete_task_inner(state: &AppState, id: String, force: bool) -> Result<Vec<RepoResult>> {
     let task = state.config.task(&id)?;
     state.ptys.close_task(&id);
 
@@ -579,7 +661,7 @@ pub fn delete_task(state: State<AppState>, id: String, force: bool) -> Result<Ve
     // The app's own files go first, or the folder is never empty and lingers
     // as an orphan under the worktree root. Anything else in there is the
     // user's, so remove_dir refuses rather than taking it.
-    if let Some(dir) = agent_file_dir(&state, &task) {
+    if let Some(dir) = agent_file_dir(state, &task) {
         for name in GENERATED_FILES {
             let _ = std::fs::remove_file(dir.join(name));
         }
@@ -590,6 +672,10 @@ pub fn delete_task(state: State<AppState>, id: String, force: bool) -> Result<Ve
         c.tasks.retain(|t| t.id != id);
         c.checkouts.retain(|ch| ch.task_id != id);
     })?;
+    // Stale status for a deleted checkout would otherwise linger until TTL.
+    state.status_cache.lock().retain(|cid, _| {
+        !results.iter().any(|r| r.checkout_id == *cid)
+    });
     Ok(results)
 }
 

@@ -1,7 +1,9 @@
+import { useEffect, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { api } from "../../lib/api";
 import { useStore } from "../../store";
-import type { JiraIssue } from "../../lib/types";
-import { Modal } from "../ui";
+import type { JiraIssue, JiraTransition } from "../../lib/types";
+import { Field, Modal } from "../ui";
 import { IssueTypeIcon, type TypeMap } from "../IssueType";
 import { statusClass } from "./status";
 
@@ -11,14 +13,35 @@ export function ReadTicketDialog({
   hasTask,
   onClose,
   onStart,
+  onMoved,
 }: {
   issue: JiraIssue;
   types: TypeMap;
   hasTask: boolean;
   onClose: () => void;
   onStart: () => void;
+  onMoved: (toStatus: string) => void;
 }) {
   const fail = useStore((s) => s.fail);
+  const [transitions, setTransitions] = useState<JiraTransition[]>([]);
+  const [moving, setMoving] = useState(false);
+
+  useEffect(() => {
+    setTransitions([]);
+    api.jiraTransitions(issue.key).then(setTransitions).catch(() => setTransitions([]));
+  }, [issue.key]);
+
+  async function doTransition(t: JiraTransition) {
+    setMoving(true);
+    try {
+      await api.jiraTransition(issue.key, t.id);
+      onMoved(t.to_status);
+    } catch (e) {
+      fail(e);
+    } finally {
+      setMoving(false);
+    }
+  }
 
   return (
     <Modal
@@ -66,6 +89,26 @@ export function ReadTicketDialog({
         {issue.components.map((c) => <span key={c} className="chip">{c}</span>)}
         {issue.labels.map((l) => <span key={l} className="chip">{l}</span>)}
       </div>
+
+      {transitions.length > 0 && (
+        <Field
+          label="Move ticket"
+          hint="Whatever this workflow allows from the current status — including out of Review."
+        >
+          <div className="row" style={{ flexWrap: "wrap" }}>
+            {transitions.map((t) => (
+              <button
+                key={t.id}
+                className="btn btn-sm"
+                disabled={moving}
+                onClick={() => void doTransition(t)}
+              >
+                {t.name}
+              </button>
+            ))}
+          </div>
+        </Field>
+      )}
 
       {/*
         Jira's own markup is reduced to text on the way in, so it is shown

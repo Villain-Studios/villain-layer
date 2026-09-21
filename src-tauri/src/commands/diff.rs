@@ -21,12 +21,22 @@ pub struct ChangedFileView {
 }
 
 /// Every change across every repository in the task, tagged with its repo.
+///
+/// When `commit` is set, the list is that one commit's files in the checkout
+/// that contains it — the Diff view's commit picker — rather than a working
+/// tree comparison. `scope` is ignored in that case.
 #[tauri::command]
 pub fn diff_files(
     state: State<AppState>,
     task_id: String,
     scope: Option<git::Scope>,
+    commit: Option<String>,
+    checkout_id: Option<String>,
 ) -> Result<Vec<ChangedFileView>> {
+    if let (Some(sha), Some(checkout_id)) = (commit.as_deref(), checkout_id.as_deref()) {
+        return commit_files_view(&state, checkout_id, sha);
+    }
+
     let scope = scope.unwrap_or_default();
     let mut out = Vec::new();
     for checkout in state.config.checkouts_of(&task_id) {
@@ -54,21 +64,84 @@ pub fn diff_files(
     Ok(out)
 }
 
+fn commit_files_view(
+    state: &AppState,
+    checkout_id: &str,
+    sha: &str,
+) -> Result<Vec<ChangedFileView>> {
+    let checkout = state.config.checkout(checkout_id)?;
+    let dir = PathBuf::from(&checkout.path);
+    let repo = state
+        .config
+        .project(&checkout.project_id)
+        .map(|p| p.name)
+        .unwrap_or_else(|_| "(unknown)".into());
+    Ok(git::commit_files(&dir, sha)?
+        .into_iter()
+        .map(|file| ChangedFileView {
+            file,
+            checkout_id: checkout.id.clone(),
+            repo: repo.clone(),
+        })
+        .collect())
+}
+
 #[tauri::command]
 pub fn diff_file(
     state: State<AppState>,
     checkout_id: String,
     path: String,
     scope: Option<git::Scope>,
+    commit: Option<String>,
 ) -> Result<String> {
     let checkout = state.config.checkout(&checkout_id)?;
+    let dir = PathBuf::from(&checkout.path);
+    if let Some(sha) = commit.as_deref().filter(|s| !s.is_empty()) {
+        return git::commit_file_diff(&dir, sha, &path);
+    }
     git::file_diff(
-        &PathBuf::from(&checkout.path),
+        &dir,
         &checkout.base,
         checkout.base_commit.as_deref(),
         scope.unwrap_or_default(),
         &path,
     )
+}
+
+#[derive(Debug, Serialize)]
+pub struct RepoCommits {
+    pub checkout_id: String,
+    pub repo: String,
+    pub commits: Vec<git::CommitInfo>,
+}
+
+/// Commits on each checkout since its branch point, newest first.
+///
+/// Feeds the Diff view's commit picker. Empty repos are kept in the list so
+/// the UI can still name them; they just have nothing to pick.
+#[tauri::command]
+pub fn task_commits(state: State<AppState>, task_id: String) -> Result<Vec<RepoCommits>> {
+    let mut out = Vec::new();
+    for checkout in state.config.checkouts_of(&task_id) {
+        let dir = PathBuf::from(&checkout.path);
+        if !dir.is_dir() {
+            continue;
+        }
+        let repo = state
+            .config
+            .project(&checkout.project_id)
+            .map(|p| p.name)
+            .unwrap_or_else(|_| "(unknown)".into());
+        let commits =
+            git::commits_since(&dir, &checkout.base, checkout.base_commit.as_deref())
+                .unwrap_or_default();
+        out.push(RepoCommits {
+            checkout_id: checkout.id,
+            repo,
+            commits,
+        });
+    }
+    Ok(out)
 }
 
 #[derive(Debug, Deserialize)]
@@ -107,8 +180,7 @@ pub fn send_review(
         }
     }
 
-    state.ptys.write(&pane_id, &prompt)?;
-    state.ptys.write(&pane_id, "\r")?;
+    state.ptys.submit(&pane_id, &prompt)?;
     Ok(prompt)
 }
 

@@ -9,6 +9,7 @@ export function TicketCard({
   types,
   taskId,
   syncing,
+  focused,
   onOpen,
   onSelectTask,
   onSync,
@@ -19,6 +20,7 @@ export function TicketCard({
   types: TypeMap;
   taskId: string | null;
   syncing: boolean;
+  focused?: boolean;
   onOpen: () => void;
   onSelectTask: (taskId: string) => void;
   onSync: () => void;
@@ -29,8 +31,10 @@ export function TicketCard({
   const moving = issue.status_category === "indeterminate";
   return (
     <div
+      data-issue-key={issue.key}
       className={
         `ticket${taskId ? " started" : ""}` +
+        (focused ? " focused" : "") +
         (isEpicType(types, issue.issue_type) ? " is-epic" : "") +
         ` ${hierarchyClass(types, issue.issue_type)}`
       }

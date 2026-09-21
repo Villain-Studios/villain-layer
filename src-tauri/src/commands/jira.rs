@@ -479,6 +479,140 @@ struct DraftChunk<'a> {
     text: &'a str,
 }
 
+#[derive(Clone, Serialize)]
+struct IssueDraftChunk<'a> {
+    request_id: &'a str,
+    text: &'a str,
+}
+
+/// A cheap one-shot `claude -p` run: no tools, no MCP, streamed text deltas.
+///
+/// Shared by PR drafting and issue/epic description polish — both are
+/// summarising jobs that must not disturb a working agent session.
+fn oneshot_haiku(
+    program: impl AsRef<std::path::Path>,
+    cwd: impl AsRef<std::path::Path>,
+    prompt: &str,
+    mut on_delta: impl FnMut(&str),
+) -> Result<String> {
+    use std::io::{BufRead, BufReader, Write};
+    use std::process::{Command, Stdio};
+
+    let env = shellenv::user_env().clone();
+    let mut child = Command::new(program.as_ref())
+        .args([
+            "-p",
+            // Cheap and fast: this is a summarising job, not a reasoning one.
+            "--model",
+            "haiku",
+            // Connecting to MCP servers is the single largest part of a cold
+            // start, and this run needs none of them.
+            "--strict-mcp-config",
+            // Streamed, so the description appears as it is written rather
+            // than all at once at the end.
+            "--output-format",
+            "stream-json",
+            "--include-partial-messages",
+            "--verbose",
+            // Everything it needs is in the prompt. Without this it may go
+            // reading the repository and turn seconds into minutes.
+            "--disallowed-tools",
+            "Bash",
+            "Read",
+            "Edit",
+            "Write",
+            "Glob",
+            "Grep",
+            "WebFetch",
+            "WebSearch",
+        ])
+        .current_dir(cwd.as_ref())
+        .env_clear()
+        .envs(&env)
+        // Nothing here is worth thinking about first, and the thinking block
+        // is dead time the reader spends watching a spinner.
+        .env("MAX_THINKING_TOKENS", "0")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| Error::Other(format!("could not run claude: {e}")))?;
+
+    // Both pipes are pumped on their own threads. The prompt can be larger than
+    // a pipe buffer, so writing it inline would block before claude has said
+    // anything — and each side would then be waiting on the other.
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| Error::Other("claude took no input".into()))?;
+    let prompt = prompt.to_string();
+    std::thread::spawn(move || {
+        let _ = stdin.write_all(prompt.as_bytes());
+    });
+
+    let errors = child.stderr.take().map(|e| {
+        std::thread::spawn(move || {
+            let mut buf = String::new();
+            let _ = std::io::Read::read_to_string(&mut BufReader::new(e), &mut buf);
+            buf
+        })
+    });
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| Error::Other("claude produced no output".into()))?;
+
+    let mut streamed = String::new();
+    let mut result = None;
+    let mut reported = None;
+    for line in BufReader::new(stdout).lines().map_while(std::result::Result::ok) {
+        let Ok(v) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        match v.get("type").and_then(Value::as_str) {
+            Some("stream_event") => {
+                let delta = &v["event"]["delta"];
+                if delta.get("type").and_then(Value::as_str) != Some("text_delta") {
+                    continue;
+                }
+                if let Some(text) = delta.get("text").and_then(Value::as_str) {
+                    streamed.push_str(text);
+                    on_delta(text);
+                }
+            }
+            Some("result") => {
+                let text = v.get("result").and_then(Value::as_str).unwrap_or_default();
+                if v.get("is_error").and_then(Value::as_bool) == Some(true) {
+                    reported = Some(text.to_string());
+                } else {
+                    result = Some(text.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let status = child
+        .wait()
+        .map_err(|e| Error::Other(format!("claude did not finish: {e}")))?;
+    let stderr = errors.and_then(|h| h.join().ok()).unwrap_or_default();
+
+    if let Some(why) = reported {
+        return Err(Error::Other(format!("claude: {}", why.trim())));
+    }
+    if !status.success() {
+        let why = stderr.trim();
+        return Err(Error::Other(if why.is_empty() {
+            "claude could not draft the description".into()
+        } else {
+            format!("claude: {why}")
+        }));
+    }
+    // The final message is authoritative; the deltas are what was shown.
+    Ok(result.unwrap_or(streamed).trim().to_string())
+}
+
 /// Draft the pull request description without disturbing the working agent.
 ///
 /// The obvious implementation — type the request into the agent that did the
@@ -507,12 +641,7 @@ pub async fn draft_pr_description(
     // follow when that one changes its mind.
     let cwd = PathBuf::from(resolve_scope(&state, &task, None)?.0);
 
-    let env = shellenv::user_env().clone();
-    let out = tauri::async_runtime::spawn_blocking(move || -> Result<String> {
-        use std::io::{BufRead, BufReader, Write};
-        use std::process::{Command, Stdio};
-
-        let prompt = format!(
+    let prompt = format!(
         concat!(
             "Write the body of a pull request description for the work on branch ",
             "`{branch}`{key}.\n\n",
@@ -531,128 +660,101 @@ pub async fn draft_pr_description(
             .map(|k| format!(" for {k}"))
             .unwrap_or_default(),
         context = review_context(&repos),
-        );
+    );
 
-        let mut child = Command::new(&program)
-            .args([
-                "-p",
-                // Cheap and fast: this is a summarising job, not a reasoning one.
-                "--model",
-                "haiku",
-                // Connecting to MCP servers is the single largest part of a cold
-                // start, and this run needs none of them.
-                "--strict-mcp-config",
-                // Streamed, so the description appears as it is written rather
-                // than all at once at the end.
-                "--output-format",
-                "stream-json",
-                "--include-partial-messages",
-                "--verbose",
-                // Everything it needs is in the prompt. Without this it may go
-                // reading the repository and turn seconds into minutes.
-                "--disallowed-tools",
-                "Bash",
-                "Read",
-                "Edit",
-                "Write",
-                "Glob",
-                "Grep",
-                "WebFetch",
-                "WebSearch",
-            ])
-            .current_dir(&cwd)
-            .env_clear()
-            .envs(&env)
-            // Nothing here is worth thinking about first, and the thinking block
-            // is dead time the reader spends watching a spinner.
-            .env("MAX_THINKING_TOKENS", "0")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| Error::Other(format!("could not run claude: {e}")))?;
-
-        // Both pipes are pumped on their own threads. The prompt carries a whole
-        // diff, which is larger than a pipe buffer, so writing it inline would
-        // block before claude has said anything — and each side would then be
-        // waiting on the other.
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| Error::Other("claude took no input".into()))?;
-        std::thread::spawn(move || {
-            let _ = stdin.write_all(prompt.as_bytes());
-        });
-
-        let errors = child.stderr.take().map(|e| {
-            std::thread::spawn(move || {
-                let mut buf = String::new();
-                let _ = std::io::Read::read_to_string(&mut BufReader::new(e), &mut buf);
-                buf
-            })
-        });
-
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| Error::Other("claude produced no output".into()))?;
-
-        let mut streamed = String::new();
-        let mut result = None;
-        let mut reported = None;
-        for line in BufReader::new(stdout).lines().map_while(std::result::Result::ok) {
-            let Ok(v) = serde_json::from_str::<Value>(&line) else {
-                continue;
-            };
-            match v.get("type").and_then(Value::as_str) {
-                Some("stream_event") => {
-                    let delta = &v["event"]["delta"];
-                    if delta.get("type").and_then(Value::as_str) != Some("text_delta") {
-                        continue;
-                    }
-                    if let Some(text) = delta.get("text").and_then(Value::as_str) {
-                        streamed.push_str(text);
-                        let _ = app.emit(
-                            "pr:draft",
-                            DraftChunk { task_id: &task_id, text },
-                        );
-                    }
-                }
-                Some("result") => {
-                    let text = v.get("result").and_then(Value::as_str).unwrap_or_default();
-                    if v.get("is_error").and_then(Value::as_bool) == Some(true) {
-                        reported = Some(text.to_string());
-                    } else {
-                        result = Some(text.to_string());
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        let status = child
-            .wait()
-            .map_err(|e| Error::Other(format!("claude did not finish: {e}")))?;
-        let stderr = errors
-            .and_then(|h| h.join().ok())
-            .unwrap_or_default();
-
-        if let Some(why) = reported {
-            return Err(Error::Other(format!("claude: {}", why.trim())));
-        }
-        if !status.success() {
-            let why = stderr.trim();
-            return Err(Error::Other(if why.is_empty() {
-                "claude could not draft the description".into()
-            } else {
-                format!("claude: {why}")
-            }));
-        }
-        // The final message is authoritative; the deltas are what was shown.
-        Ok(result.unwrap_or(streamed).trim().to_string())
+    let out = tauri::async_runtime::spawn_blocking(move || -> Result<String> {
+        oneshot_haiku(&program, &cwd, &prompt, |text| {
+            let _ = app.emit("pr:draft", DraftChunk { task_id: &task_id, text });
+        })
     })
     .await
     .map_err(|e| Error::Other(format!("drafting was interrupted: {e}")))??;
+
+    if out.is_empty() {
+        return Err(Error::Other("claude returned an empty description".into()));
+    }
+    Ok(out)
+}
+
+/// Polish (or draft) a Jira issue/epic description from the summary and any
+/// draft the user already typed. Same one-shot path as PR drafting — no live
+/// agent, no tools — so it works from create dialogs that have no task yet.
+#[tauri::command]
+pub async fn optimize_issue_description(
+    app: AppHandle,
+    request_id: String,
+    summary: String,
+    description: String,
+    kind: String,
+) -> Result<String> {
+    let program = shellenv::which("claude")
+        .ok_or_else(|| Error::NotFound("claude is not on your PATH".into()))?;
+
+    let summary = summary.trim().to_string();
+    let description = description.trim().to_string();
+    if summary.is_empty() && description.is_empty() {
+        return Err(Error::Other(
+            "give a summary or a draft description to work from".into(),
+        ));
+    }
+
+    // "epic" vs anything else — names of issue types differ per site; the UI
+    // only needs the shape of the write-up to change.
+    let what = if kind.eq_ignore_ascii_case("epic") {
+        "Jira epic"
+    } else {
+        "Jira ticket"
+    };
+
+    let prompt = if description.is_empty() {
+        format!(
+            concat!(
+                "Write the description body for a {what} with this summary:\n\n",
+                "{summary}\n\n",
+                "It will be read by engineers and by coding agents that pick the work up. ",
+                "Cover scope, intended outcome, and how someone would know it is done. ",
+                "Keep it short — a few short paragraphs or bullets, not a spec. ",
+                "Reply with the description and nothing else: no preamble, no closing ",
+                "remark, no code fence around the whole thing.\n",
+            ),
+            what = what,
+            summary = summary,
+        )
+    } else {
+        format!(
+            concat!(
+                "Improve this {what} description so it is clearer for engineers and ",
+                "coding agents that will pick the work up. Keep the author's intent; ",
+                "tighten wording, fill obvious gaps (scope, outcome, done-when), and ",
+                "cut fluff. Do not invent requirements that are not implied.\n\n",
+                "Summary: {summary}\n\n",
+                "Current description:\n{description}\n\n",
+                "Reply with the improved description and nothing else: no preamble, ",
+                "no closing remark, no code fence around the whole thing.\n",
+            ),
+            what = what,
+            summary = if summary.is_empty() { "(none)" } else { &summary },
+            description = description,
+        )
+    };
+
+    // Home, not `/`: a GUI app's cwd is the filesystem root, and we still want
+    // claude to start somewhere that will not trigger macOS permission prompts.
+    let cwd = std::env::home_dir().unwrap_or_else(std::env::temp_dir);
+
+    let out = tauri::async_runtime::spawn_blocking(move || -> Result<String> {
+        oneshot_haiku(&program, &cwd, &prompt, |text| {
+            let _ = app.emit(
+                "issue:draft",
+                IssueDraftChunk {
+                    request_id: &request_id,
+                    text,
+                },
+            );
+        })
+    })
+    .await
+    .map_err(|e| Error::Other(format!("optimising was interrupted: {e}")))??;
 
     if out.is_empty() {
         return Err(Error::Other("claude returned an empty description".into()));
@@ -704,8 +806,7 @@ pub fn request_pr_description(
         path.display(),
     );
 
-    state.ptys.write(&pane_id, &prompt)?;
-    state.ptys.write(&pane_id, "\r")?;
+    state.ptys.submit(&pane_id, &prompt)?;
     Ok(path.to_string_lossy().to_string())
 }
 
@@ -925,6 +1026,9 @@ pub struct NewJiraTask {
     pub project_ids: Vec<String>,
     #[serde(default)]
     pub branch_suffix: Option<String>,
+    /// Branch every worktree is cut from; each repo's default when omitted.
+    #[serde(default)]
+    pub base: Option<String>,
     #[serde(default)]
     pub fields: Option<Value>,
 }
@@ -978,6 +1082,7 @@ pub async fn jira_create_task(state: State<'_, AppState>, req: NewJiraTask) -> R
             project_ids: req.project_ids,
             branch: None,
             branch_suffix: req.branch_suffix,
+            base: req.base,
             issue_key: Some(key.clone()),
             issue_url: Some(url),
             epic_key: req.parent_key.clone(),
@@ -1045,6 +1150,7 @@ pub async fn jira_start_work(
     project_ids: Vec<String>,
     agent_id: Option<String>,
     branch_suffix: Option<String>,
+    base: Option<String>,
 ) -> Result<Started> {
     // A second task for the same ticket would try to check the same branch out
     // twice and fail deep inside git. Unless a suffix asks for a distinct
@@ -1075,6 +1181,7 @@ pub async fn jira_start_work(
             project_ids,
             branch: None,
             branch_suffix,
+            base,
             issue_key: Some(issue.key.clone()),
             issue_url: Some(issue.url.clone()),
             epic_key: issue.epic_key.clone(),

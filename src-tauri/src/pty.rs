@@ -4,7 +4,9 @@
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use base64::Engine;
 use chrono::{DateTime, Utc};
@@ -18,6 +20,14 @@ use crate::shellenv;
 
 /// Roughly one screenful of history per pane, replayed when React remounts it.
 const SCROLLBACK_LIMIT: usize = 256 * 1024;
+
+/// How long to hold PTY bytes before shipping them to the webview.
+///
+/// Agent TUIs redraw constantly. Emitting every read as its own event floods
+/// the UI thread — and while the window sits in the background those events
+/// queue until focus returns, which is why the app feels dead for a second
+/// after being idle. One frame of delay is invisible; the catch-up is not.
+const OUTPUT_COALESCE: Duration = Duration::from_millis(33);
 
 /// Phrases a CLI prints when it is waiting on the user rather than working.
 ///
@@ -152,6 +162,15 @@ struct Pane {
     writer: Mutex<Box<dyn Write + Send>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     scrollback: Mutex<Vec<u8>>,
+    /// Bytes waiting to cross to the webview, coalesced so a TUI redraw is
+    /// one event instead of dozens.
+    pending: Mutex<Vec<u8>>,
+    flush_scheduled: AtomicBool,
+    /// Shared with the manager: when false, output stays in scrollback only.
+    ui_awake: Arc<AtomicBool>,
+    /// Last time we scanned scrollback for trust/limit phrases. Throttled while
+    /// the UI sleeps so a background agent is not a constant UTF-8 walk.
+    notice_scan_at: Mutex<Instant>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -185,9 +204,20 @@ pub struct SpawnOptions {
 /// instead of the machine.
 pub(crate) const MAX_PANES: usize = 32;
 
-#[derive(Default)]
 pub struct PtyManager {
     panes: Mutex<HashMap<String, Arc<Pane>>>,
+    /// False while the window is in the background. Agents keep running and
+    /// scrollback keeps filling; the webview is not fed until focus returns.
+    ui_awake: Arc<AtomicBool>,
+}
+
+impl Default for PtyManager {
+    fn default() -> Self {
+        Self {
+            panes: Mutex::new(HashMap::new()),
+            ui_awake: Arc::new(AtomicBool::new(true)),
+        }
+    }
 }
 
 #[derive(Serialize, Clone)]
@@ -209,6 +239,96 @@ struct ExitEvent<'a> {
 }
 
 impl PtyManager {
+    /// Tell the PTY layer whether anyone is looking.
+    ///
+    /// Agents never stop. What stops is shipping their redraws across to a
+    /// webview that is not on screen — those events queue up and make coming
+    /// back feel like a hitch. Scrollback still records everything; the UI
+    /// replays it on focus.
+    pub fn set_ui_awake(&self, awake: bool) {
+        self.ui_awake.store(awake, Ordering::Release);
+        if !awake {
+            for pane in self.panes.lock().values() {
+                pane.pending.lock().clear();
+            }
+        }
+    }
+
+    /// Queue a UI flush if one is not already waiting.
+    ///
+    /// The reader keeps appending under `pending`; this just starts the timer
+    /// that will drain it. Doing the drain on a short sleep means a burst of
+    /// TUI redraws becomes one event instead of one per read.
+    fn schedule_flush(app: &AppHandle, pane: &Arc<Pane>, id: &str) {
+        if !pane.ui_awake.load(Ordering::Acquire) {
+            return;
+        }
+        if pane
+            .flush_scheduled
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+        let app = app.clone();
+        let pane = pane.clone();
+        let id = id.to_string();
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(OUTPUT_COALESCE);
+                if !pane.ui_awake.load(Ordering::Acquire) {
+                    pane.pending.lock().clear();
+                    pane.flush_scheduled.store(false, Ordering::Release);
+                    break;
+                }
+                let batch = {
+                    let mut pending = pane.pending.lock();
+                    std::mem::take(&mut *pending)
+                };
+                if batch.is_empty() {
+                    pane.flush_scheduled.store(false, Ordering::Release);
+                    // A write may have landed between the take and the clear.
+                    // Re-arm rather than drop those bytes until the next read.
+                    if !pane.pending.lock().is_empty()
+                        && pane
+                            .flush_scheduled
+                            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                            .is_ok()
+                    {
+                        continue;
+                    }
+                    break;
+                }
+                let data = base64::engine::general_purpose::STANDARD.encode(&batch);
+                let _ = app.emit(
+                    "pty:output",
+                    OutputEvent {
+                        pane_id: &id,
+                        data,
+                    },
+                );
+            }
+        });
+    }
+
+    fn flush_pending(app: &AppHandle, pane: &Pane, id: &str) {
+        let batch = {
+            let mut pending = pane.pending.lock();
+            std::mem::take(&mut *pending)
+        };
+        if batch.is_empty() {
+            return;
+        }
+        let data = base64::engine::general_purpose::STANDARD.encode(&batch);
+        let _ = app.emit(
+            "pty:output",
+            OutputEvent {
+                pane_id: id,
+                data,
+            },
+        );
+    }
+
     pub fn spawn(&self, app: &AppHandle, opts: SpawnOptions) -> Result<PaneInfo> {
         // Checked before anything is allocated, so refusing costs nothing.
         let live = self.panes.lock().len();
@@ -287,6 +407,10 @@ impl PtyManager {
             writer: Mutex::new(writer),
             killer: Mutex::new(killer),
             scrollback: Mutex::new(Vec::new()),
+            pending: Mutex::new(Vec::new()),
+            flush_scheduled: AtomicBool::new(false),
+            ui_awake: self.ui_awake.clone(),
+            notice_scan_at: Mutex::new(Instant::now()),
         });
 
         self.panes.lock().insert(id.clone(), pane.clone());
@@ -316,8 +440,21 @@ impl PtyManager {
                                 let mut meta = pane.meta.lock();
                                 meta.info.last_output_at = Utc::now();
                                 // Check the tail rather than this chunk: the
-                                // phrase can straddle a read boundary.
-                                {
+                                // phrase can straddle a read boundary. While
+                                // the window is asleep this is throttled — a
+                                // TUI redrawing 60 times a second should not
+                                // mean 60 UTF-8 walks of the scrollback.
+                                let awake = pane.ui_awake.load(Ordering::Acquire);
+                                let scan = awake || {
+                                    let mut at = pane.notice_scan_at.lock();
+                                    if at.elapsed() >= Duration::from_millis(750) {
+                                        *at = Instant::now();
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                };
+                                if scan {
                                     let sb = pane.scrollback.lock();
                                     let tail = String::from_utf8_lossy(
                                         &sb[sb.len().saturating_sub(4096)..],
@@ -347,17 +484,18 @@ impl PtyManager {
                                     }
                                 }
                             }
-                            let data = base64::engine::general_purpose::STANDARD.encode(chunk);
-                            let _ = app.emit(
-                                "pty:output",
-                                OutputEvent {
-                                    pane_id: &id,
-                                    data,
-                                },
-                            );
+                            // Scrollback always records. The webview only gets
+                            // a feed while someone is looking — otherwise the
+                            // IPC queue builds up until focus returns.
+                            if pane.ui_awake.load(Ordering::Acquire) {
+                                pane.pending.lock().extend_from_slice(chunk);
+                                Self::schedule_flush(&app, &pane, &id);
+                            }
                         }
                     }
                 }
+                // Drain anything still held so the last paint is not lost.
+                Self::flush_pending(&app, &pane, &id);
             });
         }
 
@@ -406,6 +544,31 @@ impl PtyManager {
         w.write_all(data.as_bytes())
             .map_err(|e| Error::Pty(format!("write: {e}")))?;
         w.flush().map_err(|e| Error::Pty(format!("flush: {e}")))?;
+        Ok(())
+    }
+
+    /// Type `text` into a pane and press Enter.
+    ///
+    /// Agent TUIs (Claude Code in particular) often leave the line sitting in
+    /// the prompt when the characters and Enter arrive in one burst — the text
+    /// shows up, but nothing is submitted until someone presses Enter again.
+    /// A short gap between the two is enough for the TUI to accept the submit.
+    pub fn submit(&self, id: &str, text: &str) -> Result<()> {
+        let pane = self.get(id)?;
+        let payload = text.to_string();
+        std::thread::spawn(move || {
+            {
+                let mut w = pane.writer.lock();
+                let _ = w.write_all(payload.as_bytes());
+                let _ = w.flush();
+            }
+            std::thread::sleep(std::time::Duration::from_millis(80));
+            {
+                let mut w = pane.writer.lock();
+                let _ = w.write_all(b"\r");
+                let _ = w.flush();
+            }
+        });
         Ok(())
     }
 
@@ -542,15 +705,34 @@ impl PtyManager {
     }
 
     fn close_matching(&self, pred: impl Fn(&PaneInfo) -> bool) {
-        let ids: Vec<String> = self
-            .panes
-            .lock()
-            .iter()
-            .filter(|(_, p)| pred(&p.meta.lock().info))
-            .map(|(id, _)| id.clone())
-            .collect();
-        for id in ids {
-            let _ = self.close(&id);
+        // Signal every match first and wait once — stopping them one by one
+        // with a five-second grace each is how deleting a task with three
+        // agents froze the UI for fifteen seconds.
+        let panes: Vec<Arc<Pane>> = {
+            let mut map = self.panes.lock();
+            let ids: Vec<String> = map
+                .iter()
+                .filter(|(_, p)| pred(&p.meta.lock().info))
+                .map(|(id, _)| id.clone())
+                .collect();
+            ids.into_iter().filter_map(|id| map.remove(&id)).collect()
+        };
+        if panes.is_empty() {
+            return;
+        }
+        for pane in &panes {
+            if pane.meta.lock().info.running {
+                Self::request_stop(pane);
+            }
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        for pane in &panes {
+            Self::wait_for_exit(pane, deadline);
+        }
+        for pane in &panes {
+            if pane.meta.lock().info.running {
+                let _ = pane.killer.lock().kill();
+            }
         }
     }
 }

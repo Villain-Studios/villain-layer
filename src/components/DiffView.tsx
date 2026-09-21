@@ -3,7 +3,7 @@ import { api } from "../lib/api";
 import { reportRepoResults } from "../lib/report";
 import { useStore } from "../store";
 import type {
-  ChangedFile, DiffScope, RepoBranchFacts, ReviewComment, TaskView,
+  ChangedFile, CommitInfo, DiffScope, RepoBranchFacts, RepoCommits, ReviewComment, TaskView,
 } from "../lib/types";
 import { Field, Modal } from "./ui";
 import { read, write } from "../lib/persist";
@@ -177,14 +177,35 @@ export function DiffView({ task }: { task: TaskView }) {
   // and equally real question, and only worth asking when the branch was cut
   // for this work — which is not true of every worktree.
   const [scope, setScope] = useState<DiffScope>(() => read("diffScope", "uncommitted"));
+  // A single commit on the branch, when set. Cleared on Uncommitted — that
+  // view is about the working tree, not history.
+  const [pin, setPin] = useState<{ checkoutId: string; sha: string } | null>(null);
+  const [repoCommits, setRepoCommits] = useState<RepoCommits[]>([]);
 
   const multi = task.checkouts.length > 1;
   const current = files.find((f) => fileKey(f) === selected) ?? null;
   const [facts, setFacts] = useState<RepoBranchFacts[]>([]);
 
+  // Flat list for the picker, newest first within each repo. Multi-repo rows
+  // are prefixed so two identical subjects stay distinguishable.
+  const commitOptions = useMemo(() => {
+    const rows: { checkoutId: string; repo: string; commit: CommitInfo }[] = [];
+    for (const r of repoCommits) {
+      for (const c of r.commits) {
+        rows.push({ checkoutId: r.checkout_id, repo: r.repo, commit: c });
+      }
+    }
+    return rows;
+  }, [repoCommits]);
+
+  const pinIndex = pin
+    ? commitOptions.findIndex((r) => r.checkoutId === pin.checkoutId && r.commit.sha === pin.sha)
+    : -1;
+  const pinned = pinIndex >= 0 ? commitOptions[pinIndex] : null;
+
   async function load() {
     try {
-      const list = await api.diffFiles(task.id, scope);
+      const list = await api.diffFiles(task.id, scope, pin);
       setFiles(list);
       setSelected((cur) =>
         cur && list.some((f) => fileKey(f) === cur) ? cur : (list[0] ? fileKey(list[0]) : null),
@@ -196,9 +217,21 @@ export function DiffView({ task }: { task: TaskView }) {
 
   // Reloaded when the task's own count of changed files moves, which the
   // sidebar polls every few seconds: an agent that just saved a file should
-  // show up here without a hand on the Refresh button.
+  // show up here without a hand on the Refresh button. A pinned commit is
+  // history, so a working-tree save does not change it — but Refresh still
+  // does, and so does switching pin/scope.
   const changedCount = task.checkouts.reduce((n, c) => n + c.changed, 0);
-  useEffect(() => { void load(); /* eslint-disable-next-line */ }, [task.id, scope, changedCount]);
+  useEffect(() => { void load(); /* eslint-disable-next-line */ }, [task.id, scope, pin, changedCount]);
+
+  // Commit list for the picker. Refreshed with the file list so a new commit
+  // from Commit… shows up without leaving the tab.
+  useEffect(() => {
+    if (scope !== "branch") {
+      setRepoCommits([]);
+      return;
+    }
+    api.taskCommits(task.id).then(setRepoCommits).catch(() => setRepoCommits([]));
+  }, [task.id, scope, changedCount, files.length]);
 
   // What the numbers are measured against. Asked of git rather than worked out
   // from the file list, and reloaded with it so the two always agree.
@@ -211,8 +244,47 @@ export function DiffView({ task }: { task: TaskView }) {
   // numbers in the list beside a diff that has not moved.
   useEffect(() => {
     if (!current) { setPatch(""); return; }
-    api.diffFile(current.checkout_id, current.path, scope).then(setPatch).catch(fail);
-  }, [current?.checkout_id, current?.path, scope, fail, files]);
+    api.diffFile(current.checkout_id, current.path, scope, pin?.sha ?? null)
+      .then(setPatch)
+      .catch(fail);
+  }, [current?.checkout_id, current?.path, scope, pin?.sha, fail, files]);
+
+  function pickScope(next: DiffScope) {
+    setScope(next);
+    write("diffScope", next);
+    if (next === "uncommitted") setPin(null);
+  }
+
+  function pickCommit(value: string) {
+    if (!value) {
+      setPin(null);
+      return;
+    }
+    const colon = value.indexOf(":");
+    if (colon <= 0) return;
+    const checkoutId = value.slice(0, colon);
+    const sha = value.slice(colon + 1);
+    if (!checkoutId || !sha) return;
+    setPin({ checkoutId, sha });
+    if (scope !== "branch") {
+      setScope("branch");
+      write("diffScope", "branch");
+    }
+  }
+
+  function stepCommit(delta: number) {
+    // Newest first: +1 walks older, −1 walks newer (and off the end clears the pin).
+    if (commitOptions.length === 0) return;
+    const at = pinIndex < 0 ? (delta > 0 ? -1 : 0) : pinIndex;
+    const next = at + delta;
+    if (next < 0) {
+      setPin(null);
+      return;
+    }
+    if (next >= commitOptions.length) return;
+    const row = commitOptions[next];
+    setPin({ checkoutId: row.checkoutId, sha: row.commit.sha });
+  }
 
   useEffect(() => {
     if (!target || !agentPanes.some((p) => p.id === target)) {
@@ -252,7 +324,9 @@ export function DiffView({ task }: { task: TaskView }) {
   /// A tree row per node: folders fold away, files select.
   function renderNodes(nodes: Node[], depth: number) {
     return nodes.map((node) => {
-      const pad = { paddingLeft: 6 + depth * 11 };
+      // Depth indent only — the chevron column is reserved on every row so a
+      // file under a folder lines up with the folder's name, not its triangle.
+      const pad = { paddingLeft: 4 + depth * 14 };
       if (!node.file) {
         const closed = shut[node.path] ?? false;
         return (
@@ -278,6 +352,7 @@ export function DiffView({ task }: { task: TaskView }) {
           onClick={() => setSelected(fileKey(f))}
           title={`${f.repo}/${f.path}`}
         >
+          <span className="chev-spacer" aria-hidden />
           <span className="p">{node.name}</span>
           <span className="n" style={{ color: "var(--green)" }}>+{f.additions}</span>
           <span className="n" style={{ color: "var(--red)" }}>-{f.deletions}</span>
@@ -393,6 +468,18 @@ export function DiffView({ task }: { task: TaskView }) {
       return {
         what: "against the last commit — written, but not committed yet",
         detail: "This is what `git status` shows: the working tree, including untracked files.",
+        label: "Uncommitted",
+        adds,
+        dels,
+      };
+    }
+
+    if (pinned) {
+      const where = multi ? `${pinned.repo} · ` : "";
+      return {
+        what: `${where}${pinned.commit.short} — ${pinned.commit.subject}`,
+        detail: "Files changed in this one commit. Use the arrows or the menu to move through the branch.",
+        label: "Commit",
         adds,
         dels,
       };
@@ -422,6 +509,7 @@ export function DiffView({ task }: { task: TaskView }) {
             one ? "this worktree" : `${guessed.length} of these repositories`
           }, so the comparison falls back to the merge base — commits merged in from elsewhere are counted here too.`
         : "Measured from the commit this worktree was created at, so a moving base branch cannot inflate it.",
+      label: "Whole branch",
       adds,
       dels,
     };
@@ -429,7 +517,7 @@ export function DiffView({ task }: { task: TaskView }) {
 
   const summaryBar = (
     <div className="diff-summary" title={summary.detail}>
-      <b>{scope === "uncommitted" ? "Uncommitted" : "Whole branch"}</b>
+      <b>{summary.label}</b>
       <span style={{ color: "var(--dim)" }}>{summary.what}</span>
       <div className="spacer" />
       <span style={{ color: "var(--dim)" }}>
@@ -451,7 +539,7 @@ export function DiffView({ task }: { task: TaskView }) {
               ? "Everything not yet committed — what git status shows"
               : "Everything since this worktree was created, committed or not"
           }
-          onClick={() => { setScope(v); write("diffScope", v); }}
+          onClick={() => pickScope(v)}
         >
           {v === "uncommitted" ? "Uncommitted" : "Whole branch"}
         </button>
@@ -459,17 +547,61 @@ export function DiffView({ task }: { task: TaskView }) {
     </div>
   );
 
+  const commitPicker = scope === "branch" && commitOptions.length > 0 ? (
+    <div className="diff-commit-picker" title="Show the files changed in one commit">
+      <button
+        className="btn btn-sm"
+        disabled={pinIndex >= commitOptions.length - 1}
+        onClick={() => stepCommit(1)}
+        title="Older commit"
+      >
+        ‹
+      </button>
+      <select
+        value={pin ? `${pin.checkoutId}:${pin.sha}` : ""}
+        onChange={(e) => pickCommit(e.target.value)}
+      >
+        <option value="">All since branch point</option>
+        {commitOptions.map((r) => (
+          <option
+            key={`${r.checkoutId}:${r.commit.sha}`}
+            value={`${r.checkoutId}:${r.commit.sha}`}
+          >
+            {multi ? `${r.repo} · ` : ""}
+            {r.commit.short} — {r.commit.subject}
+          </option>
+        ))}
+      </select>
+      <button
+        className="btn btn-sm"
+        disabled={pinIndex < 0}
+        onClick={() => stepCommit(-1)}
+        title="Newer commit"
+      >
+        ›
+      </button>
+    </div>
+  ) : null;
+
   if (files.length === 0) {
     const where = multi ? "any of the task's repos" : "this worktree";
     return (
       <>
         {summaryBar}
         <div className="empty">
-          <h2>{scope === "uncommitted" ? "Nothing uncommitted" : "No changes yet"}</h2>
+          <h2>
+            {pin
+              ? "Nothing in this commit"
+              : scope === "uncommitted"
+                ? "Nothing uncommitted"
+                : "No changes yet"}
+          </h2>
           <p>
-            {scope === "uncommitted"
-              ? `The working tree is clean in ${where}. Switch to Whole branch to see what has been committed.`
-              : `Nothing differs from where this branch started in ${where}. Once an agent edits files they show up here.`}
+            {pin
+              ? "That commit did not touch any files (or they are no longer in this worktree)."
+              : scope === "uncommitted"
+                ? `The working tree is clean in ${where}. Switch to Whole branch to see what has been committed.`
+                : `Nothing differs from where this branch started in ${where}. Once an agent edits files they show up here.`}
           </p>
           <button className="btn" onClick={() => void load()}>Refresh</button>
         </div>
@@ -477,6 +609,7 @@ export function DiffView({ task }: { task: TaskView }) {
           <div className="review-tray-group" title="What the list is measuring">
             {scopeTabs}
           </div>
+          {commitPicker}
         </div>
       </>
     );
@@ -622,6 +755,7 @@ export function DiffView({ task }: { task: TaskView }) {
         <div className="review-tray-group" title="What the list is measuring">
           {scopeTabs}
         </div>
+        {commitPicker}
         <span className="review-tray-hint">
           {drafts.length === 0
             ? "Click a line number to leave a note"

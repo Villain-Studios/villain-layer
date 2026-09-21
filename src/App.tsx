@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api } from "./lib/api";
 import { CHAT_TASK_ID, selectedTask, taskTotals, useStore, type View } from "./store";
@@ -35,6 +36,7 @@ export default function App() {
   const refreshPanes = useStore((s) => s.refreshPanes);
   const refreshPrs = useStore((s) => s.refreshPrs);
   const refreshTasks = useStore((s) => s.refreshTasks);
+  const setAppActive = useStore((s) => s.setAppActive);
   const dismissToast = useStore((s) => s.dismissToast);
   const toast = useStore((s) => s.toast);
   const fail = useStore((s) => s.fail);
@@ -47,29 +49,118 @@ export default function App() {
 
   useEffect(() => { void refreshAll().catch(fail); }, [refreshAll, fail]);
 
-  // Worktree status is cheap to poll and keeps the sidebar honest.
+  // Polls only while the window is in front, and slow down further when the
+  // window is focused but nobody has touched it — leaving an 8s full-repo
+  // sweep running forever is what made "just leave it open" feel busy.
   useEffect(() => {
-    const t = setInterval(() => void refreshTasks().catch(() => {}), 8000);
-    return () => clearInterval(t);
-  }, [refreshTasks]);
+    let tasksT: ReturnType<typeof setInterval> | undefined;
+    let panesT: ReturnType<typeof setInterval> | undefined;
+    let prsT: ReturnType<typeof setInterval> | undefined;
+    let idleT: ReturnType<typeof setInterval> | undefined;
+    let unFocus: (() => void) | undefined;
+    let alive = true;
+    let quiet = false;
+    let lastInput = Date.now();
+    // Tauri emits an unfocused event while the window is still coming up.
+    // Honouring it paused polls and kicked a catch-up list_tasks that raced
+    // the boot refresh — two full git-status sweeps on every launch.
+    const bootedAt = Date.now();
+    const BOOT_GRACE_MS = 2500;
+    const QUIET_AFTER_MS = 45_000;
 
-  // Pane activity drives the idle indicators everywhere, so keep it fresh.
-  useEffect(() => {
-    const t = setInterval(() => void refreshPanes().catch(() => {}), 3000);
-    return () => clearInterval(t);
-  }, [refreshPanes]);
+    const clear = () => {
+      if (tasksT !== undefined) clearInterval(tasksT);
+      if (panesT !== undefined) clearInterval(panesT);
+      if (prsT !== undefined) clearInterval(prsT);
+      tasksT = panesT = prsT = undefined;
+    };
 
-  // GitHub is polled slowly and deliberately: nothing here changes in seconds,
-  // the API is rate limited, and one sweep costs a call per repository plus
-  // three more for every repository that has a PR open.
-  // Keyed on the connection too: settings arrive after the first render, and
-  // a sweep that ran before them would find GitHub unconfigured and give up
-  // until the next tick a minute and a half later.
-  useEffect(() => {
-    void refreshPrs();
-    const t = setInterval(() => void refreshPrs(), 90_000);
-    return () => clearInterval(t);
-  }, [refreshPrs, settings?.github_connected]);
+    const arm = () => {
+      clear();
+      const onWork = useStore.getState().view === "work";
+      // Off the Work view the sidebar is not on screen — there is no reason to
+      // git-status every few seconds. Quiet stretches stretch further still.
+      const tasksMs = !onWork ? 60_000 : quiet ? 30_000 : 12_000;
+      const panesMs = quiet ? 15_000 : 5_000;
+      tasksT = setInterval(() => void refreshTasks({ poll: true }).catch(() => {}), tasksMs);
+      panesT = setInterval(() => void refreshPanes({ poll: true }).catch(() => {}), panesMs);
+      if (useStore.getState().settings?.github_connected) {
+        prsT = setInterval(() => void refreshPrs(), quiet ? 180_000 : 90_000);
+      }
+    };
+
+    const setActive = (active: boolean) => {
+      if (!alive) return;
+      if (!active && Date.now() - bootedAt < BOOT_GRACE_MS) return;
+      const was = useStore.getState().appActive;
+      setAppActive(active);
+      if (active) {
+        if (!was) {
+          quiet = false;
+          lastInput = Date.now();
+          void refreshTasks({ poll: true }).catch(() => {});
+          void refreshPanes({ poll: true }).catch(() => {});
+        }
+        arm();
+      } else {
+        clear();
+      }
+    };
+
+    const onInput = () => {
+      lastInput = Date.now();
+      if (quiet && useStore.getState().appActive) {
+        quiet = false;
+        arm();
+      }
+    };
+
+    if (useStore.getState().appActive) arm();
+
+    void getCurrentWindow()
+      .onFocusChanged(({ payload: focused }) => setActive(focused))
+      .then((un) => { if (alive) unFocus = un; else un(); });
+
+    // Minimize/restore: focus alone does not cover every path on macOS.
+    const onVis = () => {
+      if (document.visibilityState === "hidden") setActive(false);
+      else void getCurrentWindow().isFocused().then((f) => setActive(f)).catch(() => setActive(true));
+    };
+    // App switch: visibilitychange often does not fire on macOS; blur/focus does.
+    const onBlur = () => setActive(false);
+    const onFocus = () => setActive(true);
+
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("blur", onBlur);
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("pointerdown", onInput);
+    window.addEventListener("keydown", onInput);
+
+    idleT = setInterval(() => {
+      if (!useStore.getState().appActive || quiet) return;
+      if (Date.now() - lastInput < QUIET_AFTER_MS) return;
+      quiet = true;
+      arm();
+    }, 5_000);
+
+    return () => {
+      alive = false;
+      clear();
+      if (idleT !== undefined) clearInterval(idleT);
+      unFocus?.();
+      document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("blur", onBlur);
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("pointerdown", onInput);
+      window.removeEventListener("keydown", onInput);
+    };
+  }, [refreshTasks, refreshPanes, refreshPrs, setAppActive, settings?.github_connected, view]);
+
+  // One sweep as soon as GitHub is available; the timer above takes it from
+  // there. Kept out of the polling effect on purpose: that one re-runs on
+  // every change of view, and a sweep per tab switch is four calls per open
+  // pull request each time the Tickets tab is glanced at.
+  useEffect(() => { void refreshPrs(); }, [refreshPrs, settings?.github_connected]);
 
   // An agent exiting is the moment worth telling someone about.
   useEffect(() => {
@@ -177,30 +268,41 @@ export default function App() {
 
       for (const row of rows) {
         if (!row.pr) continue;
-        const key = `${taskId}:${row.checkout_id}`;
+        // The PR number is part of the key: a branch retried after a closed
+        // attempt gets a new PR, and comparing it against the old one's
+        // comment count would announce comments that were never written.
+        const key = `${taskId}:${row.checkout_id}:${row.pr.number}`;
         const now = {
           verdict: row.verdict,
           comments: row.pr.comments + row.pr.review_comments,
           merged: row.pr.merged,
         };
         const was = seen.get(key);
-        // A reviews or detail call that failed comes back as verdict "none"
-        // and merged=false. Losing what was known is not news, and recording
-        // it would make the next sweep that succeeds announce a week-old
-        // approval as though it had just landed.
-        const degraded =
-          was && ((now.verdict === "none" && was.verdict !== "none") || (was.merged && !now.merged));
+        const pr = `${row.repo} #${row.pr.number}`;
+
+        // Closed is final, and the sweep stops asking about its reviews once
+        // it is — so it has to be settled before the "lost what was known"
+        // check below, or the one closing worth a word would be the one
+        // swallowed. Merged is only news when it was seen open here first.
+        if (row.pr.state !== "open") {
+          if (was && now.merged && !was.merged) toast("success", `${pr} merged — ${where}`);
+          seen.set(key, now);
+          continue;
+        }
+
+        // A reviews or detail call that failed comes back as verdict "none".
+        // Losing what was known is not news, and recording it would make the
+        // next sweep that succeeds announce a week-old approval as though it
+        // had just landed.
+        const degraded = was && now.verdict === "none" && was.verdict !== "none";
         if (!degraded) seen.set(key, now);
         if (!was || degraded) continue;
 
-        const pr = `${row.repo} #${row.pr.number}`;
         const by = [...row.reviews]
           .reverse()
           .find((r) => r.state === "APPROVED" || r.state === "CHANGES_REQUESTED")?.author;
 
-        if (now.merged && !was.merged) {
-          toast("success", `${pr} merged — ${where}`);
-        } else if (now.verdict !== was.verdict && now.verdict === "approved") {
+        if (now.verdict !== was.verdict && now.verdict === "approved") {
           toast("success", `${pr} approved${by ? ` by ${by}` : ""} — ${where}`);
         } else if (now.verdict !== was.verdict && now.verdict === "changes_requested") {
           toast("error", `${pr}: changes requested${by ? ` by ${by}` : ""} — ${where}`);

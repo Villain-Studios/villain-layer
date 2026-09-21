@@ -64,50 +64,55 @@ pub(crate) fn issue_project(issue_key: Option<&str>) -> String {
 /// How long a cold checkout may keep its last status before we ask git again.
 const COLD_STATUS_TTL: std::time::Duration = std::time::Duration::from_secs(90);
 
-fn view_checkout_cached(state: &AppState, checkout: Checkout, force: bool) -> CheckoutView {
-    let project_name = state
-        .config
-        .project(&checkout.project_id)
-        .map(|p| p.name)
-        .unwrap_or_else(|_| "(unknown repo)".into());
+/// How many worktrees to ask git about at once.
+///
+/// One `git status` after another is the whole cost of a cold `list_tasks`,
+/// and at launch nothing is cached — so it is every worktree the user has ever
+/// opened, in series, before the sidebar can draw. They are independent
+/// processes mostly waiting on the disk, so they overlap well. The cap is
+/// there because each one is a real fork: somebody with forty worktrees
+/// should not start forty at once.
+const STATUS_FANOUT: usize = 8;
 
-    if !force {
-        if let Some(hit) = state.status_cache.lock().get(&checkout.id) {
-            if hit.at.elapsed() < COLD_STATUS_TTL {
-                return CheckoutView {
-                    project_name,
-                    status: hit.status.clone(),
-                    changed: hit.changed,
-                    exists: hit.exists,
-                    checkout,
-                };
-            }
-        }
-    }
+/// What `git status` says about one worktree, or that there is no worktree.
+pub(super) type Fresh = (Option<git::WorktreeStatus>, u32, bool);
 
-    let dir = PathBuf::from(&checkout.path);
+fn fresh_status(dir: &Path) -> Fresh {
     let exists = dir.is_dir();
-    let status = exists.then(|| git::status(&dir).ok()).flatten();
+    let status = exists.then(|| git::status(dir).ok()).flatten();
     // One `git status` already enumerated every dirty path. A second
     // `diff`/`ls-files` pass per checkout on every poll is what made the app
     // feel busy just for sitting open.
     let changed = status.as_ref().map(|s| s.dirty_files).unwrap_or(0);
-    state.status_cache.lock().insert(
-        checkout.id.clone(),
-        super::CachedStatus {
-            status: status.clone(),
-            changed,
-            exists,
-            at: std::time::Instant::now(),
-        },
-    );
-    CheckoutView {
-        project_name,
-        status,
-        changed,
-        exists,
-        checkout,
+    (status, changed, exists)
+}
+
+/// `fresh_status` for several worktrees, in the same order as the input.
+///
+/// Order matters more than it looks: the results are matched back to their
+/// checkouts by position, so a worker that panics contributes placeholders
+/// rather than a shorter list that would shift every status after it onto the
+/// wrong repository.
+pub(super) fn fresh_statuses(dirs: &[PathBuf]) -> Vec<Fresh> {
+    if dirs.len() < 2 {
+        return dirs.iter().map(|d| fresh_status(d)).collect();
     }
+    let per = dirs.len().div_ceil(dirs.len().min(STATUS_FANOUT));
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = dirs
+            .chunks(per)
+            .map(|chunk| {
+                (
+                    chunk.len(),
+                    scope.spawn(move || chunk.iter().map(|d| fresh_status(d)).collect::<Vec<_>>()),
+                )
+            })
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|(len, h)| h.join().unwrap_or_else(|_| vec![(None, 0, false); len]))
+            .collect()
+    })
 }
 
 /// Every task, with each checkout's git status.
@@ -133,23 +138,90 @@ pub(crate) fn list_tasks_inner(state: &AppState, focus: Option<String>) -> Vec<T
     }
 
     let cfg = state.config.read();
-    cfg.tasks
+    // One pass over the projects rather than a lookup per checkout, which took
+    // the config lock and cloned the whole project each time.
+    let names: std::collections::HashMap<&str, &str> = cfg
+        .projects
         .iter()
-        .map(|t| {
+        .map(|p| (p.id.as_str(), p.name.as_str()))
+        .collect();
+
+    // Decide what each checkout needs before asking git anything, so the ones
+    // that do need it can be asked together.
+    let mut views: Vec<Vec<CheckoutView>> = Vec::with_capacity(cfg.tasks.len());
+    let mut cold: Vec<(usize, usize, PathBuf)> = Vec::new();
+    {
+        let cache = state.status_cache.lock();
+        for (ti, task) in cfg.tasks.iter().enumerate() {
             // Selected task and anything with a live agent stay fresh. The rest
             // reuse the cache so a poll is not N git-status processes forever.
-            let hot = focus.as_deref() == Some(t.id.as_str()) || running.contains(t.id.as_str());
-            TaskView {
-                checkouts: cfg
-                    .checkouts
-                    .iter()
-                    .filter(|c| c.task_id == t.id)
-                    .cloned()
-                    .map(|c| view_checkout_cached(state, c, hot))
-                    .collect(),
-                pane_count: pane_counts.get(t.id.as_str()).copied().unwrap_or(0),
-                task: t.clone(),
+            let hot = focus.as_deref() == Some(task.id.as_str())
+                || running.contains(task.id.as_str());
+            let mut row = Vec::new();
+            for checkout in cfg.checkouts.iter().filter(|c| c.task_id == task.id) {
+                let project_name = names
+                    .get(checkout.project_id.as_str())
+                    .map(|n| (*n).to_string())
+                    .unwrap_or_else(|| "(unknown repo)".into());
+                let hit = (!hot)
+                    .then(|| cache.get(&checkout.id))
+                    .flatten()
+                    .filter(|h| h.at.elapsed() < COLD_STATUS_TTL);
+                match hit {
+                    Some(hit) => row.push(CheckoutView {
+                        project_name,
+                        status: hit.status.clone(),
+                        changed: hit.changed,
+                        exists: hit.exists,
+                        checkout: checkout.clone(),
+                    }),
+                    None => {
+                        cold.push((ti, row.len(), PathBuf::from(&checkout.path)));
+                        // Filled in below. The placeholder is never returned:
+                        // every slot pushed here gets a `cold` entry pointing
+                        // at it.
+                        row.push(CheckoutView {
+                            project_name,
+                            status: None,
+                            changed: 0,
+                            exists: false,
+                            checkout: checkout.clone(),
+                        });
+                    }
+                }
             }
+            views.push(row);
+        }
+    }
+
+    let dirs: Vec<PathBuf> = cold.iter().map(|(_, _, d)| d.clone()).collect();
+    let statuses = fresh_statuses(&dirs);
+
+    let mut cache = state.status_cache.lock();
+    for ((ti, ci, _), (status, changed, exists)) in cold.into_iter().zip(statuses) {
+        let view = &mut views[ti][ci];
+        cache.insert(
+            view.checkout.id.clone(),
+            super::CachedStatus {
+                status: status.clone(),
+                changed,
+                exists,
+                at: std::time::Instant::now(),
+            },
+        );
+        view.status = status;
+        view.changed = changed;
+        view.exists = exists;
+    }
+    drop(cache);
+
+    cfg.tasks
+        .iter()
+        .zip(views)
+        .map(|(t, checkouts)| TaskView {
+            checkouts,
+            pane_count: pane_counts.get(t.id.as_str()).copied().unwrap_or(0),
+            task: t.clone(),
         })
         .collect()
 }

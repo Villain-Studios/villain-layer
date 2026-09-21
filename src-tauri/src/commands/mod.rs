@@ -296,6 +296,69 @@ mod tests {
         assert_eq!(panes_to_restore(distinct, RESTORE_LIMIT).len(), 3);
     }
 
+    /// The fan-out matches its answers back to checkouts by position, so an
+    /// off-by-one would quietly show one repo's dirty count against another's
+    /// name. Enough paths to cross `STATUS_FANOUT`, with real repos, empty
+    /// directories and missing paths interleaved so every branch of
+    /// `fresh_status` appears in the same batch.
+    #[test]
+    fn parallel_status_keeps_every_answer_with_its_own_worktree() {
+        use super::tasks::fresh_statuses;
+
+        let sandbox = std::env::temp_dir().join(format!("vl-fanout-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&sandbox).unwrap();
+
+        let mut dirs = Vec::new();
+        let mut expect_dirty = Vec::new();
+        for i in 0..20 {
+            match i % 4 {
+                // A repo with `i` modified files, so its own count identifies it.
+                0 | 1 => {
+                    let repo = sandbox.join(format!("repo{i}"));
+                    std::fs::create_dir_all(&repo).unwrap();
+                    crate::git::run(&repo, &["init", "-q", "-b", "main"]).unwrap();
+                    crate::git::run(&repo, &["config", "user.email", "t@villain.local"]).unwrap();
+                    crate::git::run(&repo, &["config", "user.name", "Test"]).unwrap();
+                    std::fs::write(repo.join("tracked.txt"), "x\n").unwrap();
+                    crate::git::run(&repo, &["add", "-A"]).unwrap();
+                    crate::git::run(&repo, &["commit", "-qm", "init"]).unwrap();
+                    for n in 0..i {
+                        std::fs::write(repo.join(format!("new{n}.txt")), "y\n").unwrap();
+                    }
+                    dirs.push(repo);
+                    expect_dirty.push(Some(i as u32));
+                }
+                // A directory that is not a repo: it exists, git says nothing.
+                2 => {
+                    let plain = sandbox.join(format!("plain{i}"));
+                    std::fs::create_dir_all(&plain).unwrap();
+                    dirs.push(plain);
+                    expect_dirty.push(None);
+                }
+                // A worktree somebody deleted by hand.
+                _ => {
+                    dirs.push(sandbox.join(format!("gone{i}")));
+                    expect_dirty.push(None);
+                }
+            }
+        }
+
+        let out = fresh_statuses(&dirs);
+        assert_eq!(out.len(), dirs.len());
+        for (i, ((status, changed, exists), want)) in out.iter().zip(&expect_dirty).enumerate() {
+            assert_eq!(*exists, dirs[i].is_dir(), "existence of {}", dirs[i].display());
+            match want {
+                Some(n) => {
+                    assert!(status.is_some(), "no status for {}", dirs[i].display());
+                    assert_eq!(changed, n, "dirty count landed on the wrong repo at {i}");
+                }
+                None => assert!(status.is_none(), "status for {}", dirs[i].display()),
+            }
+        }
+
+        std::fs::remove_dir_all(&sandbox).ok();
+    }
+
     #[test]
     fn a_dropped_pane_is_only_ever_a_repeat_or_over_the_cap() {
         // Nothing else may be dropped: the message the user sees says

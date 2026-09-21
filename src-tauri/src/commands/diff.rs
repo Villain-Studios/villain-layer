@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use crate::error::{Error, Result};
 use crate::git;
@@ -26,15 +26,28 @@ pub struct ChangedFileView {
 /// that contains it — the Diff view's commit picker — rather than a working
 /// tree comparison. `scope` is ignored in that case.
 #[tauri::command]
-pub fn diff_files(
-    state: State<AppState>,
+pub async fn diff_files(
+    app: AppHandle,
+    task_id: String,
+    scope: Option<git::Scope>,
+    commit: Option<String>,
+    checkout_id: Option<String>,
+) -> Result<Vec<ChangedFileView>> {
+    super::blocking(app, move |state| {
+        diff_files_inner(state, task_id, scope, commit, checkout_id)
+    })
+    .await
+}
+
+pub(crate) fn diff_files_inner(
+    state: &AppState,
     task_id: String,
     scope: Option<git::Scope>,
     commit: Option<String>,
     checkout_id: Option<String>,
 ) -> Result<Vec<ChangedFileView>> {
     if let (Some(sha), Some(checkout_id)) = (commit.as_deref(), checkout_id.as_deref()) {
-        return commit_files_view(&state, checkout_id, sha);
+        return commit_files_view(state, checkout_id, sha);
     }
 
     let scope = scope.unwrap_or_default();
@@ -87,8 +100,18 @@ fn commit_files_view(
 }
 
 #[tauri::command]
-pub fn diff_file(
-    state: State<AppState>,
+pub async fn diff_file(
+    app: AppHandle,
+    checkout_id: String,
+    path: String,
+    scope: Option<git::Scope>,
+    commit: Option<String>,
+) -> Result<String> {
+    super::blocking(app, move |state| diff_file_inner(state, checkout_id, path, scope, commit)).await
+}
+
+fn diff_file_inner(
+    state: &AppState,
     checkout_id: String,
     path: String,
     scope: Option<git::Scope>,
@@ -120,7 +143,11 @@ pub struct RepoCommits {
 /// Feeds the Diff view's commit picker. Empty repos are kept in the list so
 /// the UI can still name them; they just have nothing to pick.
 #[tauri::command]
-pub fn task_commits(state: State<AppState>, task_id: String) -> Result<Vec<RepoCommits>> {
+pub async fn task_commits(app: AppHandle, task_id: String) -> Result<Vec<RepoCommits>> {
+    super::blocking(app, move |state| task_commits_inner(state, task_id)).await
+}
+
+fn task_commits_inner(state: &AppState, task_id: String) -> Result<Vec<RepoCommits>> {
     let mut out = Vec::new();
     for checkout in state.config.checkouts_of(&task_id) {
         let dir = PathBuf::from(&checkout.path);
@@ -193,9 +220,21 @@ pub struct RepoResult {
 }
 
 /// Commit every repository that has changes, under one message.
+///
+/// Off the command thread: a commit runs the repository's own pre-commit
+/// hooks, which can be a full lint-and-test pass and are under nobody's
+/// control here.
 #[tauri::command]
-pub fn commit_task(
-    state: State<AppState>,
+pub async fn commit_task(
+    app: AppHandle,
+    task_id: String,
+    message: String,
+) -> Result<Vec<RepoResult>> {
+    super::blocking(app, move |state| commit_task_inner(state, task_id, message)).await
+}
+
+fn commit_task_inner(
+    state: &AppState,
     task_id: String,
     message: String,
 ) -> Result<Vec<RepoResult>> {
@@ -239,8 +278,15 @@ pub fn commit_task(
     Ok(results)
 }
 
+/// Off the command thread: this is a network round trip per repository, with
+/// no timeout of its own. A push to a remote that has gone away used to hold
+/// the whole app until git gave up.
 #[tauri::command]
-pub fn push_task(state: State<AppState>, task_id: String) -> Result<Vec<RepoResult>> {
+pub async fn push_task(app: AppHandle, task_id: String) -> Result<Vec<RepoResult>> {
+    super::blocking(app, move |state| push_task_inner(state, task_id)).await
+}
+
+fn push_task_inner(state: &AppState, task_id: String) -> Result<Vec<RepoResult>> {
     let task = state.config.task(&task_id)?;
     let mut results = Vec::new();
 

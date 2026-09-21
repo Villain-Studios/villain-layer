@@ -171,19 +171,24 @@ pub fn spawn_agent(
 /// Panes do not survive the app closing, but the agent CLIs keep their own
 /// transcripts per directory — so the work can continue even though the
 /// process cannot.
+/// Off the command thread: one directory scan per agent CLI per repository,
+/// and the pane menu asks for it while it is already open.
 #[tauri::command]
-pub fn resumable_agents(
-    state: State<AppState>,
+pub async fn resumable_agents(
+    app: AppHandle,
     task_id: String,
     checkout_id: Option<String>,
 ) -> Result<Vec<agents::Resumable>> {
-    let task = state.config.task(&task_id)?;
-    let (cwd, _, _) = resolve_scope(&state, &task, checkout_id.as_deref())?;
-    Ok(if checkout_id.is_some() {
-        agents::resumable(&cwd)
-    } else {
-        resumable_for(&state, &task, &cwd)
+    super::blocking(app, move |state| {
+        let task = state.config.task(&task_id)?;
+        let (cwd, _, _) = resolve_scope(state, &task, checkout_id.as_deref())?;
+        Ok(if checkout_id.is_some() {
+            agents::resumable(&cwd)
+        } else {
+            resumable_for(state, &task, &cwd)
+        })
     })
+    .await
 }
 
 /// Answer the trust dialog for a folder this app created, if that is wanted.

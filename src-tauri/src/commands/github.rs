@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use crate::config::GithubConfig;
 use crate::error::{Error, Result};
@@ -110,11 +110,18 @@ pub struct RepoBranchFacts {
     pub facts: git::BranchFacts,
 }
 
+/// Off the command thread: `branch_facts` is half a dozen git calls per
+/// repository, and the Diff view asks for all of them again every time its
+/// file list is rebuilt.
 #[tauri::command]
-pub fn task_branch_facts(
-    state: State<'_, AppState>,
+pub async fn task_branch_facts(
+    app: AppHandle,
     task_id: String,
 ) -> Result<Vec<RepoBranchFacts>> {
+    super::blocking(app, move |state| task_branch_facts_inner(state, task_id)).await
+}
+
+fn task_branch_facts_inner(state: &AppState, task_id: String) -> Result<Vec<RepoBranchFacts>> {
     let task = state.config.task(&task_id)?;
     Ok(state
         .config
@@ -140,9 +147,12 @@ pub fn task_branch_facts(
 
 /// What this repository could open a pull request against.
 #[tauri::command]
-pub fn checkout_branches(state: State<'_, AppState>, checkout_id: String) -> Result<Vec<String>> {
-    let checkout = state.config.checkout(&checkout_id)?;
-    git::remote_branches(&PathBuf::from(&checkout.path))
+pub async fn checkout_branches(app: AppHandle, checkout_id: String) -> Result<Vec<String>> {
+    super::blocking(app, move |state| {
+        let checkout = state.config.checkout(&checkout_id)?;
+        git::remote_branches(&PathBuf::from(&checkout.path))
+    })
+    .await
 }
 
 /// Move the open pull request for a checkout onto its current base.

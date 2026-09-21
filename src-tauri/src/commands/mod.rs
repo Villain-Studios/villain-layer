@@ -37,6 +37,31 @@ pub struct AppNotice {
     pub text: String,
 }
 
+/// Run blocking work off the command thread.
+///
+/// A plain `#[tauri::command] fn` is dispatched on the main thread, so
+/// anything that shells out to git, walks the disk or waits on a child holds
+/// the event loop for as long as it takes. While it is held, no other invoke
+/// is delivered and no event reaches the webview: terminals stop printing,
+/// polls stall, and the window stops answering the mouse. `delete_task` found
+/// this first — a task with three agents froze the app for the fifteen seconds
+/// it spent stopping them — and every command that does the same kind of work
+/// now goes through here.
+///
+/// `spawn_blocking`, not the async runtime: this work is subprocesses and
+/// file I/O, and putting it on tokio's worker threads would starve the MCP
+/// server and the Jira/GitHub clients that share them.
+pub(crate) async fn blocking<T, F>(app: tauri::AppHandle, f: F) -> crate::error::Result<T>
+where
+    F: FnOnce(&AppState) -> crate::error::Result<T> + Send + 'static,
+    T: Send + 'static,
+{
+    use tauri::Manager;
+    tauri::async_runtime::spawn_blocking(move || f(&app.state::<AppState>()))
+        .await
+        .map_err(|e| crate::error::Error::Other(format!("background work failed: {e}")))?
+}
+
 /// Queue a notice for the UI. Emitting at startup is useless — the webview has
 /// not subscribed yet — so everything goes through the pending list and the
 /// frontend drains it when it is ready.

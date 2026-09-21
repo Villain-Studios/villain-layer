@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use crate::config::Project;
 use crate::error::{Error, Result};
@@ -23,24 +23,44 @@ pub fn list_projects(state: State<AppState>) -> Vec<Project> {
 /// Same shape as `checkout_branches` — remote-tracking names without the
 /// `origin/` prefix — so the start-work picker can offer them before any
 /// worktree exists yet.
+/// Off the command thread: the create-task and start-work dialogs ask for
+/// every picked repository at once, and on the main thread those "parallel"
+/// calls simply queued behind each other.
 #[tauri::command]
-pub fn project_branches(state: State<AppState>, project_id: String) -> Result<Vec<String>> {
-    let project = state.config.project(&project_id)?;
-    git::remote_branches(&PathBuf::from(&project.path))
+pub async fn project_branches(app: AppHandle, project_id: String) -> Result<Vec<String>> {
+    super::blocking(app, move |state| {
+        let project = state.config.project(&project_id)?;
+        git::remote_branches(&PathBuf::from(&project.path))
+    })
+    .await
 }
 
 /// Register several repositories at once, skipping any that fail rather than
 /// failing the whole batch.
+///
+/// Off the command thread, and one config write rather than one per repo: a
+/// folder of twenty clones meant twenty full serialise-and-rename cycles on
+/// top of three git calls each.
 #[tauri::command]
-pub fn add_projects(
-    state: State<AppState>,
+pub async fn add_projects(
+    app: AppHandle,
     paths: Vec<String>,
     group: Option<String>,
 ) -> Result<Vec<Project>> {
-    Ok(paths
-        .iter()
-        .filter_map(|p| register_project(&state, p, group.as_deref()).ok())
-        .collect())
+    super::blocking(app, move |state| {
+        let group = group.as_deref();
+        let described: Vec<Project> = paths
+            .iter()
+            .filter_map(|p| describe_project(p, group).ok())
+            .collect();
+        state.config.update(|c| {
+            described
+                .into_iter()
+                .map(|project| merge_project(c, project))
+                .collect()
+        })
+    })
+    .await
 }
 
 #[tauri::command]
@@ -110,9 +130,20 @@ pub(crate) fn walk_for_repos(dir: &Path, depth: usize, max_depth: usize, out: &m
 }
 
 /// Every git repository under `root`, so a folder of repos can be added in one go.
+///
+/// Off the command thread: this walks the disk three levels deep and then runs
+/// `git rev-parse` in every repository it found.
 #[tauri::command]
-pub fn scan_repos(
-    state: State<AppState>,
+pub async fn scan_repos(
+    app: AppHandle,
+    root: String,
+    max_depth: Option<usize>,
+) -> Result<Vec<FoundRepo>> {
+    super::blocking(app, move |state| scan_repos_inner(state, root, max_depth)).await
+}
+
+fn scan_repos_inner(
+    state: &AppState,
     root: String,
     max_depth: Option<usize>,
 ) -> Result<Vec<FoundRepo>> {
@@ -146,7 +177,9 @@ pub fn scan_repos(
     Ok(repos)
 }
 
-pub(crate) fn register_project(state: &AppState, path: &str, group: Option<&str>) -> Result<Project> {
+/// What a path on disk would become as a project. Git only — no config lock
+/// held, so a batch can ask git about every path before it writes once.
+fn describe_project(path: &str, group: Option<&str>) -> Result<Project> {
     let dir = PathBuf::from(path);
     if !dir.is_dir() {
         return Err(Error::NotFound(format!("{path} is not a directory")));
@@ -159,25 +192,26 @@ pub(crate) fn register_project(state: &AppState, path: &str, group: Option<&str>
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| root.clone());
 
-    let project = Project {
+    Ok(Project {
         id: uuid::Uuid::new_v4().to_string(),
         name,
-        path: root.clone(),
+        path: root,
         default_branch: git::default_branch(&root_path),
         group: group.map(|g| g.trim().to_string()).filter(|g| !g.is_empty()),
-    };
-
-    state.config.update(|c| {
-        // Re-adding a known repo is a no-op, except that it may now name a group.
-        if let Some(existing) = c.projects.iter_mut().find(|p| p.path == root) {
-            if project.group.is_some() {
-                existing.group = project.group.clone();
-            }
-            return existing.clone();
-        }
-        c.projects.push(project.clone());
-        project.clone()
     })
+}
+
+/// Fold one described project into the config. Re-adding a known repo is a
+/// no-op, except that it may now name a group.
+fn merge_project(c: &mut crate::config::AppConfig, project: Project) -> Project {
+    if let Some(existing) = c.projects.iter_mut().find(|p| p.path == project.path) {
+        if project.group.is_some() {
+            existing.group = project.group.clone();
+        }
+        return existing.clone();
+    }
+    c.projects.push(project.clone());
+    project
 }
 
 #[tauri::command]

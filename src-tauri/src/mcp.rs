@@ -519,7 +519,10 @@ async fn call(app: &AppHandle, name: &str, args: Value) -> Result<Value> {
     }
 
     match name {
-        "list_tasks" => Ok(serde_json::to_value(commands::list_tasks(state, None))?),
+        // The `*_inner` forms, not the commands: a command now hands its work
+        // to the blocking pool, and this handler is already off the main
+        // thread.
+        "list_tasks" => Ok(serde_json::to_value(commands::list_tasks_inner(&state, None))?),
 
         "list_repos" => Ok(serde_json::to_value(commands::list_projects(state))?),
 
@@ -527,8 +530,8 @@ async fn call(app: &AppHandle, name: &str, args: Value) -> Result<Value> {
             let id = required(&args, "task_id")?.to_string();
             // An agent asking what a task changed means the branch, not what
             // happens to be uncommitted at this second.
-            Ok(serde_json::to_value(commands::diff_files(
-                state,
+            Ok(serde_json::to_value(commands::diff_files_inner(
+                &state,
                 id,
                 Some(crate::git::Scope::Branch),
                 None,

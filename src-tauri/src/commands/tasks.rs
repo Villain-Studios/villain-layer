@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, State};
 
 use crate::config::{Checkout, ConfigStore, Project, Task};
 use crate::error::{Error, Result};
@@ -110,8 +110,17 @@ fn view_checkout_cached(state: &AppState, checkout: Checkout, force: bool) -> Ch
     }
 }
 
+/// Every task, with each checkout's git status.
+///
+/// Off the command thread: the sidebar polls this every few seconds and a
+/// focused task re-runs `git status` in each of its worktrees, which is the
+/// one blocking call in the app that happens whether or not anyone asked.
 #[tauri::command]
-pub fn list_tasks(state: State<AppState>, focus: Option<String>) -> Vec<TaskView> {
+pub async fn list_tasks(app: AppHandle, focus: Option<String>) -> Result<Vec<TaskView>> {
+    super::blocking(app, move |state| Ok(list_tasks_inner(state, focus))).await
+}
+
+pub(crate) fn list_tasks_inner(state: &AppState, focus: Option<String>) -> Vec<TaskView> {
     let panes = state.ptys.list(None);
     let running: std::collections::HashSet<&str> = panes
         .iter()
@@ -136,7 +145,7 @@ pub fn list_tasks(state: State<AppState>, focus: Option<String>) -> Vec<TaskView
                     .iter()
                     .filter(|c| c.task_id == t.id)
                     .cloned()
-                    .map(|c| view_checkout_cached(&state, c, hot))
+                    .map(|c| view_checkout_cached(state, c, hot))
                     .collect(),
                 pane_count: pane_counts.get(t.id.as_str()).copied().unwrap_or(0),
                 task: t.clone(),
@@ -325,9 +334,11 @@ pub struct NewTask {
     pub epic_key: Option<String>,
 }
 
+/// Off the command thread: one `git worktree add` per repository, and that is
+/// the slowest git command there is on a large clone.
 #[tauri::command]
-pub fn create_task(state: State<AppState>, req: NewTask) -> Result<Task> {
-    new_task(&state, req)
+pub async fn create_task(app: AppHandle, req: NewTask) -> Result<Task> {
+    super::blocking(app, move |state| new_task(state, req)).await
 }
 
 pub(crate) fn new_task(state: &AppState, req: NewTask) -> Result<Task> {
@@ -492,12 +503,12 @@ pub(crate) fn add_repo(state: &AppState, task_id: &str, project_id: &str) -> Res
 }
 
 #[tauri::command]
-pub fn add_checkout(
-    state: State<AppState>,
+pub async fn add_checkout(
+    app: AppHandle,
     task_id: String,
     project_id: String,
 ) -> Result<AddedRepo> {
-    add_repo(&state, &task_id, &project_id)
+    super::blocking(app, move |state| add_repo(state, &task_id, &project_id)).await
 }
 
 pub(crate) fn add_checkout_inner(
@@ -557,8 +568,15 @@ pub(crate) fn add_checkout_inner(
     create_checkout(state, &task, &project, &mut taken, shared)
 }
 
+/// Off the command thread for the same reason `delete_task` is: this stops
+/// every pane rooted in the worktree, which waits up to two seconds on them,
+/// and then runs the same `git worktree remove`.
 #[tauri::command]
-pub fn remove_checkout(state: State<AppState>, checkout_id: String, force: bool) -> Result<()> {
+pub async fn remove_checkout(app: AppHandle, checkout_id: String, force: bool) -> Result<()> {
+    super::blocking(app, move |state| remove_checkout_inner(state, checkout_id, force)).await
+}
+
+fn remove_checkout_inner(state: &AppState, checkout_id: String, force: bool) -> Result<()> {
     let checkout = state.config.checkout(&checkout_id)?;
     let project = state.config.project(&checkout.project_id)?;
 
@@ -581,7 +599,7 @@ pub fn remove_checkout(state: State<AppState>, checkout_id: String, force: bool)
 
     // The folder lost a sibling, so the description of it is now wrong.
     if let Ok(task) = state.config.task(&checkout.task_id) {
-        let _ = write_task_context(&state, &task);
+        let _ = write_task_context(state, &task);
     }
     Ok(())
 }
@@ -601,12 +619,7 @@ pub async fn delete_task(
     // git worktree remove and waiting on agents both sleep. Running them on
     // the command thread freezes every other invoke — including the ones that
     // keep the window painting — so the UI looks crashed until they finish.
-    tauri::async_runtime::spawn_blocking(move || {
-        let state = app.state::<AppState>();
-        delete_task_inner(&state, id, force)
-    })
-    .await
-    .map_err(|e| Error::Other(format!("delete task failed: {e}")))?
+    super::blocking(app, move |state| delete_task_inner(state, id, force)).await
 }
 
 fn delete_task_inner(state: &AppState, id: String, force: bool) -> Result<Vec<RepoResult>> {

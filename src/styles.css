@@ -615,6 +615,17 @@ textarea { resize: vertical; font-family: var(--mono); }
 .toast.success { border-left-color: var(--green); }
 .toast.info { border-left-color: var(--blue); }
 
+/* A spinner standing in for a button's label: same box, so the button does
+   not change width the moment it starts working. */
+.btn-busy {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.btn-busy .spin {
+  border-color: rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+}
 .spin {
   width: 11px;
   height: 11px;

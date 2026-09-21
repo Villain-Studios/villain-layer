@@ -252,36 +252,94 @@ export function ContextMenu({
  *
  * `window.confirm` cannot be used: the webview returns true without ever
  * drawing a dialog, so every guard written that way silently approves itself.
+ *
+ * If `onConfirm` returns a promise the dialog stays up and spins until it
+ * settles, then closes itself. Closing first and acting after is how removing
+ * a repository from a task looked like nothing had happened at all for the
+ * seconds git spent on the worktree — and left the button there to be pressed
+ * again while the first one was still running. An `onConfirm` that returns
+ * nothing closes immediately, for callers that put their own progress on
+ * screen or open a second dialog of their own.
  */
 export function Confirm({
-  title, body, confirmLabel = "Delete", danger = true, onConfirm, onCancel,
+  title, body, confirmLabel = "Delete", busyLabel, danger = true, onConfirm, onCancel,
 }: {
   title: string;
   body: ReactNode;
   confirmLabel?: string;
+  /** Replaces the confirm label while the work runs. */
+  busyLabel?: string;
   danger?: boolean;
-  onConfirm: () => void;
+  onConfirm: () => void | Promise<unknown>;
   onCancel: () => void;
 }) {
+  const [running, setRunning] = useState(false);
+
+  function go() {
+    const done = onConfirm();
+    // Nothing to wait for: the caller has taken over, as the task delete does
+    // with its own overlay.
+    if (!(done && typeof (done as Promise<unknown>).then === "function")) {
+      onCancel();
+      return;
+    }
+    setRunning(true);
+    void (done as Promise<unknown>).then(
+      () => onCancel(),
+      // The caller reports its own failures; this only has to stop spinning,
+      // and it has to stop whether or not the dialog is still mounted.
+      () => { setRunning(false); },
+    );
+  }
+
   return (
     <Modal
       title={title}
-      onClose={onCancel}
+      // Not dismissable mid-flight: the work is already away, and closing the
+      // dialog would only hide that it is still running.
+      onClose={() => { if (!running) onCancel(); }}
       footer={
         <>
-          <button className="btn" onClick={onCancel}>Cancel</button>
+          <button className="btn" disabled={running} onClick={onCancel}>Cancel</button>
           <button
             className={`btn ${danger ? "btn-danger-solid" : "btn-primary"}`}
             autoFocus
-            onClick={() => { onCancel(); onConfirm(); }}
+            disabled={running}
+            onClick={go}
           >
-            {confirmLabel}
+            {running ? (
+              <span className="btn-busy"><Spinner />{busyLabel ?? "Working…"}</span>
+            ) : (
+              confirmLabel
+            )}
           </button>
         </>
       }
     >
       <div style={{ lineHeight: 1.6 }}>{body}</div>
     </Modal>
+  );
+}
+
+/**
+ * A blocking "this is happening" card, for work that outlives the dialog that
+ * started it and must not be interrupted.
+ *
+ * Deleting a task is the case it was written for: the sidebar row it belongs
+ * to is still on screen and spinning, so the wait cannot live in a dialog
+ * that has already closed.
+ */
+export function BusyOverlay({ title, detail }: { title: string; detail?: string }) {
+  return (
+    <div className="overlay deleting-overlay" aria-busy="true">
+      <div className="deleting-card">
+        <Spinner />
+        <div className="deleting-copy">
+          <div>{title}</div>
+          {detail && <div className="muted">{detail}</div>}
+        </div>
+      </div>
+    </div>
   );
 }
 

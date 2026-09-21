@@ -4,7 +4,7 @@ import { read, write } from "../lib/persist";
 import { useStore } from "../store";
 import type { PaneInfo, Resumable, TaskView } from "../lib/types";
 import { TerminalPane } from "./Terminal";
-import { ContextMenu, Field, Modal } from "./ui";
+import { ContextMenu, Field, Modal, Spinner } from "./ui";
 import type { MenuItem } from "./ui";
 
 function ago(unixSeconds: number): string {
@@ -34,7 +34,10 @@ export function Terminals({ task }: { task: TaskView }) {
   const [handoff, setHandoff] = useState<{ from: PaneInfo; agentId: string } | null>(null);
   const [handoffPrompt, setHandoffPrompt] = useState("");
   const [handoffLoading, setHandoffLoading] = useState(false);
+  const [handoffBusy, setHandoffBusy] = useState(false);
   const [stopOld, setStopOld] = useState(true);
+  /** The pane whose ✕ was pressed, still waiting on its grace period. */
+  const [closingId, setClosingId] = useState<string | null>(null);
   const [resumable, setResumable] = useState<Resumable[]>([]);
   const [addMenu, setAddMenu] = useState<{ x: number; y: number } | null>(null);
   const addRef = useRef<HTMLButtonElement>(null);
@@ -161,6 +164,8 @@ export function Terminals({ task }: { task: TaskView }) {
       setActive(pane.id);
     } catch (e) {
       fail(e);
+    } finally {
+      setHandoffBusy(false);
     }
   }
 
@@ -200,8 +205,12 @@ export function Terminals({ task }: { task: TaskView }) {
       .finally(() => setHandoffLoading(false));
   }
 
+  /// Spawns the new agent, then spends the grace period stopping the old one.
+  /// The modal stays up for both, or the press looks like it did nothing while
+  /// the outgoing agent saves.
   async function runHandoff() {
     if (!handoff) return;
+    setHandoffBusy(true);
     try {
       const pane = await api.spawnAgent(
         task.id,
@@ -219,12 +228,18 @@ export function Terminals({ task }: { task: TaskView }) {
     }
   }
 
+  /// Closing signals the agent and gives it five seconds to save, so the tab
+  /// stays put for what feels like a hung click. Marking it spends that time
+  /// visibly, and stops a second ✕ landing on a pane already on its way out.
   async function closePane(pane: PaneInfo) {
+    setClosingId(pane.id);
     try {
       await api.closePane(pane.id);
       await refreshPanes();
     } catch (e) {
       fail(e);
+    } finally {
+      setClosingId(null);
     }
   }
 
@@ -252,7 +267,7 @@ export function Terminals({ task }: { task: TaskView }) {
             {!p.running && p.exit_code !== null && (
               <span style={{ color: "var(--dimmer)" }}>({p.exit_code})</span>
             )}
-            {p.kind === "agent" && installed.length > 0 && (
+            {p.kind === "agent" && installed.length > 0 && closingId !== p.id && (
               <span
                 className="x"
                 title="Hand off to another agent"
@@ -261,9 +276,13 @@ export function Terminals({ task }: { task: TaskView }) {
                 ⇄
               </span>
             )}
-            <span className="x" onClick={(e) => { e.stopPropagation(); void closePane(p); }}>
-              ✕
-            </span>
+            {closingId === p.id ? (
+              <Spinner />
+            ) : (
+              <span className="x" onClick={(e) => { e.stopPropagation(); void closePane(p); }}>
+                ✕
+              </span>
+            )}
           </div>
         ))}
         <div className="spacer" />
@@ -414,21 +433,33 @@ export function Terminals({ task }: { task: TaskView }) {
         <Modal
           title={`Hand off from ${handoff.from.title}`}
           wide
-          onClose={() => { setHandoff(null); setHandoffPrompt(""); }}
+          onClose={() => {
+            if (handoffBusy) return;
+            setHandoff(null);
+            setHandoffPrompt("");
+          }}
           footer={
             <>
               <button
                 className="btn"
+                disabled={handoffBusy}
                 onClick={() => { setHandoff(null); setHandoffPrompt(""); }}
               >
                 Cancel
               </button>
               <button
                 className="btn btn-primary"
-                disabled={handoffLoading || !handoffPrompt.trim()}
+                disabled={handoffBusy || handoffLoading || !handoffPrompt.trim()}
                 onClick={() => void runHandoff()}
               >
-                Start {agents.find((a) => a.id === handoff.agentId)?.name ?? "agent"}
+                {handoffBusy ? (
+                  <span className="btn-busy">
+                    <Spinner />
+                    {stopOld ? "Starting and stopping…" : "Starting…"}
+                  </span>
+                ) : (
+                  `Start ${agents.find((a) => a.id === handoff.agentId)?.name ?? "agent"}`
+                )}
               </button>
             </>
           }

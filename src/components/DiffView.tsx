@@ -5,7 +5,7 @@ import { useStore } from "../store";
 import type {
   ChangedFile, CommitInfo, DiffScope, RepoBranchFacts, RepoCommits, ReviewComment, TaskView,
 } from "../lib/types";
-import { Field, Modal } from "./ui";
+import { Field, Modal, Spinner } from "./ui";
 import { read, write } from "../lib/persist";
 
 /** Same shape `send_review` builds — used when starting an agent with the notes. */
@@ -163,6 +163,7 @@ export function DiffView({ task }: { task: TaskView }) {
   const [composing, setComposing] = useState<{ line: number; code: string } | null>(null);
   const [text, setText] = useState("");
   const [committing, setCommitting] = useState(false);
+  const [commitBusy, setCommitBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [target, setTarget] = useState<string>("");
   /** No running agent: pick a CLI (and Start in) so Send can start one. */
@@ -436,7 +437,12 @@ export function DiffView({ task }: { task: TaskView }) {
     }
   }
 
+  /// A commit runs the repo's own pre-commit hooks, which can be a whole lint
+  /// pass, and in a multi-repo task it runs them once per repo. Without a busy
+  /// state the dialog just sat there with the button still live, inviting a
+  /// second press while the first was still in the hooks.
   async function commit() {
+    setCommitBusy(true);
     try {
       reportRepoResults(toast, await api.commitTask(task.id, message.trim()), "Committed");
       setCommitting(false);
@@ -444,6 +450,8 @@ export function DiffView({ task }: { task: TaskView }) {
       await Promise.all([load(), refreshTasks()]);
     } catch (e) {
       fail(e);
+    } finally {
+      setCommitBusy(false);
     }
   }
 
@@ -860,16 +868,26 @@ export function DiffView({ task }: { task: TaskView }) {
       {committing && (
         <Modal
           title={multi ? "Commit every repo with changes" : "Commit all changes"}
-          onClose={() => setCommitting(false)}
+          onClose={() => { if (!commitBusy) setCommitting(false); }}
           footer={
             <>
-              <button className="btn" onClick={() => setCommitting(false)}>Cancel</button>
+              <button
+                className="btn"
+                disabled={commitBusy}
+                onClick={() => setCommitting(false)}
+              >
+                Cancel
+              </button>
               <button
                 className="btn btn-primary"
-                disabled={!message.trim()}
+                disabled={commitBusy || !message.trim()}
                 onClick={() => void commit()}
               >
-                Commit
+                {commitBusy ? (
+                  <span className="btn-busy"><Spinner />Committing…</span>
+                ) : (
+                  "Commit"
+                )}
               </button>
             </>
           }

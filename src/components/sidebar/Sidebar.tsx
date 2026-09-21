@@ -4,7 +4,7 @@ import { api, errMessage } from "../../lib/api";
 import { copyText } from "../../lib/clipboard";
 import { paneState, taskReview, taskTotals, useStore, type TaskReview } from "../../store";
 import type { TaskView } from "../../lib/types";
-import { Confirm, ContextMenu, Field, Modal, Spinner, type MenuItem } from "../ui";
+import { BusyOverlay, Confirm, ContextMenu, Field, Modal, Spinner, type MenuItem } from "../ui";
 import { RepoPicker } from "../RepoPicker";
 import { CreateTaskDialog } from "./CreateTaskDialog";
 
@@ -44,7 +44,9 @@ export function Sidebar() {
     title: string;
     body: ReactNode;
     label: string;
-    run: () => void;
+    /** A `run` that returns a promise keeps the dialog up and spinning. */
+    busyLabel?: string;
+    run: () => void | Promise<unknown>;
   } | null>(null);
   const [deleting, setDeleting] = useState<{ id: string; name: string } | null>(null);
 
@@ -177,6 +179,10 @@ export function Sidebar() {
           )}
         </>
       ),
+      // Awaited by the dialog, so the spinner is up for the whole thing —
+      // stopping the panes alone waits two seconds on them, and `git worktree
+      // remove` is as slow here as it is when a whole task goes.
+      busyLabel: "Removing…",
       run: async () => {
         try {
           await api.removeCheckout(checkoutId, dirty > 0);
@@ -474,21 +480,17 @@ export function Sidebar() {
           title={confirming.title}
           body={confirming.body}
           confirmLabel={confirming.label}
+          busyLabel={confirming.busyLabel}
           onConfirm={confirming.run}
           onCancel={() => setConfirming(null)}
         />
       )}
 
       {deleting && (
-        <div className="overlay deleting-overlay" aria-busy="true">
-          <div className="deleting-card">
-            <Spinner />
-            <div className="deleting-copy">
-              <div>Deleting {deleting.name}</div>
-              <div className="muted">Stopping agents and removing worktrees…</div>
-            </div>
-          </div>
-        </div>
+        <BusyOverlay
+          title={`Deleting ${deleting.name}`}
+          detail="Stopping agents and removing worktrees…"
+        />
       )}
 
       {addingRepoTo && (

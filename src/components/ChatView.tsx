@@ -201,7 +201,11 @@ export function ChatView() {
             </>
           }
           onCancel={() => setClosing(null)}
-          onConfirm={() => { setClosing(null); void close(doomed.id); }}
+          // Returned, not fired and forgotten: stopping a chat agent gives it
+          // five seconds to save, and the dialog now waits that out instead of
+          // vanishing while the tab stays put.
+          busyLabel="Closing…"
+          onConfirm={() => close(doomed.id)}
         />
       )}
     </div>

@@ -1,6 +1,8 @@
+import { useState } from "react";
+
 import { api } from "../lib/api";
 import { CHAT_TASK_ID, paneState, useStore } from "../store";
-import { SidebarToggle } from "./ui";
+import { SidebarToggle, Spinner } from "./ui";
 
 function ago(iso: string): string {
   const s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
@@ -19,6 +21,22 @@ export function AgentsView() {
   const select = useStore((s) => s.select);
   const setView = useStore((s) => s.setView);
   const fail = useStore((s) => s.fail);
+
+  /// Stopping asks the agent to exit and waits up to five seconds for it to
+  /// save, so the row does not change until then. Say which one is stopping.
+  const [stopping, setStopping] = useState<string | null>(null);
+
+  async function stop(paneId: string) {
+    setStopping(paneId);
+    try {
+      await api.killPane(paneId);
+      await refreshPanes();
+    } catch (e) {
+      fail(e);
+    } finally {
+      setStopping(null);
+    }
+  }
 
   const working = panes.filter((p) => p.kind === "agent");
   const live = working.filter((p) => p.running);
@@ -95,9 +113,14 @@ export function AgentsView() {
             {pane.running && (
               <button
                 className="btn btn-sm btn-danger"
-                onClick={() => void api.killPane(pane.id).then(() => refreshPanes()).catch(fail)}
+                disabled={stopping === pane.id}
+                onClick={() => void stop(pane.id)}
               >
-                Stop
+                {stopping === pane.id ? (
+                  <span className="btn-busy"><Spinner />Stopping…</span>
+                ) : (
+                  "Stop"
+                )}
               </button>
             )}
           </div>

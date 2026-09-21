@@ -18,7 +18,8 @@ export function ReposView() {
     title: string;
     body: ReactNode;
     label: string;
-    run: () => void;
+    busyLabel?: string;
+    run: () => void | Promise<unknown>;
   } | null>(null);
 
   const groups = groupProjects(projects);
@@ -61,6 +62,11 @@ export function ReposView() {
           )}
         </>
       ),
+      // `refreshAll` is the slowest read in the app — a git status of every
+      // worktree — and dropping a repo used by several tasks takes those with
+      // it. Awaited, so the dialog is what waits rather than the sidebar
+      // silently rearranging itself a few seconds later.
+      busyLabel: "Removing…",
       run: async () => {
         try {
           await api.removeProject(p.id);
@@ -170,6 +176,7 @@ export function ReposView() {
           title={confirming.title}
           body={confirming.body}
           confirmLabel={confirming.label}
+          busyLabel={confirming.busyLabel}
           onConfirm={confirming.run}
           onCancel={() => setConfirming(null)}
         />

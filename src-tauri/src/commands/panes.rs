@@ -628,11 +628,18 @@ pub(crate) fn panes_to_restore(saved: Vec<SavedPane>, limit: usize) -> Vec<Saved
     out
 }
 
+/// Off the command thread: stopping a pane signals the agent and then waits
+/// up to five seconds for it to save and exit. `PtyManager::close` already
+/// takes care not to hold the pane map for that long, but the wait itself was
+/// still on the thread the window runs on.
 #[tauri::command]
-pub fn close_pane(state: State<AppState>, pane_id: String) -> Result<()> {
-    // Closing a pane on purpose means not wanting it back.
-    let _ = state.config.update(|c| c.saved_panes.retain(|p| p.id != pane_id));
-    state.ptys.close(&pane_id)
+pub async fn close_pane(app: AppHandle, pane_id: String) -> Result<()> {
+    super::blocking(app, move |state| {
+        // Closing a pane on purpose means not wanting it back.
+        let _ = state.config.update(|c| c.saved_panes.retain(|p| p.id != pane_id));
+        state.ptys.close(&pane_id)
+    })
+    .await
 }
 
 /// Whether the window is in front and worth feeding terminal output.
@@ -745,8 +752,11 @@ pub fn restore_panes(app: &AppHandle) {
 }
 
 /// Stop the process but keep the pane and its scrollback on screen.
+///
+/// Off the command thread for the same five-second grace period as
+/// `close_pane`.
 #[tauri::command]
-pub fn kill_pane(state: State<AppState>, pane_id: String) -> Result<()> {
-    state.ptys.kill(&pane_id)
+pub async fn kill_pane(app: AppHandle, pane_id: String) -> Result<()> {
+    super::blocking(app, move |state| state.ptys.kill(&pane_id)).await
 }
 

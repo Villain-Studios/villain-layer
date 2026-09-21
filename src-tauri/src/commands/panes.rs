@@ -14,9 +14,15 @@ use super::AppState;
 
 // ------------------------------------------------------------------- panes
 
+/// Off the command thread: deciding which CLIs are installed needs the login
+/// shell's PATH, and the first caller to want it pays for a full interactive
+/// `$SHELL -ilc` — around 300ms on a well-furnished zsh. A warm-up thread in
+/// `run()` usually gets there first, but the boot refresh asks for this and
+/// the settings at the same moment, and on the main thread whichever lost
+/// that race held everything else up.
 #[tauri::command]
-pub fn list_agents() -> Vec<agents::AgentStatus> {
-    agents::available()
+pub async fn list_agents(app: AppHandle) -> Result<Vec<agents::AgentStatus>> {
+    super::blocking(app, |_| Ok(agents::available())).await
 }
 
 #[tauri::command]

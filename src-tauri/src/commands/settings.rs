@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use crate::config::{GithubConfig, JiraConfig, SlackConfig, UiPrefs};
 use crate::error::{Error, Result};
@@ -105,8 +105,16 @@ fn cursor_app() -> Option<PathBuf> {
 
 /// True when the Cursor IDE is on this machine (the app, or its `cursor` CLI).
 /// Distinct from the `cursor-agent` agent CLI listed under agents.
+///
+/// Off the command thread for the login-shell PATH, as `list_agents` is: this
+/// is the first thing the boot refresh asks for, so it was the one most likely
+/// to be waiting on it.
 #[tauri::command]
-pub fn cursor_ide_installed() -> bool {
+pub async fn cursor_ide_installed(app: AppHandle) -> Result<bool> {
+    super::blocking(app, |_| Ok(cursor_ide_present())).await
+}
+
+fn cursor_ide_present() -> bool {
     shellenv::which("cursor").is_some() || cursor_app().is_some()
 }
 
@@ -163,6 +171,6 @@ mod cursor_tests {
                 .map(|h| PathBuf::from(h).join("Applications/Cursor.app").is_dir())
                 .unwrap_or(false)
             || shellenv::which("cursor").is_some();
-        assert_eq!(cursor_ide_installed(), expected);
+        assert_eq!(cursor_ide_present(), expected);
     }
 }

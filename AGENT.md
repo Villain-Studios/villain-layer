@@ -65,6 +65,14 @@ live process kills it and takes its agents with it, and the same is true of
 
 ## Things that have bitten
 
+- **A plain `#[tauri::command] fn` runs on the main thread.** Anything in it
+  that shells out to git, walks the disk or waits on a child holds the event
+  loop: no other invoke is delivered and no event reaches the webview, so
+  terminals stop printing and the window stops answering the mouse. A command
+  that does any of that takes `AppHandle` and goes through
+  `commands::blocking`, which is `spawn_blocking` — not the async runtime,
+  whose workers are shared with the MCP server and the HTTP clients. `async
+  fn` commands are already off it.
 - **A GUI app's working directory is `/`.** Every child inherits it, and a
   coding CLI started at the filesystem root treats the whole disk as its
   project — which on macOS means a permission prompt for Photos, Downloads

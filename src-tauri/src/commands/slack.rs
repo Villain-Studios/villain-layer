@@ -159,16 +159,25 @@ pub async fn slack_cleanup(state: State<'_, AppState>, dry_run: bool) -> Result<
         return Ok(serde_json::json!({ "would_delete": found.len(), "channel": channel_id }));
     }
 
-    let mut deleted = 0;
+    let mut deleted = std::collections::HashSet::new();
     let mut failures = Vec::new();
     for m in &found {
         match client.delete(&m.channel, &m.ts).await {
-            Ok(()) => deleted += 1,
+            Ok(()) => {
+                deleted.insert(m.ts.clone());
+            }
             Err(e) => failures.push(format!("{}: {e}", m.ts)),
         }
     }
-    state.config.update(|c| c.slack_posted.clear())?;
-    Ok(serde_json::json!({ "deleted": deleted, "failed": failures }))
+    // Forget only what went. Clearing the whole record also dropped messages
+    // whose delete had failed, ones in a channel used before this one, and
+    // ones older than the scan reaches — and since only this bot can delete
+    // them, nothing could reach them after that.
+    state.config.update(|c| {
+        c.slack_posted
+            .retain(|p| !(p.channel == channel_id && deleted.contains(&p.ts)))
+    })?;
+    Ok(serde_json::json!({ "deleted": deleted.len(), "failed": failures }))
 }
 
 #[tauri::command]

@@ -140,6 +140,14 @@ impl Slack {
             .unwrap_or_default()
             .to_string();
         let body: serde_json::Value = res.json().await?;
+        // A revoked or mistyped token has no bot id either, and was reported
+        // as "not a bot token", which sends people looking for the wrong fix.
+        if body.get("ok").and_then(|o| o.as_bool()) != Some(true) {
+            return Err(Error::Other(explain(
+                body.get("error").and_then(|e| e.as_str()).unwrap_or("unknown"),
+                "the channel",
+            )));
+        }
         let bot = body
             .get("bot_id")
             .and_then(|b| b.as_str())
@@ -150,30 +158,62 @@ impl Slack {
 
     /// Resolve a channel name to its id. Needs channels:read.
     pub async fn channel_id(&self, name: &str) -> Result<String> {
-        let wanted = name.trim_start_matches('#');
-        let res = self
-            .client
-            .get("https://slack.com/api/conversations.list")
-            .header("Authorization", format!("Bearer {}", self.secret))
-            .query(&[("limit", "1000"), ("types", "public_channel,private_channel")])
-            .send()
-            .await?;
-        let body: serde_json::Value = res.json().await?;
-        if body.get("ok").and_then(|o| o.as_bool()) != Some(true) {
-            return Err(Error::Other(format!(
-                "cannot list channels: {}",
-                body.get("error").and_then(|e| e.as_str()).unwrap_or("unknown")
-            )));
+        let wanted = name.trim().trim_start_matches('#');
+        // Configured as an id already — the only way to name a private
+        // channel, since listing those needs a scope the manifest does not ask
+        // for. Asking for them anyway failed the whole list.
+        if wanted.len() >= 9
+            && wanted.starts_with(['C', 'G'])
+            && wanted.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+        {
+            return Ok(wanted.to_string());
         }
-        body.get("channels")
-            .and_then(|c| c.as_array())
-            .and_then(|a| {
-                a.iter()
-                    .find(|c| c.get("name").and_then(|n| n.as_str()) == Some(wanted))
-                    .and_then(|c| c.get("id").and_then(|i| i.as_str()))
-                    .map(str::to_string)
-            })
-            .ok_or_else(|| Error::Other(format!("no channel named {name}")))
+        // Paged: a workspace with more channels than one page holds had the
+        // rest reported as not existing.
+        let mut cursor = String::new();
+        for _ in 0..20 {
+            let mut query = vec![("limit", "1000"), ("types", "public_channel"), ("exclude_archived", "true")];
+            if !cursor.is_empty() {
+                query.push(("cursor", cursor.as_str()));
+            }
+            let res = self
+                .client
+                .get("https://slack.com/api/conversations.list")
+                .header("Authorization", format!("Bearer {}", self.secret))
+                .query(&query)
+                .send()
+                .await?;
+            let body: serde_json::Value = res.json().await?;
+            if body.get("ok").and_then(|o| o.as_bool()) != Some(true) {
+                return Err(Error::Other(format!(
+                    "cannot list channels: {}",
+                    body.get("error").and_then(|e| e.as_str()).unwrap_or("unknown")
+                )));
+            }
+            let found = body
+                .get("channels")
+                .and_then(|c| c.as_array())
+                .and_then(|a| {
+                    a.iter()
+                        .find(|c| c.get("name").and_then(|n| n.as_str()) == Some(wanted))
+                        .and_then(|c| c.get("id").and_then(|i| i.as_str()))
+                        .map(str::to_string)
+                });
+            if let Some(id) = found {
+                return Ok(id);
+            }
+            cursor = body
+                .pointer("/response_metadata/next_cursor")
+                .and_then(|c| c.as_str())
+                .unwrap_or_default()
+                .to_string();
+            if cursor.is_empty() {
+                break;
+            }
+        }
+        Err(Error::Other(format!(
+            "no public channel named {name}; for a private one, set the channel to its id (C…)"
+        )))
     }
 
     /// The app's own recent messages in a channel. Needs channels:history.

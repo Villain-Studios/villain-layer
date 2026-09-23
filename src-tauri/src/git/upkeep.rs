@@ -8,7 +8,7 @@
 
 use std::path::Path;
 
-use super::{check_names, commit_id, is_ancestor, run};
+use super::{check_names, commit_id, is_ancestor, run, UpdateBy};
 use crate::error::{Error, Result};
 
 #[derive(Debug, Clone)]
@@ -209,6 +209,48 @@ pub fn fast_forward(clone: &Path, store: &Path, branch: &str) -> Result<Forwarde
     Ok(Forwarded::Moved(moved))
 }
 
+/// How a team seems to bring its base into branches, from how pull
+/// requests land on the base: the last 40 commits along its first parents,
+/// in the app's copy. Merge commits, or squashed pull requests (`(#12)`,
+/// `(!12)`), are a team for whom a merge in the branch leaves no mark on
+/// the base: merge, which rewrites nothing. A straight line of commits as
+/// they were written is a team that rebases. Too little history to say is
+/// None. A guess, said as one where it is shown, and never over a choice.
+pub fn update_style(store: &Path, base: &str) -> Option<(UpdateBy, String)> {
+    check_names("HEAD", base).ok()?;
+    let out = run(
+        store,
+        &["log", "--first-parent", "-n", "40", "--format=%P%x00%s", &format!("refs/remotes/origin/{base}")],
+    )
+    .ok()?;
+    let commits: Vec<(usize, &str)> = out
+        .lines()
+        .filter_map(|l| l.split_once('\0'))
+        .map(|(parents, subject)| (parents.split_whitespace().count(), subject.trim()))
+        .collect();
+    if commits.len() < 5 {
+        return None;
+    }
+    let merges = commits.iter().filter(|(parents, _)| *parents > 1).count();
+    let squashed = commits
+        .iter()
+        .filter(|(_, subject)| {
+            let Some(open) = subject.strip_suffix(')').and_then(|s| s.rfind(['#', '!']).map(|i| &s[i + 1..])) else {
+                return false;
+            };
+            !open.is_empty() && open.chars().all(|c| c.is_ascii_digit())
+        })
+        .count();
+    let n = commits.len();
+    Some(if merges * 3 >= n {
+        (UpdateBy::Merge, format!("pull requests land on {base} as merge commits"))
+    } else if squashed * 2 >= n {
+        (UpdateBy::Merge, format!("pull requests are squashed into {base}, so a merge in the branch leaves no trace"))
+    } else {
+        (UpdateBy::Rebase, format!("{base} is a straight line of commits: branches are rebased onto it"))
+    })
+}
+
 /// Every local branch, with its tip.
 pub fn branch_tips(repo: &Path) -> Result<Vec<(String, String)>> {
     let out = run(repo, &["for-each-ref", "--format=%(refname)%00%(objectname)", "refs/heads"])?;
@@ -370,6 +412,48 @@ mod tests {
         assert_eq!(run(&clone, &["branch", "--show-current"]).unwrap().trim(), "feature");
         assert!(!clone.join("b.txt").exists(), "the checked-out branch's files stay as they were");
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Lands six pull requests on the remote's main from `mate`, each one
+    /// the way `land` says.
+    fn history(mate: &Path, store: &Path, land: &str) -> Option<UpdateBy> {
+        for n in 1..=6 {
+            let file = format!("pr{n}.txt");
+            match land {
+                "merge" => {
+                    run(mate, &["switch", "-q", "-c", &format!("pr{n}")]).unwrap();
+                    std::fs::write(mate.join(&file), "x\n").unwrap();
+                    run(mate, &["add", "-A"]).unwrap();
+                    run(mate, &["commit", "-qm", &file]).unwrap();
+                    run(mate, &["switch", "-q", "main"]).unwrap();
+                    run(mate, &["merge", "-q", "--no-ff", "-m", &format!("Merge pull request #{n}"), &format!("pr{n}")]).unwrap();
+                }
+                "squash" => {
+                    std::fs::write(mate.join(&file), "x\n").unwrap();
+                    run(mate, &["add", "-A"]).unwrap();
+                    run(mate, &["commit", "-qm", &format!("Add {file} (#{n})")]).unwrap();
+                }
+                _ => {
+                    std::fs::write(mate.join(&file), "x\n").unwrap();
+                    run(mate, &["add", "-A"]).unwrap();
+                    run(mate, &["commit", "-qm", &format!("Add {file}")]).unwrap();
+                }
+            }
+        }
+        run(mate, &["push", "-q", "origin", "HEAD:main"]).unwrap();
+        fetch_store(store).unwrap();
+        update_style(store, "main").map(|(by, _)| by)
+    }
+
+    #[test]
+    fn a_repo_is_guessed_to_update_the_way_its_pull_requests_land() {
+        for (land, expected) in [("merge", UpdateBy::Merge), ("squash", UpdateBy::Merge), ("rebase", UpdateBy::Rebase)] {
+            let root = sandbox();
+            let (_clone, mate, store) = scene(&root);
+            assert_eq!(update_style(&store, "main"), None, "one commit is too little to go on");
+            assert_eq!(history(&mate, &store, land), Some(expected), "pull requests landed by {land}");
+            std::fs::remove_dir_all(&root).ok();
+        }
     }
 
     #[test]

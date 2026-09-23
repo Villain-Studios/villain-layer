@@ -134,6 +134,7 @@ mod tests {
             default_branch: "main".into(),
             group: group.map(str::to_string),
             store: None,
+            update_by: None,
         }
     }
 

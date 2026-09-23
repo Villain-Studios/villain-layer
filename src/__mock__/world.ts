@@ -67,7 +67,6 @@ const disconnected: Settings = {
   slack: null,
   worktree_root: "/Users/you/.villain-worktrees",
   worktree_root_is_default: true,
-  update_by: "merge",
   jira_connected: false,
   github_connected: false,
   slack_connected: false,
@@ -117,9 +116,9 @@ const hourAgo = Math.round(Date.now() / 1000) - 3600;
 
 /** api is behind, web has a commit of its own on main, infra has moved. */
 const health: RepoHealth[] = [
-  { project_id: "p-api", clone: "ok", origin: "git@github.com:acme/api.git", store: `${copies}/api.git`, fetched_at: hourAgo, behind: 3, ahead: 0, found: null },
-  { project_id: "p-web", clone: "ok", origin: "git@github.com:acme/web.git", store: `${copies}/web.git`, fetched_at: hourAgo, behind: 0, ahead: 1, found: null },
-  { project_id: "p-infra", clone: "missing", origin: null, store: null, fetched_at: null, behind: null, ahead: null, found: "/Users/you/code/ops/infra" },
+  { project_id: "p-api", clone: "ok", origin: "git@github.com:acme/api.git", store: `${copies}/api.git`, fetched_at: hourAgo, behind: 3, ahead: 0, found: null, update_guess: "rebase", update_reason: "main is a straight line of commits: branches are rebased onto it" },
+  { project_id: "p-web", clone: "ok", origin: "git@github.com:acme/web.git", store: `${copies}/web.git`, fetched_at: hourAgo, behind: 0, ahead: 1, found: null, update_guess: "merge", update_reason: "pull requests land on main as merge commits" },
+  { project_id: "p-infra", clone: "missing", origin: null, store: null, fetched_at: null, behind: null, ahead: null, found: "/Users/you/code/ops/infra", update_guess: null, update_reason: null },
 ];
 
 /** One of each thing Clean up finds, in each verdict it can have. */

@@ -215,6 +215,7 @@ fn describe_project(path: &str, group: Option<&str>) -> Result<Project> {
         default_branch: git::default_branch(&root_path),
         group: group.map(|g| g.trim().to_string()).filter(|g| !g.is_empty()),
         store: None,
+        update_by: None,
     })
 }
 

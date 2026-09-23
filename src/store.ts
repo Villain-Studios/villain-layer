@@ -13,6 +13,7 @@ import type {
   ReviewQueue,
   Settings,
   TaskView,
+  UpdateBy,
 } from "./lib/types";
 
 export const TABS = ["terminals", "diff", "pr"] as const;
@@ -659,6 +660,17 @@ export function repoTrouble(p: Project, h: RepoHealth | undefined, tasks: TaskVi
   const unlinked = tasks.flatMap((t) => t.checkouts).filter((c) => c.project_id === p.id && c.broken).length;
   if (unlinked > 0) return `${unlinked} task worktree${unlinked === 1 ? "" : "s"} git cannot read.`;
   return null;
+}
+
+/**
+ * How Update from base updates branches in a repository, and why (UPD-7):
+ * what it is set to, else what its history suggests, else merge, which
+ * rewrites nothing that was pushed.
+ */
+export function updateByFor(p: Project | undefined, h: RepoHealth | undefined): { by: UpdateBy; why: string } {
+  if (p?.update_by) return { by: p.update_by, why: "Chosen for this repo, in Repos or at its last update." };
+  if (h?.update_guess) return { by: h.update_guess, why: `Guessed: ${h.update_reason ?? "from its history"}.` };
+  return { by: "merge", why: "Nothing to go on yet. A merge rewrites nothing that was pushed." };
 }
 
 /** Rolled-up worktree state across every repo in a task. */

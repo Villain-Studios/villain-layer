@@ -10,7 +10,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
-use tauri::AppHandle;
+use tauri::{AppHandle, State};
 
 use crate::config::Project;
 use crate::error::{Error, Result};
@@ -67,6 +67,10 @@ pub struct RepoHealth {
     pub ahead: Option<usize>,
     /// A folder that looks like this repository, when the clone is missing.
     pub found: Option<String>,
+    /// How its history says the team updates branches, and why (UPD-7).
+    /// What the repo is set to, `Project.update_by`, comes first.
+    pub update_guess: Option<git::UpdateBy>,
+    pub update_reason: Option<String>,
 }
 
 /// How every registered repository is doing (REPO-5).
@@ -100,6 +104,7 @@ fn health(project: &Project, registered: &HashSet<PathBuf>, home: Option<&Path>)
         ("ok", Some(s)) => git::standing(clone, s, &project.default_branch),
         _ => None,
     };
+    let guess = store.and_then(|s| git::update_style(s, &project.default_branch));
     RepoHealth {
         project_id: project.id.clone(),
         clone: state,
@@ -114,7 +119,24 @@ fn health(project: &Project, registered: &HashSet<PathBuf>, home: Option<&Path>)
             ("missing", Some(home)) => find_moved(project, store, registered, home),
             _ => None,
         },
+        update_guess: guess.as_ref().map(|(by, _)| *by),
+        update_reason: guess.map(|(_, why)| why),
     }
+}
+
+/// Set how Update from base updates branches in a repository (UPD-7), or
+/// with None, go back to guessing from its history.
+#[tauri::command]
+pub fn set_project_update_by(
+    state: State<AppState>,
+    project_id: String,
+    by: Option<git::UpdateBy>,
+) -> Result<()> {
+    state.config.update(|c| {
+        if let Some(p) = c.projects.iter_mut().find(|p| p.id == project_id) {
+            p.update_by = by;
+        }
+    })
 }
 
 /// A folder that is probably `project`'s clone, moved: the same folder
@@ -288,6 +310,7 @@ pub(super) mod tests {
                 default_branch: "main".into(),
                 group: None,
                 store: None,
+                update_by: None,
             }],
             ..Default::default()
         };

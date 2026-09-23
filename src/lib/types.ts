@@ -7,6 +7,9 @@ export interface Project {
   group: string | null;
   /** The app's own copy of the repository, which task worktrees belong to. */
   store: string | null;
+  /** How Update from base updates branches here: set in Repos, or the way it
+   *  was last updated. Absent: guessed from its history (UPD-7). */
+  update_by?: UpdateBy | null;
 }
 
 /** How a registered repository is doing (REPO-5). */
@@ -24,6 +27,9 @@ export interface RepoHealth {
   ahead: number | null;
   /** A folder that looks like this repository, when the clone is missing. */
   found: string | null;
+  /** How its history says the team updates branches, and why. */
+  update_guess: UpdateBy | null;
+  update_reason: string | null;
 }
 
 /** One repository's row from Sync (REPO-7). */
@@ -475,7 +481,6 @@ export interface Settings {
   worktree_root: string;
   worktree_root_is_default: boolean;
   /** What Update from base does unless told otherwise: the last one used. */
-  update_by: UpdateBy;
   jira_connected: boolean;
   github_connected: boolean;
   slack_connected: boolean;

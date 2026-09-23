@@ -2,8 +2,8 @@ import { useEffect, useState, type ReactNode } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { api } from "../lib/api";
 import { ago } from "../lib/time";
-import { groupProjects, repoTrouble, useNow, useStore } from "../store";
-import type { Project, RepoHealth, Synced } from "../lib/types";
+import { groupProjects, repoTrouble, updateByFor, useNow, useStore } from "../store";
+import type { Project, RepoHealth, Synced, UpdateBy } from "../lib/types";
 import { AddRepos } from "./AddRepos";
 import { CleanUp } from "./CleanUp";
 import { Combo, Confirm, Spinner } from "./ui";
@@ -60,6 +60,15 @@ export function ReposView() {
     const ids = projects.filter((p) => (p.group ?? "") === from).map((p) => p.id);
     try {
       await api.setProjectGroup(ids, to.trim() || null);
+      await refreshRepos();
+    } catch (e) {
+      fail(e);
+    }
+  }
+
+  async function setUpdateBy(p: Project, by: UpdateBy | null) {
+    try {
+      await api.setProjectUpdateBy(p.id, by);
       await refreshRepos();
     } catch (e) {
       fail(e);
@@ -236,6 +245,7 @@ export function ReposView() {
                   {inUse > 0 && <span className="chip add">{inUse} task{inUse === 1 ? "" : "s"}</span>}
                   <CopyState h={h} now={now} />
                   <div className="spacer" />
+                  <UpdateByPicker p={p} h={h} onChange={(by) => void setUpdateBy(p, by)} />
                   <Combo
                     value={p.group ?? ""}
                     options={groupNames}
@@ -326,6 +336,30 @@ function Standing({ h, branch }: { h: RepoHealth | undefined; branch: string }) 
     );
   }
   return null;
+}
+
+/**
+ * How Update from base updates branches here (UPD-7). Unset, it follows
+ * the guess from history, and the first option says what that is.
+ */
+function UpdateByPicker({ p, h, onChange }: {
+  p: Project;
+  h: RepoHealth | undefined;
+  onChange: (by: UpdateBy | null) => void;
+}) {
+  const guess = updateByFor(undefined, h);
+  return (
+    <select
+      className="update-by"
+      value={p.update_by ?? ""}
+      title={`How Update from base brings the base in. ${updateByFor(p, h).why}`}
+      onChange={(e) => onChange((e.target.value || null) as UpdateBy | null)}
+    >
+      <option value="">{h?.update_guess ? `${guess.by}s (guessed)` : "merges (default)"}</option>
+      <option value="merge">merges</option>
+      <option value="rebase">rebases</option>
+    </select>
+  );
 }
 
 /** Whether the app's copy exists, and when it last fetched. */

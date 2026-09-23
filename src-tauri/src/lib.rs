@@ -185,6 +185,7 @@ pub fn run() {
             commands::project_branches,
             commands::repo_health,
             commands::locate_project,
+            commands::set_project_update_by,
             commands::sync_repos,
             commands::cleanup_plan,
             commands::cleanup_apply,

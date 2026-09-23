@@ -339,6 +339,13 @@ pub(crate) fn pushed(state: &AppState, checkout_id: &str) {
     });
 }
 
+/// One repository to update, and how: each repo its team's way (UPD-7).
+#[derive(Debug, Deserialize)]
+pub struct UpdatePick {
+    pub checkout_id: String,
+    pub by: git::UpdateBy,
+}
+
 /// Bring each repository's base into the task branch, merging or rebasing.
 ///
 /// Fetched first, all together, so "up to date" means with the remote and
@@ -347,39 +354,36 @@ pub(crate) fn pushed(state: &AppState, checkout_id: &str) {
 /// Off the command thread: fetches, and an update that runs the repository's
 /// hooks.
 #[tauri::command]
-pub async fn update_from_base(
-    app: AppHandle,
-    task_id: String,
-    checkout_ids: Option<Vec<String>>,
-    by: git::UpdateBy,
-) -> Result<Vec<RepoUpdate>> {
-    super::blocking(app, move |state| update_from_base_inner(state, task_id, checkout_ids, by)).await
+pub async fn update_from_base(app: AppHandle, task_id: String, picks: Vec<UpdatePick>) -> Result<Vec<RepoUpdate>> {
+    super::blocking(app, move |state| update_from_base_inner(state, task_id, picks)).await
 }
 
-fn update_from_base_inner(
-    state: &AppState,
-    task_id: String,
-    checkout_ids: Option<Vec<String>>,
-    by: git::UpdateBy,
-) -> Result<Vec<RepoUpdate>> {
+fn update_from_base_inner(state: &AppState, task_id: String, picks: Vec<UpdatePick>) -> Result<Vec<RepoUpdate>> {
     let task = state.config.task(&task_id)?;
-    // Offered first next time: a team that rebases rebases every time.
-    state.config.update(|c| c.update_by = by)?;
     let checkouts: Vec<_> = state
         .config
         .checkouts_of(&task_id)
         .into_iter()
-        .filter(|c| checkout_ids.as_ref().is_none_or(|ids| ids.contains(&c.id)))
         .filter(|c| std::path::Path::new(&c.path).is_dir())
+        .filter_map(|c| picks.iter().find(|p| p.checkout_id == c.id).map(|p| (c, p.by)))
         .collect();
+    // Offered first next time in each repo: a team that rebases rebases
+    // every time. One app-wide choice was wrong wherever teams differ.
+    state.config.update(|cfg| {
+        for (c, by) in &checkouts {
+            if let Some(p) = cfg.projects.iter_mut().find(|p| p.id == c.project_id) {
+                p.update_by = Some(*by);
+            }
+        }
+    })?;
     // Every repository at once, but base then branch within each: two
     // fetches at once in one repository race for its FETCH_HEAD.
     std::thread::scope(|scope| {
-        for c in &checkouts {
+        for (c, by) in &checkouts {
             let (dir, branch) = (PathBuf::from(&c.path), &task.branch);
             scope.spawn(move || {
                 git::fetch_bases(&[(dir.clone(), c.base.clone())]);
-                if by == git::UpdateBy::Rebase {
+                if *by == git::UpdateBy::Rebase {
                     git::fetch_branch(&dir, branch);
                 }
             });
@@ -387,7 +391,7 @@ fn update_from_base_inner(
     });
 
     let mut out = Vec::new();
-    for checkout in checkouts {
+    for (checkout, by) in checkouts {
         let repo = state
             .config
             .project(&checkout.project_id)

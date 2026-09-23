@@ -32,6 +32,11 @@ pub struct Project {
     /// belong to (`git/store.rs`). None until it has been made.
     #[serde(default)]
     pub store: Option<String>,
+    /// How Update from base brings the base into a branch here: set in the
+    /// Repos view, or the way this repo was last updated. None: guessed from
+    /// its history (UPD-7).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_by: Option<crate::git::UpdateBy>,
 }
 
 impl Project {
@@ -273,9 +278,6 @@ pub struct AppConfig {
     /// Where task directories are created. Defaults to ~/.villain-worktrees.
     #[serde(default)]
     pub worktree_root: Option<String>,
-    /// Merge or rebase, for Update from base: whichever was used last.
-    #[serde(default)]
-    pub update_by: crate::git::UpdateBy,
     /// Repos last used, keyed "epic:ACME-12" / "project:ACME". Prefills the picker.
     #[serde(default)]
     pub last_repos: HashMap<String, Vec<String>>,

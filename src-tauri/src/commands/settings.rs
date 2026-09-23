@@ -23,8 +23,6 @@ pub struct Settings {
     pub slack: Option<SlackConfig>,
     pub worktree_root: String,
     pub worktree_root_is_default: bool,
-    /// What Update from base does unless told otherwise: the last one used.
-    pub update_by: crate::git::UpdateBy,
     pub jira_connected: bool,
     pub github_connected: bool,
     pub slack_connected: bool,
@@ -42,7 +40,6 @@ pub fn get_settings(state: State<AppState>) -> Settings {
         slack_connected: c.slack.is_some(),
         worktree_root: state.config.worktree_root().to_string_lossy().to_string(),
         worktree_root_is_default: c.worktree_root.is_none(),
-        update_by: c.update_by,
         jira: c.jira,
         github: c.github,
         slack: c.slack,

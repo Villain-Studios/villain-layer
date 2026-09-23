@@ -26,7 +26,7 @@
  */
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
-import type { Catchup, Cleaned, PaneInfo, Synced } from "../lib/types";
+import type { Catchup, Cleaned, PaneInfo, Project, RepoUpdate, Synced } from "../lib/types";
 import { ago, SCENARIOS } from "./world";
 
 type Args = Record<string, unknown>;
@@ -150,6 +150,20 @@ const answer: Record<string, Answer> = {
     Object.assign(h, { clone: "ok", found: null, origin: `git@github.com:acme/${p.name}.git` });
     return p;
   },
+  set_project_update_by: (a) => {
+    const p = world.projects.find((x) => x.id === a.projectId);
+    if (p) p.update_by = (a.by as Project["update_by"]) ?? null;
+    return null;
+  },
+  update_from_base: (a) =>
+    (a.picks as { checkout_id: string; by: string }[]).map((pick): RepoUpdate => {
+      const c = world.tasks.flatMap((t) => t.checkouts).find((x) => x.id === pick.checkout_id);
+      return {
+        checkout_id: pick.checkout_id, repo: c?.project_name ?? "?", base: c?.base ?? "main",
+        outcome: "updated", commits: 2, conflicts: [],
+        detail: pick.by === "rebase" ? "rebased onto 2 new commits" : "merged 2 commits",
+      };
+    }),
   cleanup_plan: () => world.cleanup,
   cleanup_apply: (a) => {
     const ids = a.ids as string[];

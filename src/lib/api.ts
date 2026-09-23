@@ -55,6 +55,8 @@ export const api = {
   repoHealth: () => invoke<RepoHealth[]>("repo_health"),
   locateProject: (projectId: string, path: string) =>
     invoke<Project>("locate_project", { projectId, path }),
+  setProjectUpdateBy: (projectId: string, by: UpdateBy | null) =>
+    invoke<void>("set_project_update_by", { projectId, by }),
   syncRepos: (projectIds: string[]) => invoke<Synced[]>("sync_repos", { projectIds }),
   cleanupPlan: () => invoke<CleanupItem[]>("cleanup_plan"),
   cleanupApply: (ids: string[]) => invoke<Cleaned[]>("cleanup_apply", { ids }),
@@ -144,8 +146,8 @@ export const api = {
   commitTask: (taskId: string, message: string) =>
     invoke<RepoResult[]>("commit_task", { taskId, message }),
   /** Merge each repo's base into the branch; all of the task's repos when `checkoutIds` is null. */
-  updateFromBase: (taskId: string, checkoutIds: string[] | null, by: UpdateBy) =>
-    invoke<RepoUpdate[]>("update_from_base", { taskId, checkoutIds, by }),
+  updateFromBase: (taskId: string, picks: { checkout_id: string; by: UpdateBy }[]) =>
+    invoke<RepoUpdate[]>("update_from_base", { taskId, picks }),
   /** Abandon a conflicted merge or rebase, putting the branch back. */
   abortUpdate: (checkoutId: string) => invoke<void>("abort_update", { checkoutId }),
   /** Typed into `paneId` when given; otherwise only returned, to start an agent with. */

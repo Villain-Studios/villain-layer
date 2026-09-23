@@ -16,7 +16,7 @@ pub use store::{
 };
 pub use upkeep::{
     branch_tips, delete_branch_at, fast_forward, fetch_store, fetched_at, holds, is_bare,
-    list_worktrees, only_here, origin_url, same_remote, standing, Forwarded,
+    list_worktrees, only_here, origin_url, same_remote, standing, update_style, Forwarded,
 };
 
 fn command(dir: &Path, args: &[&str]) -> Command {

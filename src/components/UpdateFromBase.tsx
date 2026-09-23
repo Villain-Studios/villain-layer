@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api } from "../lib/api";
-import { useStore } from "../store";
+import { updateByFor, useStore } from "../store";
 import type { RepoUpdate, TaskView, UpdateBy } from "../lib/types";
 import { Modal, Spinner } from "./ui";
 import { AgentTargetFields, useAgentTarget } from "./AgentTarget";
@@ -13,6 +13,10 @@ const OUTCOME_DOT: Record<RepoUpdate["outcome"], string> = {
 };
 
 /** What each way does, said where the choice is made. */
+/** Both at once, for a task whose repos go different ways. */
+const HOW_BOTH =
+  "Merge keeps the branch's history, so its pull request needs no force push. Rebase replays it on top of the base for a straight line, and the next push replaces the remote branch — only if nobody else has pushed to it since.";
+
 const HOW: Record<UpdateBy, string> = {
   merge:
     "Merges each base into the branch, the way GitHub's Update branch does. History is kept, so an open pull request needs no force push.",
@@ -29,8 +33,9 @@ const HOW: Record<UpdateBy, string> = {
  */
 export function UpdateFromBase({ task, onClose }: { task: TaskView; onClose: () => void }) {
   const refreshTasks = useStore((s) => s.refreshTasks);
-  const refreshSettings = useStore((s) => s.refreshSettings);
-  const lastBy = useStore((s) => s.settings?.update_by ?? "merge");
+  const refreshRepos = useStore((s) => s.refreshRepos);
+  const projects = useStore((s) => s.projects);
+  const health = useStore((s) => s.repoHealth);
   const toast = useStore((s) => s.toast);
   const fail = useStore((s) => s.fail);
   const at = useAgentTarget(task);
@@ -41,10 +46,18 @@ export function UpdateFromBase({ task, onClose }: { task: TaskView; onClose: () 
   const [results, setResults] = useState<RepoUpdate[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [aborted, setAborted] = useState<Set<string>>(new Set());
-  // The last one used: a team that rebases rebases every time.
-  const [by, setBy] = useState<UpdateBy>(lastBy);
-  /** What the results were produced by, for wording them. */
-  const [ran, setRan] = useState<UpdateBy | null>(null);
+  // Each repo its own team's way (UPD-7): one choice for the whole task
+  // was wrong as soon as a task spanned a team that merges and one that
+  // rebases.
+  const way = (projectId: string) =>
+    updateByFor(projects.find((p) => p.id === projectId), health[projectId]);
+  const [by, setBy] = useState<Record<string, UpdateBy>>(
+    () => Object.fromEntries(task.checkouts.map((c) => [c.id, way(c.project_id).by])),
+  );
+  /** What each repo's result was produced by, for wording it. */
+  const [ran, setRan] = useState<Record<string, UpdateBy> | null>(null);
+  const modes = new Set([...picked].map((id) => by[id] ?? "merge"));
+  const only = modes.size === 1 ? [...modes][0] : null;
 
   // Unfinished merges: from this run, or already there when the dialog
   // opened — an agent may not have finished the last one.
@@ -58,20 +71,25 @@ export function UpdateFromBase({ task, onClose }: { task: TaskView; onClose: () 
   async function update() {
     setBusy(true);
     try {
-      const out = await api.updateFromBase(task.id, [...picked], by);
+      const chosen = Object.fromEntries([...picked].map((id) => [id, by[id] ?? "merge"])) as Record<string, UpdateBy>;
+      const out = await api.updateFromBase(
+        task.id,
+        Object.entries(chosen).map(([checkout_id, b]) => ({ checkout_id, by: b })),
+      );
       setResults(out);
-      setRan(by);
+      setRan(chosen);
       setAborted(new Set());
-      const updated = out.filter((r) => r.outcome === "updated").length;
+      const updated = out.filter((r) => r.outcome === "updated");
       const clashes = out.filter((r) => r.outcome === "conflicts").length;
-      if (updated > 0 && clashes === 0) {
+      if (updated.length > 0 && clashes === 0) {
+        const rebased = updated.some((r) => chosen[r.checkout_id] === "rebase");
         toast(
           "success",
-          `${by === "rebase" ? "Rebased" : "Brought"} ${updated} repo${updated === 1 ? "" : "s"} up to date` +
-            (by === "rebase" ? " — Push all replaces the remote branches" : ""),
+          `Brought ${updated.length} repo${updated.length === 1 ? "" : "s"} up to date` +
+            (rebased ? " — Push all replaces the remote branches that were rebased" : ""),
         );
       }
-      await Promise.all([refreshTasks().catch(() => {}), refreshSettings().catch(() => {})]);
+      await Promise.all([refreshTasks().catch(() => {}), refreshRepos().catch(() => {})]);
     } catch (e) {
       fail(e);
     } finally {
@@ -116,8 +134,8 @@ export function UpdateFromBase({ task, onClose }: { task: TaskView; onClose: () 
         onClick={() => void update()}
       >
         {busy
-          ? by === "rebase" ? "Rebasing…" : "Merging…"
-          : `${by === "rebase" ? "Rebase" : "Merge into"} ${picked.size} repo${picked.size === 1 ? "" : "s"}`}
+          ? only === "rebase" ? "Rebasing…" : only === "merge" ? "Merging…" : "Updating…"
+          : `${only === "rebase" ? "Rebase" : only === "merge" ? "Merge into" : "Update"} ${picked.size} repo${picked.size === 1 ? "" : "s"}`}
       </button>
     </>
   ) : (
@@ -142,20 +160,10 @@ export function UpdateFromBase({ task, onClose }: { task: TaskView; onClose: () 
     <Modal title="Update from base" onClose={() => !busy && onClose()} footer={footer}>
       {results === null && conflicted.length === 0 && (
         <>
-          <div className="section-tabs" style={{ marginBottom: 10 }}>
-            {(["merge", "rebase"] as UpdateBy[]).map((b) => (
-              <button
-                key={b}
-                className={by === b ? "active" : ""}
-                disabled={busy}
-                onClick={() => setBy(b)}
-              >
-                {b === "merge" ? "Merge" : "Rebase"}
-              </button>
-            ))}
-          </div>
           <p className="muted" style={{ marginTop: 0, lineHeight: 1.55, fontSize: 13 }}>
-            Fetches each base first. {HOW[by]} Push afterwards to update the PRs.
+            Fetches each base first.{" "}
+            {only ? HOW[only] : HOW_BOTH} Push afterwards to
+            update the PRs. Each repo starts the way its team updates branches; hover to see why.
           </p>
           {task.checkouts.map((c) => {
             const edited = (c.status?.staged ?? 0) + (c.status?.unstaged ?? 0);
@@ -180,6 +188,25 @@ export function UpdateFromBase({ task, onClose }: { task: TaskView; onClose: () 
                     <span className="muted">← origin/{c.base}</span>
                     {!c.exists && <span className="chip del">worktree missing</span>}
                     {edited > 0 && <span className="chip warn">uncommitted changes</span>}
+                    <div className="spacer" />
+                    {/* Inside the label, so a click here would tick the repo too. */}
+                    <span
+                      className="by-toggle"
+                      title={way(c.project_id).why}
+                      onClick={(e) => e.preventDefault()}
+                    >
+                      {(["merge", "rebase"] as UpdateBy[]).map((b) => (
+                        <button
+                          key={b}
+                          type="button"
+                          className={(by[c.id] ?? "merge") === b ? "active" : ""}
+                          disabled={!c.exists || busy}
+                          onClick={() => setBy((m) => ({ ...m, [c.id]: b }))}
+                        >
+                          {b === "merge" ? "Merge" : "Rebase"}
+                        </button>
+                      ))}
+                    </span>
                   </div>
                   {edited > 0 && (
                     <div className="fb-body">Commit or stash them first — this repo will be skipped.</div>
@@ -200,7 +227,7 @@ export function UpdateFromBase({ task, onClose }: { task: TaskView; onClose: () 
 
       {busy && results === null && (
         <div className="row muted" style={{ marginTop: 10 }}>
-          <Spinner /> Fetching and {by === "rebase" ? "rebasing" : "merging"}…
+          <Spinner /> Fetching and {only === "rebase" ? "rebasing" : only === "merge" ? "merging" : "updating"}…
         </div>
       )}
 
@@ -217,7 +244,7 @@ export function UpdateFromBase({ task, onClose }: { task: TaskView; onClose: () 
             <div className="row">
               <span className="name">{r.repo}</span>
               <span className="muted">
-                {aborted.has(r.checkout_id) ? `${ran ?? "update"} abandoned` : r.detail}
+                {aborted.has(r.checkout_id) ? `${ran?.[r.checkout_id] ?? "update"} abandoned` : r.detail}
               </span>
             </div>
             {r.outcome === "conflicts" && !aborted.has(r.checkout_id) && (
@@ -231,7 +258,7 @@ export function UpdateFromBase({ task, onClose }: { task: TaskView; onClose: () 
         <div style={{ marginTop: results ? 14 : 0 }}>
           <p className="muted" style={{ lineHeight: 1.55, fontSize: 13, marginTop: 0 }}>
             {results
-              ? `The ${ran} is left in progress where it stopped, so the conflicts can be resolved.`
+              ? "What stopped is left in progress where it stopped, so the conflicts can be resolved."
               : "An earlier update is still in progress."}{" "}
             An agent can resolve them and finish it, or abandon it here to put the branch back as
             it was.
@@ -240,7 +267,7 @@ export function UpdateFromBase({ task, onClose }: { task: TaskView; onClose: () 
             <div key={c.id} className="check">
               <span className="name">{c.project_name}</span>
               <button className="btn btn-sm" disabled={busy} onClick={() => void abort(c.id)}>
-                Abandon {ran ?? "update"}
+                Abandon {ran?.[c.id] ?? "update"}
               </button>
             </div>
           ))}

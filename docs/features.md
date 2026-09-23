@@ -54,7 +54,8 @@ up** removes what tasks left behind.
   registered and still the same repository, where it fetches from, whether
   the app's copy exists and when it last fetched, and how the clone's
   default branch stands against origin's (behind, or with commits of its
-  own). A repo with a problem says what the problem is, with its fix beside
+  own), and how Update from base updates branches there (UPD-7), which can
+  be set. A repo with a problem says what the problem is, with its fix beside
   it, and its group opens. Read when the view opens and after anything here
   changes it, never on a timer.
 - **REPO-6** Locate MUST point a repo at another folder without taking it
@@ -325,8 +326,8 @@ Code: `commands/diff.rs`, `git.rs`, `DiffView.tsx`.
 
 ## 7. Update from base
 
-Brings each repo's branch up to date with its base, by merge or by rebase.
-The mode used last is the default next time.
+Brings each repo's branch up to date with its base, by merge or by rebase,
+each repo its own team's way.
 
 - **UPD-1** It MUST refuse when tracked files have uncommitted edits.
   Untracked files are fine. It also refuses when the worktree is on another
@@ -345,9 +346,21 @@ The mode used last is the default next time.
   the branch point as it was. Any other failure is aborted at once, so a
   worktree is never left half updated.
 - **UPD-6** The branch point moves to what was merged in, or rebased onto.
+- **UPD-7** Each repo MUST start on its own way of updating: what it is set
+  to in Repos, or the way it was last updated; else a guess from its
+  default branch's last 40 first-parent commits in the app's copy (merge
+  commits, or squashed pull requests: merge; a straight line of commits:
+  rebase); else merge. The guess is said to be one, with its reason, and
+  never overrides a choice. One app-wide mode, the last used, was wrong as
+  soon as a task spanned a team that merges and one that rebases.
 
 Code: `commands/diff.rs` (`update_from_base`), `git.rs`,
-`UpdateFromBase.tsx`.
+`git/upkeep.rs` (`update_style`), `UpdateFromBase.tsx`.
+
+Known gaps:
+- The guess reads only history. The site's own rules for the base branch
+  (GitHub's "require linear history", a ruleset's allowed merge methods)
+  are not asked, though they would be firmer than a guess.
 
 ## 8. Pull requests
 

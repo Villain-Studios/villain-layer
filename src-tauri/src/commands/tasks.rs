@@ -345,6 +345,14 @@ pub(crate) fn checkout_path(root: &Path, project: &Project, taken: &[String]) ->
     root.join(name)
 }
 
+/// The branch a repo's worktree is cut from: the task's, or the repo's own.
+fn base_for(project: &Project, base: Option<&str>) -> String {
+    base.map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(project.default_branch.as_str())
+        .to_string()
+}
+
 pub(crate) fn create_checkout(
     state: &AppState,
     task: &Task,
@@ -353,6 +361,8 @@ pub(crate) fn create_checkout(
     // When set, every repo in the task is cut from this; otherwise each uses
     // its own default branch. Empty strings are treated as unset.
     base: Option<&str>,
+    // The base was fetched already, with the other repos' — see `new_task`.
+    fetched: bool,
 ) -> Result<Checkout> {
     let root = PathBuf::from(&task.root);
     let path = checkout_path(&root, project, taken);
@@ -362,18 +372,13 @@ pub(crate) fn create_checkout(
             .unwrap_or_default(),
     );
 
-    let base = base
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or(project.default_branch.as_str())
-        .to_string();
-
-    let base_commit = git::add_worktree(
-        &PathBuf::from(&project.path),
-        &path,
-        &task.branch,
-        &base,
-    )?;
+    let base = base_for(project, base);
+    let repo = PathBuf::from(&project.path);
+    let base_commit = if fetched {
+        git::add_worktree_fetched(&repo, &path, &task.branch, &base)?
+    } else {
+        git::add_worktree(&repo, &path, &task.branch, &base)?
+    };
 
     let checkout = Checkout {
         id: uuid::Uuid::new_v4().to_string(),
@@ -459,6 +464,13 @@ pub(crate) fn new_task(state: &AppState, req: NewTask) -> Result<Task> {
         .map(str::trim)
         .filter(|s| !s.is_empty());
 
+    // Every base at once, before any worktree: see `git::fetch_bases`.
+    let targets: Vec<(PathBuf, String)> = projects
+        .iter()
+        .map(|p| (PathBuf::from(&p.path), base_for(p, base)))
+        .collect();
+    git::fetch_bases(&targets);
+
     let mut taken = Vec::new();
     let mut created = Vec::new();
     for project in &projects {
@@ -468,7 +480,7 @@ pub(crate) fn new_task(state: &AppState, req: NewTask) -> Result<Task> {
         // the new base — the old base's commits then showed up in the diff.
         let repo = PathBuf::from(&project.path);
         let fresh_branch = !git::branch_exists(&repo, &task.branch);
-        match create_checkout(state, &task, project, &mut taken, base) {
+        match create_checkout(state, &task, project, &mut taken, base, true) {
             Ok(c) => created.push((c, fresh_branch)),
             Err(e) => {
                 // Leave nothing half-built: unwind the worktrees we just made,
@@ -658,7 +670,7 @@ pub(crate) fn add_checkout_inner(
     let shared = existing.first().map(|c| c.base.as_str()).filter(|&b| {
         existing.iter().all(|c| c.base == b)
     });
-    create_checkout(state, &task, &project, &mut taken, shared)
+    create_checkout(state, &task, &project, &mut taken, shared, false)
 }
 
 /// Off the command thread for the same reason `delete_task` is: this stops

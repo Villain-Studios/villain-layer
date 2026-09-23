@@ -177,6 +177,40 @@ fn fetch_base(repo: &Path, base: &str) {
     let _ = run(repo, &["fetch", "--quiet", "origin", base]);
 }
 
+/// Both names reach git where it still reads options: `fetch origin <base>`
+/// took `--upload-pack=<command>` as one and ran the command. The base can
+/// come from an agent through the MCP server, so this is the door, not a
+/// typo check.
+fn check_names(branch: &str, base: &str) -> Result<()> {
+    for (what, name) in [("branch", branch), ("base", base)] {
+        if name.trim().is_empty() || name.starts_with('-') {
+            return Err(Error::Git(format!("{name:?} is not a usable {what} name")));
+        }
+    }
+    Ok(())
+}
+
+/// `fetch_base` for several repositories at once.
+///
+/// A task spanning repos fetched each base in turn, a network round trip
+/// apiece, before its worktree could be made — so a four-repo task waited on
+/// four fetches in a row. They are independent and mostly waiting on the
+/// network, so they overlap.
+pub fn fetch_bases(targets: &[(std::path::PathBuf, String)]) {
+    std::thread::scope(|scope| {
+        for chunk in targets.chunks(8) {
+            let handles: Vec<_> = chunk
+                .iter()
+                .filter(|(_, base)| !base.trim().is_empty() && !base.starts_with('-'))
+                .map(|(repo, base)| scope.spawn(move || fetch_base(repo, base)))
+                .collect();
+            for h in handles {
+                let _ = h.join();
+            }
+        }
+    });
+}
+
 /// Create a worktree at `path`. Creates `branch` from `base` when it does not
 /// already exist, otherwise checks the existing branch out.
 /// Returns the commit the worktree starts at, so the diff has a fixed point.
@@ -186,20 +220,23 @@ pub fn add_worktree(
     branch: &str,
     base: &str,
 ) -> Result<String> {
-    // Both names reach git where it still reads options: `fetch origin
-    // <base>` took `--upload-pack=<command>` as one and ran the command. The
-    // base can come from an agent through the MCP server, so this is the
-    // door, not a typo check.
-    for (what, name) in [("branch", branch), ("base", base)] {
-        if name.trim().is_empty() || name.starts_with('-') {
-            return Err(Error::Git(format!("{name:?} is not a usable {what} name")));
-        }
-    }
+    check_names(branch, base)?;
+    fetch_base(repo, base);
+    add_worktree_fetched(repo, path, branch, base)
+}
+
+/// `add_worktree` for a base already brought up to date by `fetch_bases`.
+pub fn add_worktree_fetched(
+    repo: &Path,
+    path: &Path,
+    branch: &str,
+    base: &str,
+) -> Result<String> {
+    check_names(branch, base)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let path_s = path.to_string_lossy().to_string();
-    fetch_base(repo, base);
     let start = resolve_base(repo, base);
 
     if branch_exists(repo, branch) {
@@ -793,6 +830,16 @@ mod tests {
             newest.as_str()
         );
         assert_eq!(std::fs::read_to_string(wt.join("a.txt")).unwrap(), "new\n");
+
+        // The same through the parallel fetch a multi-repo task uses.
+        std::fs::write(seed.join("a.txt"), "newer\n").unwrap();
+        run(&seed, &["commit", "-am", "newer tip"]).unwrap();
+        run(&seed, &["push", "-q"]).unwrap();
+        let newer = run(&seed, &["rev-parse", "HEAD"]).unwrap().trim().to_string();
+        fetch_bases(&[(local.clone(), "main".to_string())]);
+        let wt2 = root.join("wt2");
+        let point = add_worktree_fetched(&local, &wt2, "feature/fresher", "main").unwrap();
+        assert_eq!(point, newer);
 
         std::fs::remove_dir_all(root).ok();
     }

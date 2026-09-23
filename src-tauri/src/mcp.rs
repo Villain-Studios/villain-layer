@@ -519,10 +519,13 @@ async fn call(app: &AppHandle, name: &str, args: Value) -> Result<Value> {
     }
 
     match name {
-        // The `*_inner` forms, not the commands: a command now hands its work
-        // to the blocking pool, and this handler is already off the main
-        // thread.
-        "list_tasks" => Ok(serde_json::to_value(commands::list_tasks_inner(&state, None))?),
+        // The `*_inner` forms, handed to the blocking pool here. This handler
+        // is off the main thread already, but it is on the async runtime, and
+        // a git status of every worktree there holds up this server and the
+        // Jira and GitHub clients that share its workers.
+        "list_tasks" => Ok(serde_json::to_value(
+            commands::blocking(app.clone(), |s| Ok(commands::list_tasks_inner(s, None))).await?,
+        )?),
 
         "list_repos" => Ok(serde_json::to_value(commands::list_projects(state))?),
 
@@ -530,18 +533,19 @@ async fn call(app: &AppHandle, name: &str, args: Value) -> Result<Value> {
             let id = required(&args, "task_id")?.to_string();
             // An agent asking what a task changed means the branch, not what
             // happens to be uncommitted at this second.
-            Ok(serde_json::to_value(commands::diff_files_inner(
-                &state,
-                id,
-                Some(crate::git::Scope::Branch),
-                None,
-                None,
-            )?)?)
+            Ok(serde_json::to_value(
+                commands::blocking(app.clone(), move |s| {
+                    commands::diff_files_inner(s, id, Some(crate::git::Scope::Branch), None, None)
+                })
+                .await?,
+            )?)
         }
 
         "jira_search" => {
             let jql = required(&args, "jql")?.to_string();
-            let max = args.get("max").and_then(|m| m.as_u64()).unwrap_or(25) as u32;
+            // Clamped before the cast: a huge value wrapped to 0 and came back
+            // empty, and one just under the wrap paged through the whole site.
+            let max = args.get("max").and_then(|m| m.as_u64()).unwrap_or(25).clamp(1, 500) as u32;
             let (client, _) = commands::jira_client(&state)?;
             Ok(serde_json::to_value(client.search(&jql, max).await?.issues)?)
         }
@@ -664,7 +668,11 @@ async fn call(app: &AppHandle, name: &str, args: Value) -> Result<Value> {
                     ))
                 })?;
 
-            let added = commands::add_repo(&state, &task_id, &project.id)?;
+            let project_id = project.id.clone();
+            let added = commands::blocking(app.clone(), move |s| {
+                commands::add_repo(s, &task_id, &project_id)
+            })
+            .await?;
             Ok(json!({
                 "repo": project.name,
                 "path": added.checkout.path,
@@ -706,19 +714,17 @@ async fn call(app: &AppHandle, name: &str, args: Value) -> Result<Value> {
 
         "create_task" => {
             let ids = resolve_repos(&state, &args)?;
-            let task = commands::new_task(
-                &state,
-                commands::NewTask {
-                    name: required(&args, "name")?.to_string(),
-                    project_ids: ids,
-                    branch: arg(&args, "branch").map(str::to_string),
-                    branch_suffix: None,
-                    base: arg(&args, "base").map(str::to_string),
-                    issue_key: None,
-                    issue_url: None,
-                    epic_key: None,
-                },
-            )?;
+            let req = commands::NewTask {
+                name: required(&args, "name")?.to_string(),
+                project_ids: ids,
+                branch: arg(&args, "branch").map(str::to_string),
+                branch_suffix: None,
+                base: arg(&args, "base").map(str::to_string),
+                issue_key: None,
+                issue_url: None,
+                epic_key: None,
+            };
+            let task = commands::blocking(app.clone(), move |s| commands::new_task(s, req)).await?;
             Ok(serde_json::to_value(task)?)
         }
 

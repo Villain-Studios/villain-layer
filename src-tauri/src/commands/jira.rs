@@ -652,6 +652,10 @@ pub async fn draft_pr_description(
     // follow when that one changes its mind.
     let cwd = PathBuf::from(resolve_scope(&state, &task, None)?.0);
 
+    let out = tauri::async_runtime::spawn_blocking(move || -> Result<String> {
+    // Built in here, not before: gathering the change is a git log, a stat
+    // and a patch per repository, and done out there it ran on the async
+    // workers — the thing this function's own summary says it avoids.
     let prompt = format!(
         concat!(
             "Write the body of a pull request description for the work on branch ",
@@ -672,8 +676,6 @@ pub async fn draft_pr_description(
             .unwrap_or_default(),
         context = review_context(&repos),
     );
-
-    let out = tauri::async_runtime::spawn_blocking(move || -> Result<String> {
         oneshot_haiku(&program, &cwd, &prompt, |text| {
             let _ = app.emit("pr:draft", DraftChunk { task_id: &task_id, text });
         })
@@ -803,7 +805,14 @@ pub fn request_pr_description(
         .collect();
 
     let prompt = format!(
-        "Write the pull request description for the work on branch `{}`{}.\n\n         Write it for a reviewer who has not seen any of this and was not in the          conversation. Cover: what changed and why, anything you decided against or          left unfinished, and where review effort is best spent. Mention what you          verified and what you did not. Do not pad it, and do not restate the diff          file by file.\n\n         Base it on the actual diff{}. Save it as Markdown to:\n{}\n\n         Write only that file, change nothing else, and tell me when it is saved.",
+        "Write the pull request description for the work on branch `{}`{}.\n\n\
+         Write it for a reviewer who has not seen any of this and was not in the \
+         conversation. Cover: what changed and why, anything you decided against or \
+         left unfinished, and where review effort is best spent. Mention what you \
+         verified and what you did not. Do not pad it, and do not restate the diff \
+         file by file.\n\n\
+         Base it on the actual diff{}. Save it as Markdown to:\n{}\n\n\
+         Write only that file, change nothing else, and tell me when it is saved.",
         task.branch,
         task.issue_key
             .as_ref()
@@ -859,59 +868,76 @@ pub async fn handoff_prompt(state: State<'_, AppState>, pane_id: String) -> Resu
     );
     out.push_str("\n\n---\n\n## What has happened so far\n\n");
 
-    let mut any_change = false;
-    for checkout in state.config.checkouts_of(&task.id) {
-        let dir = PathBuf::from(&checkout.path);
-        let repo = state
-            .config
-            .project(&checkout.project_id)
-            .map(|p| p.name)
-            .unwrap_or_else(|_| "unknown".into());
+    // git, per repo: on the blocking pool, not the async workers.
+    let checkouts: Vec<(String, crate::config::Checkout)> = state
+        .config
+        .checkouts_of(&task.id)
+        .into_iter()
+        .map(|c| {
+            let repo = state
+                .config
+                .project(&c.project_id)
+                .map(|p| p.name)
+                .unwrap_or_else(|_| "unknown".into());
+            (repo, c)
+        })
+        .collect();
+    let history = tokio::task::spawn_blocking(move || {
+        let mut out = String::new();
+        for (repo, checkout) in checkouts {
+            let dir = PathBuf::from(&checkout.path);
+            // From the branch point, like the file list under it: measured
+            // against the base branch itself, every commit merged in from
+            // elsewhere since would be listed as this branch's own work.
+            let point = git::baseline(&dir, &checkout.base, checkout.base_commit.as_deref());
+            let commits = git::run(
+                &dir,
+                &["log", "--oneline", "--no-decorate", &format!("{point}..HEAD")],
+            )
+            .unwrap_or_default();
+            let files = git::changed_files(
+                &dir,
+                &checkout.base,
+                checkout.base_commit.as_deref(),
+                git::Scope::Branch,
+            )
+            .unwrap_or_default();
 
-        // From the branch point, like the file list under it: measured against
-        // the base branch itself, every commit merged in from elsewhere since
-        // would be listed as this branch's own work.
-        let point = git::baseline(&dir, &checkout.base, checkout.base_commit.as_deref());
-        let commits = git::run(
-            &dir,
-            &["log", "--oneline", "--no-decorate", &format!("{point}..HEAD")],
-        )
-        .unwrap_or_default();
-        let files = git::changed_files(
-            &dir,
-            &checkout.base,
-            checkout.base_commit.as_deref(),
-            git::Scope::Branch,
-        ).unwrap_or_default();
-
-        if commits.trim().is_empty() && files.is_empty() {
-            continue;
-        }
-        any_change = true;
-        out.push_str(&format!("### {repo}\n"));
-        if !commits.trim().is_empty() {
-            out.push_str("\nCommits on this branch:\n");
-            for line in commits.lines() {
-                out.push_str(&format!("- {line}\n"));
+            if commits.trim().is_empty() && files.is_empty() {
+                continue;
             }
-        }
-        if !files.is_empty() {
-            out.push_str("\nWorking tree against the base branch:\n");
-            for f in &files {
-                out.push_str(&format!("- {} (+{} -{})\n", f.path, f.additions, f.deletions));
+            out.push_str(&format!("### {repo}\n"));
+            if !commits.trim().is_empty() {
+                out.push_str("\nCommits on this branch:\n");
+                for line in commits.lines() {
+                    out.push_str(&format!("- {line}\n"));
+                }
             }
+            if !files.is_empty() {
+                out.push_str("\nWorking tree against the base branch:\n");
+                for f in &files {
+                    out.push_str(&format!("- {} (+{} -{})\n", f.path, f.additions, f.deletions));
+                }
+            }
+            out.push('\n');
         }
-        out.push('\n');
-    }
-    if !any_change {
+        out
+    })
+    .await
+    .map_err(|e| Error::Other(format!("background work failed: {e}")))?;
+    if history.is_empty() {
         out.push_str("Nothing has been committed or changed yet.\n\n");
+    } else {
+        out.push_str(&history);
     }
 
     // The outgoing agent's own words, as far as they got.
     if let Ok(tail) = state.ptys.transcript(&pane_id, 120) {
         if !tail.trim().is_empty() {
             out.push_str(&format!(
-                "## The previous agent's terminal, most recent last\n\n                 This is raw output from {}, not a summary, and may be truncated                  mid-thought.\n\n```\n{tail}\n```\n\n",
+                "## The previous agent's terminal, most recent last\n\n\
+                 This is raw output from {}, not a summary, and may be truncated \
+                 mid-thought.\n\n```\n{tail}\n```\n\n",
                 pane.title,
             ));
         }
@@ -1052,7 +1078,11 @@ pub struct NewJiraTask {
 /// be worse than the orphan — and the error says so, naming the key, so the
 /// work can be picked up with "start work" once the repositories are sorted.
 #[tauri::command]
-pub async fn jira_create_task(state: State<'_, AppState>, req: NewJiraTask) -> Result<Started> {
+pub async fn jira_create_task(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    req: NewJiraTask,
+) -> Result<Started> {
     if req.project_ids.is_empty() {
         return Err(Error::Other("pick at least one repository".into()));
     }
@@ -1086,19 +1116,20 @@ pub async fn jira_create_task(state: State<'_, AppState>, req: NewJiraTask) -> R
         .await?;
     let url = format!("{}/browse/{key}", cfg.base_url.trim_end_matches('/'));
 
-    let task = new_task(
-        &state,
-        NewTask {
-            name: format!("{key} {summary}"),
-            project_ids: req.project_ids,
-            branch: None,
-            branch_suffix: req.branch_suffix,
-            base: req.base,
-            issue_key: Some(key.clone()),
-            issue_url: Some(url),
-            epic_key: req.parent_key.clone(),
-        },
-    )
+    let new = NewTask {
+        name: format!("{key} {summary}"),
+        project_ids: req.project_ids,
+        branch: None,
+        branch_suffix: req.branch_suffix,
+        base: req.base,
+        issue_key: Some(key.clone()),
+        issue_url: Some(url),
+        epic_key: req.parent_key.clone(),
+    };
+    // Worktrees on the blocking pool: a `git fetch` and a `worktree add` per
+    // repository do not belong on the async workers.
+    let task = super::blocking(app.clone(), move |state| new_task(state, new))
+    .await
     .map_err(|e| {
         Error::Other(format!(
             "{key} was filed in Jira, but its worktrees were not created: {e}. The ticket \
@@ -1185,34 +1216,28 @@ pub async fn jira_start_work(
     let (client, _) = jira_client(&state)?;
     let issue = client.issue(&key).await?;
 
-    let task = new_task(
-        &state,
-        NewTask {
-            name: format!("{} {}", issue.key, issue.summary),
-            project_ids,
-            branch: None,
-            branch_suffix,
-            base,
-            issue_key: Some(issue.key.clone()),
-            issue_url: Some(issue.url.clone()),
-            epic_key: issue.epic_key.clone(),
-        },
-    )?;
+    let new = NewTask {
+        name: format!("{} {}", issue.key, issue.summary),
+        project_ids,
+        branch: None,
+        branch_suffix,
+        base,
+        issue_key: Some(issue.key.clone()),
+        issue_url: Some(issue.url.clone()),
+        epic_key: issue.epic_key.clone(),
+    };
+    // Worktrees on the blocking pool, as in `create_task`.
+    let task = super::blocking(app.clone(), move |state| new_task(state, new)).await?;
 
     if let Some(agent_id) = agent_id {
         let repos = task_repos(&state, &task);
-
-        start_agent(
-            &app,
-            &state,
-            task.id.clone(),
-            agent_id,
-            None,
-            Some(ticket_prompt(&issue, &task, &repos, true)),
-            false,
-            None,
-            None,
-        )?;
+        let prompt = ticket_prompt(&issue, &task, &repos, true);
+        let task_id = task.id.clone();
+        let handle = app.clone();
+        super::blocking(app.clone(), move |state| {
+            start_agent(&handle, state, task_id, agent_id, None, Some(prompt), false, None, None)
+        })
+        .await?;
     }
 
     let moved = sync_started(&state, &issue.key).await;

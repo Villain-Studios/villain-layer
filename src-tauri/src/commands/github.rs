@@ -229,6 +229,13 @@ pub async fn github_all_prs(state: State<'_, AppState>) -> Result<Vec<TaskPrs>> 
     Ok(out)
 }
 
+/// Blocking work — git, mostly — from an async command, on the blocking pool.
+async fn off_runtime<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Result<T> {
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| Error::Other(format!("background work failed: {e}")))
+}
+
 /// How many tasks the PR sweep asks GitHub about at once.
 const SWEEP_TASKS: usize = 4;
 
@@ -350,7 +357,7 @@ pub(crate) async fn task_prs(
     // every other request sharing it.
     let local = {
         let checkouts = checkouts.clone();
-        tokio::task::spawn_blocking(move || {
+        off_runtime(move || {
             checkouts
                 .iter()
                 .map(|c| {
@@ -368,8 +375,7 @@ pub(crate) async fn task_prs(
                 })
                 .collect::<Vec<_>>()
         })
-        .await
-        .map_err(|e| Error::Other(format!("background work failed: {e}")))?
+        .await?
     };
 
     // Then GitHub, for every repo at once.
@@ -477,12 +483,13 @@ pub async fn github_open_prs(
         let project = state.config.project(&checkout.project_id)?;
         let repo = project.name.clone();
 
-        let changed = git::changed_count(
-            &dir,
-            &checkout.base,
-            checkout.base_commit.as_deref(),
-            git::Scope::Branch,
-        );
+        let changed = {
+            let (dir, base, point) = (dir.clone(), checkout.base.clone(), checkout.base_commit.clone());
+            off_runtime(move || {
+                git::changed_count(&dir, &base, point.as_deref(), git::Scope::Branch)
+            })
+            .await?
+        };
         if changed == 0 {
             results.push(RepoResult {
                 checkout_id: checkout.id,
@@ -498,8 +505,16 @@ pub async fn github_open_prs(
         // the channel when it was opened, and saying so again on every press
         // of the button is noise that makes the real announcements look alike.
         let outcome: Result<(OpenedPr, bool)> = async {
-            git::push(&dir, &task.branch)?;
-            let (owner, name) = git::origin_slug(&dir)?;
+            // A push is a network round trip with no timeout of its own; on
+            // the async workers it held up the MCP server until git gave up.
+            let (owner, name) = {
+                let (dir, branch) = (dir.clone(), task.branch.clone());
+                off_runtime(move || {
+                    git::push(&dir, &branch)?;
+                    git::origin_slug(&dir)
+                })
+                .await??
+            };
 
             let (pr, new) = match client.pull_for_branch(&owner, &name, &task.branch).await? {
                 Some(existing) => (existing, false),

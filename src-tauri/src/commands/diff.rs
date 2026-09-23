@@ -292,9 +292,9 @@ fn push_task_inner(state: &AppState, task_id: String) -> Result<Vec<RepoResult>>
             .unwrap_or_else(|_| "(unknown)".into());
         let lease = checkout.push_lease.as_deref();
         let (ok, detail) = match git::push(&PathBuf::from(&checkout.path), &task.branch, lease) {
-            Ok(_) => {
+            Ok(replaced) => {
                 pushed(state, &checkout.id);
-                (true, if lease.is_some() { "pushed, replacing the pre-rebase branch" } else { "pushed" }.into())
+                (true, if replaced { "pushed, replacing the pre-rebase branch" } else { "pushed" }.into())
             }
             Err(e) => (false, e.to_string()),
         };
@@ -315,7 +315,7 @@ pub struct RepoUpdate {
     pub checkout_id: String,
     pub repo: String,
     pub base: String,
-    /// "up_to_date", "merged", "conflicts" or "failed".
+    /// "up_to_date", "updated", "conflicts" or "failed".
     pub outcome: &'static str,
     /// Commits the base had that the branch did not.
     pub commits: u32,
@@ -365,20 +365,19 @@ fn update_from_base_inner(
         .filter(|c| checkout_ids.as_ref().is_none_or(|ids| ids.contains(&c.id)))
         .filter(|c| std::path::Path::new(&c.path).is_dir())
         .collect();
-    let fetch = |name: &dyn Fn(&crate::config::Checkout) -> String| {
-        git::fetch_bases(
-            &checkouts
-                .iter()
-                .map(|c| (PathBuf::from(&c.path), name(c)))
-                .collect::<Vec<_>>(),
-        )
-    };
-    fetch(&|c| c.base.clone());
-    // One after the other, not together: two fetches at once in one
-    // repository race for its FETCH_HEAD.
-    if by == git::UpdateBy::Rebase {
-        fetch(&|_| task.branch.clone());
-    }
+    // Every repository at once, but base then branch within each: two
+    // fetches at once in one repository race for its FETCH_HEAD.
+    std::thread::scope(|scope| {
+        for c in &checkouts {
+            let (dir, branch) = (PathBuf::from(&c.path), &task.branch);
+            scope.spawn(move || {
+                git::fetch_bases(&[(dir.clone(), c.base.clone())]);
+                if by == git::UpdateBy::Rebase {
+                    git::fetch_branch(&dir, branch);
+                }
+            });
+        }
+    });
 
     let mut out = Vec::new();
     for checkout in checkouts {
@@ -400,7 +399,7 @@ fn update_from_base_inner(
         // Read before the rebase: afterwards the local branch no longer
         // follows on from it, and it is the one commit a push may replace.
         let remote = git::remote_tip(&dir, &task.branch);
-        match git::update_from_base(&dir, &checkout.base, by) {
+        match git::update_from_base(&dir, &task.branch, &checkout.base, by, checkout.push_lease.as_deref()) {
             Ok((updated, target)) => {
                 match updated {
                     git::Updated::UpToDate => {
@@ -432,12 +431,19 @@ fn update_from_base_inner(
                 // abandoned, the diff is measured as it was before.
                 if row.outcome != "up_to_date" {
                     let (id, rebased) = (checkout.id.clone(), by == git::UpdateBy::Rebase);
+                    let stopped = row.outcome == "conflicts";
                     state.config.update(|c| {
                         if let Some(found) = c.checkouts.iter_mut().find(|c| c.id == id) {
+                            found.point_before_update =
+                                if stopped { found.base_commit.clone() } else { None };
                             found.base_commit = Some(target.clone());
-                            // Kept from an earlier rebase not yet pushed: the
-                            // remote has not moved since, or this one refused.
-                            if rebased && found.push_lease.is_none() {
+                            // What the remote held when this rebase began —
+                            // the rebase went ahead only if the branch had all
+                            // of it, or it was still the last rebase's lease.
+                            // Kept from before, one taken at an earlier rebase
+                            // went stale the moment anyone pushed after it.
+                            // None when the remote no longer has the branch.
+                            if rebased {
                                 found.push_lease = remote.clone();
                             }
                         }
@@ -461,7 +467,17 @@ pub async fn abort_update(app: AppHandle, checkout_id: String) -> Result<()> {
         let checkout = state.config.checkout(&checkout_id)?;
         let done = git::abort_update(&PathBuf::from(&checkout.path));
         state.status_cache.lock().remove(&checkout_id);
-        done
+        done?;
+        // Back where it was measured from before the update began.
+        if let Some(before) = checkout.point_before_update {
+            state.config.update(|c| {
+                if let Some(found) = c.checkouts.iter_mut().find(|c| c.id == checkout_id) {
+                    found.base_commit = Some(before.clone());
+                    found.point_before_update = None;
+                }
+            })?;
+        }
+        Ok(())
     })
     .await
 }

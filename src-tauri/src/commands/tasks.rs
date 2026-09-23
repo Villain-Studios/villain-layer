@@ -388,6 +388,7 @@ pub(crate) fn create_checkout(
         base,
         base_commit: Some(base_commit).filter(|c| !c.is_empty()),
         push_lease: None,
+        point_before_update: None,
     };
     state
         .config

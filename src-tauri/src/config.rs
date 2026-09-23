@@ -68,6 +68,13 @@ pub struct Checkout {
     /// was pushed by someone else since.
     #[serde(default)]
     pub push_lease: Option<String>,
+    /// `base_commit` as it was before an update that stopped on conflicts,
+    /// for abandoning it. The target is recorded as the point straight away;
+    /// abandoned, the branch never reaches it, and without this the diff fell
+    /// back to the merge base and counted the base's merged-in work as the
+    /// branch's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub point_before_update: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -299,6 +306,7 @@ impl AppConfig {
                 // back to the merge base for these.
                 base_commit: None,
                 push_lease: None,
+                point_before_update: None,
             });
         }
         self.version = SCHEMA_VERSION;

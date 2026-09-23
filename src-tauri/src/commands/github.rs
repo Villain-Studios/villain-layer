@@ -866,10 +866,14 @@ pub async fn github_open_prs(
         let project = state.config.project(&checkout.project_id)?;
         let repo = project.name.clone();
 
-        let changed = {
-            let (dir, base, point) = (dir.clone(), checkout.base.clone(), checkout.base_commit.clone());
+        let (changed, commits) = {
+            let (dir, base, point, branch) =
+                (dir.clone(), checkout.base.clone(), checkout.base_commit.clone(), task.branch.clone());
             off_runtime(move || {
-                git::changed_count(&dir, &base, point.as_deref(), git::Scope::Branch)
+                (
+                    git::changed_count(&dir, &base, point.as_deref(), git::Scope::Branch),
+                    git::branch_facts(&dir, &branch, &base, point.as_deref()).commits,
+                )
             })
             .await?
         };
@@ -879,6 +883,17 @@ pub async fn github_open_prs(
                 repo,
                 ok: true,
                 detail: "no changes, skipped".into(),
+            });
+            continue;
+        }
+        // Changes, but none committed: pushed anyway, GitHub refused the PR
+        // with a bare 422 "No commits between".
+        if commits == 0 {
+            results.push(RepoResult {
+                checkout_id: checkout.id,
+                repo,
+                ok: false,
+                detail: "only uncommitted changes — commit them first".into(),
             });
             continue;
         }
@@ -892,13 +907,17 @@ pub async fn github_open_prs(
             // the async workers it held up the MCP server until git gave up.
             let (owner, name) = {
                 let (dir, branch, lease) = (dir.clone(), task.branch.clone(), checkout.push_lease.clone());
-                off_runtime(move || {
+                let slug = off_runtime(move || -> Result<Result<(String, String)>> {
                     git::push(&dir, &branch, lease.as_deref())?;
-                    git::origin_slug(&dir)
+                    Ok(git::origin_slug(&dir))
                 })
-                .await??
+                .await??;
+                // Spent by the push itself, whatever comes after it. Kept
+                // because the slug could not be read, it was sent with every
+                // later push and refused each one as "someone else pushed".
+                super::diff::pushed(&state, &checkout.id);
+                slug?
             };
-            super::diff::pushed(&state, &checkout.id);
 
             let (pr, new) = match client.pull_for_branch(&owner, &name, &task.branch).await? {
                 Some(existing) => (existing, false),

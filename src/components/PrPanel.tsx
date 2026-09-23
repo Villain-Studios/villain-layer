@@ -131,9 +131,9 @@ export function PrPanel({
    * one in the meantime.
    */
   const [askedFor, setAskedFor] = useState<string | null>(null);
-  // Per task, because the panel is not remounted when you switch between them:
-  // a flag left true from the last one would show this one's empty state while
-  // its own rows were still in flight.
+  // Per task rather than a plain flag. The panel is remounted per task now
+  // (TaskMain is keyed by it), but before that a flag left true from the last
+  // task showed this one's empty state while its own rows were in flight.
   const loaded = askedFor === task.id || rows.length > 0;
   const [branches, setBranches] = useState<Record<string, string[]>>({});
   /** Whether the "open a pull request" dialog is up. */
@@ -282,6 +282,7 @@ export function PrPanel({
 
       const started = Date.now();
       if (pollRef.current) window.clearInterval(pollRef.current);
+      // guard: allow poll — waits for a file the agent writes; nothing announces it. Gives up after 5 minutes.
       pollRef.current = window.setInterval(async () => {
         const text = await api.takePrDescription(task.id).catch(() => null);
         if (text) {

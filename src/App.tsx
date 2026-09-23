@@ -6,11 +6,11 @@ import { api } from "./lib/api";
 import { prepareNotifications } from "./lib/notify";
 import { CHAT_TASK_ID, needsYou, selectedTask, stoppedOnPurpose, taskTotals, useStore, type View } from "./store";
 import type { NotifyTarget, TaskView } from "./lib/types";
-import { Sidebar } from "./components/Sidebar";
+import { Sidebar } from "./components/sidebar/Sidebar";
 import { Terminals } from "./components/Terminals";
 import { DiffView } from "./components/DiffView";
 import { PrPanel } from "./components/PrPanel";
-import { TicketsView } from "./components/TicketsView";
+import { TicketsView } from "./components/tickets/TicketsView";
 import { AgentsView } from "./components/AgentsView";
 import { ChatView } from "./components/ChatView";
 import { ReposView } from "./components/ReposView";
@@ -93,10 +93,14 @@ function Watchers() {
       // git-status every few seconds. Quiet stretches stretch further still.
       const tasksMs = !onWork ? 60_000 : quiet ? 30_000 : 12_000;
       const panesMs = quiet ? 15_000 : 5_000;
+      // guard: allow poll — worktrees change under agents, editors and terminals, and git says nothing.
       tasksT = setInterval(() => void refreshTasks({ poll: true }).catch(() => {}), tasksMs);
+      // guard: allow poll — a backstop: restored panes and output-timed states arrive without an event.
       panesT = setInterval(() => void refreshPanes({ poll: true }).catch(() => {}), panesMs);
       if (useStore.getState().settings?.github_connected) {
+        // guard: allow poll — GitHub cannot push to a desktop app; 90s stays inside its search limit.
         prsT = setInterval(() => void refreshPrs(), quiet ? 180_000 : 90_000);
+        // guard: allow poll — as above.
         reviewsT = setInterval(
           () => void refreshReviewQueue({ quiet: true }),
           quiet ? 180_000 : 90_000,
@@ -154,6 +158,7 @@ function Watchers() {
     window.addEventListener("pointerdown", onInput);
     window.addEventListener("keydown", onInput);
 
+    // guard: allow poll — measures time since the last input; "nothing happened" has no event.
     idleT = setInterval(() => {
       if (!useStore.getState().appActive || quiet) return;
       if (Date.now() - lastInput < QUIET_AFTER_MS) return;
@@ -187,6 +192,7 @@ function Watchers() {
   // is away the backend looks for itself, for the banners: a hidden
   // webview's timers are the ones macOS throttles or stops.
   useEffect(() => {
+    // guard: allow poll — Jira cannot push to a desktop app, and this skips itself while away.
     const t = setInterval(() => {
       const s = useStore.getState();
       if (s.appActive && s.settings?.jira_connected) void s.refreshIssues({ quiet: true });

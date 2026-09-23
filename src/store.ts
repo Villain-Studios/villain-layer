@@ -495,6 +495,7 @@ export function useNow(everyMs: number): number {
   useEffect(() => {
     if (!active) return;
     setNow(Date.now());
+    // guard: allow poll — a clock for "3m ago" labels, stopped while the window is away.
     const t = setInterval(() => setNow(Date.now()), everyMs);
     return () => clearInterval(t);
   }, [active, everyMs]);

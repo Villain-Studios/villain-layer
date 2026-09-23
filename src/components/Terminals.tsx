@@ -76,9 +76,10 @@ export function Terminals({ task }: { task: TaskView }) {
   // long gone. Re-checked when panes change, since starting one creates a
   // transcript and ending one is when you want to resume.
   //
-  // Only for a scope that belongs to this task. Switching tasks renders once
-  // with the last task's repo still picked, and that answer — or a slower
-  // earlier one — offered another task's conversations here.
+  // Only for a scope that belongs to this task. Before TaskMain was keyed by
+  // task, switching rendered once with the last task's repo still picked, and
+  // that answer — or a slower earlier one — offered another task's
+  // conversations here.
   const scopeHere = scope && task.checkouts.some((c) => c.id === scope) ? scope : null;
   useEffect(() => {
     let current = true;

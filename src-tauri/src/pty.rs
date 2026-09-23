@@ -704,8 +704,17 @@ impl PtyManager {
     /// that transcript is the only thing that makes a session resumable later.
     fn request_stop(pane: &Pane) {
         if let Some(pid) = pane.pid {
+            // An interactive shell ignores SIGTERM, so a shell pane sat out
+            // the whole grace period and was then killed outright — five
+            // seconds on every ✕, and zsh never saved its history. Hangup is
+            // what a shell expects when its terminal goes: it exits, and
+            // passes the hangup on to the jobs it started.
+            let signal = match pane.meta.lock().info.kind {
+                PaneKind::Shell => libc::SIGHUP,
+                PaneKind::Agent => libc::SIGTERM,
+            };
             // Negative pid signals the whole group, catching subprocesses too.
-            unsafe { libc::kill(-(pid as i32), libc::SIGTERM) };
+            unsafe { libc::kill(-(pid as i32), signal) };
         } else {
             let _ = pane.killer.lock().kill();
         }
@@ -793,9 +802,18 @@ impl PtyManager {
         self.close_matching(|i| i.task_id == task_id);
     }
 
-    /// Kill every pane rooted in one checkout, used when a repo leaves a task.
-    pub fn close_checkout(&self, checkout_id: &str) {
-        self.close_matching(|i| i.checkout_id.as_deref() == Some(checkout_id));
+    /// Kill every pane working inside one checkout, used when a repo leaves a
+    /// task and its worktree is about to be deleted.
+    ///
+    /// By where it runs as well as what it was started for: an agent resumed
+    /// from the task root can be running inside the worktree with no checkout
+    /// recorded, and deleting the folder out from under it is worse than
+    /// stopping it.
+    pub fn close_checkout(&self, checkout_id: &str, path: &str) {
+        let dir = std::path::Path::new(path);
+        self.close_matching(|i| {
+            i.checkout_id.as_deref() == Some(checkout_id) || std::path::Path::new(&i.cwd).starts_with(dir)
+        });
     }
 
     fn close_matching(&self, pred: impl Fn(&PaneInfo) -> bool) {

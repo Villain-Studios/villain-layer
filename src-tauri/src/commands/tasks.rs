@@ -673,7 +673,21 @@ fn remove_checkout_inner(state: &AppState, checkout_id: String, force: bool) -> 
     let checkout = state.config.checkout(&checkout_id)?;
     let project = state.config.project(&checkout.project_id)?;
 
-    state.ptys.close_checkout(&checkout_id);
+    // As in `delete_task`: find out whether git will refuse before stopping
+    // the agents working in there, not after.
+    if !force {
+        if let Ok(status) = git::status(Path::new(&checkout.path)) {
+            if status.dirty_files > 0 {
+                return Err(Error::Git(format!(
+                    "{} has {} uncommitted change{}; nothing was removed",
+                    project.name,
+                    status.dirty_files,
+                    if status.dirty_files == 1 { "" } else { "s" }
+                )));
+            }
+        }
+    }
+    state.ptys.close_checkout(&checkout_id, &checkout.path);
     let repo = PathBuf::from(&project.path);
     if Path::new(&checkout.path).exists() {
         // A refusal — uncommitted work, without force — keeps the record too:
@@ -717,6 +731,38 @@ pub async fn delete_task(
 
 fn delete_task_inner(state: &AppState, id: String, force: bool) -> Result<Vec<RepoResult>> {
     let task = state.config.task(&id)?;
+
+    // Ask before stopping anything. git refuses to remove a dirty worktree
+    // without force, and the task is then kept — but its agents had already
+    // been stopped, so a refused delete still cost every conversation in it.
+    // The sidebar's count that decides whether to force can be minutes old.
+    if !force {
+        let dirty: Vec<RepoResult> = state
+            .config
+            .checkouts_of(&id)
+            .into_iter()
+            .filter_map(|c| {
+                let status = git::status(&PathBuf::from(&c.path)).ok()?;
+                (status.dirty_files > 0).then(|| RepoResult {
+                    repo: state
+                        .config
+                        .project(&c.project_id)
+                        .map(|p| p.name)
+                        .unwrap_or_else(|_| "(unknown)".into()),
+                    checkout_id: c.id,
+                    ok: false,
+                    detail: format!(
+                        "{} uncommitted change{}",
+                        status.dirty_files,
+                        if status.dirty_files == 1 { "" } else { "s" }
+                    ),
+                })
+            })
+            .collect();
+        if !dirty.is_empty() {
+            return Ok(dirty);
+        }
+    }
     state.ptys.close_task(&id);
 
     let mut results = Vec::new();

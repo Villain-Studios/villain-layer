@@ -208,14 +208,29 @@ pub async fn github_all_prs(state: State<'_, AppState>) -> Result<Vec<TaskPrs>> 
         .map(|t| t.id.clone())
         .collect();
 
-    let mut out = Vec::new();
-    for task_id in ids {
-        if let Ok(rows) = task_prs(&state, &client, &task_id).await {
-            out.push(TaskPrs { task_id, rows });
-        }
-    }
+    // A few tasks at a time rather than one after another: with every task's
+    // repos in series a sweep of a dozen tasks took longer than the interval
+    // between sweeps. Not all at once either — GitHub throttles a client that
+    // opens dozens of requests together.
+    use futures_util::stream::{self, StreamExt};
+    let state = &*state;
+    let client = &client;
+    let out = stream::iter(ids)
+        .map(|task_id| async move {
+            task_prs(state, client, &task_id)
+                .await
+                .ok()
+                .map(|rows| TaskPrs { task_id, rows })
+        })
+        .buffered(SWEEP_TASKS)
+        .filter_map(|t| async move { t })
+        .collect::<Vec<_>>()
+        .await;
     Ok(out)
 }
+
+/// How many tasks the PR sweep asks GitHub about at once.
+const SWEEP_TASKS: usize = 4;
 
 /// Pull requests waiting on the signed-in user, and on the configured team.
 #[derive(Debug, Serialize)]
@@ -242,11 +257,20 @@ pub struct TeamReviews {
 #[tauri::command]
 pub async fn github_review_queue(state: State<'_, AppState>) -> Result<ReviewQueue> {
     let (client, cfg) = github_client(&state)?;
-    let (mine, mine_more) = client.search_prs(github::mine_review_query()).await?;
-    let team = match cfg.review_team.as_deref() {
-        Some(raw) => Some(load_team_reviews(&client, raw, &mine).await),
-        None => None,
+    // The two searches need nothing from each other, so they go together;
+    // only the de-duplication waits for both.
+    let team = async {
+        match cfg.review_team.as_deref() {
+            Some(raw) => Some(load_team_reviews(&client, &cfg.api_url, raw).await),
+            None => None,
+        }
     };
+    let (mine, team) = tokio::join!(client.search_prs(github::mine_review_query()), team);
+    let (mine, mine_more) = mine?;
+    let team = team.map(|mut t| {
+        github::drop_already_listed(&mut t.prs, &mine);
+        t
+    });
     Ok(ReviewQueue {
         mine,
         mine_more,
@@ -254,42 +278,55 @@ pub async fn github_review_queue(state: State<'_, AppState>) -> Result<ReviewQue
     })
 }
 
+/// The last review team resolved, keyed by the API and the setting it came
+/// from.
+///
+/// A team given without its org is found by walking `/user/teams`, up to ten
+/// pages, and that walk was repeated on every poll of the review queue for an
+/// answer that changes when the setting does.
+static RESOLVED_TEAM: parking_lot::Mutex<Option<(String, String, github::GhTeam)>> =
+    parking_lot::Mutex::new(None);
+
 /// The team column must not take the personal one down with it: a missing
 /// `read:org` scope, or a slug that matches nothing, is a problem with that
 /// column alone.
-async fn load_team_reviews(
-    client: &GitHub,
-    raw: &str,
-    mine: &[github::ReviewRequest],
-) -> TeamReviews {
+async fn load_team_reviews(client: &GitHub, api_url: &str, raw: &str) -> TeamReviews {
     let fallback = raw.trim_start_matches('@').to_string();
-    let team = match client.resolve_team(raw).await {
-        Ok(team) => team,
-        Err(e) => {
-            return TeamReviews {
-                slug: fallback.clone(),
-                name: fallback,
-                prs: Vec::new(),
-                more: false,
-                error: Some(e.to_string()),
-            };
-        }
+    let cached = RESOLVED_TEAM
+        .lock()
+        .as_ref()
+        .filter(|(api, setting, _)| api == api_url && setting == raw)
+        .map(|(_, _, team)| team.clone());
+    let team = match cached {
+        Some(team) => team,
+        None => match client.resolve_team(raw).await {
+            Ok(team) => {
+                *RESOLVED_TEAM.lock() = Some((api_url.to_string(), raw.to_string(), team.clone()));
+                team
+            }
+            Err(e) => {
+                return TeamReviews {
+                    slug: fallback.clone(),
+                    name: fallback,
+                    prs: Vec::new(),
+                    more: false,
+                    error: Some(e.to_string()),
+                };
+            }
+        },
     };
     let slug = format!("{}/{}", team.org, team.slug);
     match client
         .search_prs(&github::team_review_query(&team.org, &team.slug))
         .await
     {
-        Ok((mut prs, more)) => {
-            github::drop_already_listed(&mut prs, mine);
-            TeamReviews {
-                slug,
-                name: team.name,
-                prs,
-                more,
-                error: None,
-            }
-        }
+        Ok((prs, more)) => TeamReviews {
+            slug,
+            name: team.name,
+            prs,
+            more,
+            error: None,
+        },
         Err(e) => TeamReviews {
             slug,
             name: team.name,
@@ -306,87 +343,109 @@ pub(crate) async fn task_prs(
     task_id: &str,
 ) -> Result<Vec<CheckoutPr>> {
     let task = state.config.task(task_id)?;
-    let mut out = Vec::new();
+    let checkouts = state.config.checkouts_of(task_id);
 
-    for checkout in state.config.checkouts_of(task_id) {
-        let dir = PathBuf::from(&checkout.path);
-        let repo = state
-            .config
-            .project(&checkout.project_id)
-            .map(|p| p.name)
-            .unwrap_or_else(|_| "(unknown)".into());
-        // A count, not the list: this runs for every repository of every task
-        // on a timer, and building the list reads each untracked file.
-        let changed = git::changed_count(
-            &dir,
-            &checkout.base,
-            checkout.base_commit.as_deref(),
-            git::Scope::Branch,
-        );
+    // What git knows, for every repo, first and off the async workers: these
+    // are subprocesses, and on the runtime they held up the MCP server and
+    // every other request sharing it.
+    let local = {
+        let checkouts = checkouts.clone();
+        tokio::task::spawn_blocking(move || {
+            checkouts
+                .iter()
+                .map(|c| {
+                    let dir = PathBuf::from(&c.path);
+                    // A count, not the list: this runs for every repository of
+                    // every task on a timer, and building the list reads each
+                    // untracked file.
+                    let changed = git::changed_count(
+                        &dir,
+                        &c.base,
+                        c.base_commit.as_deref(),
+                        git::Scope::Branch,
+                    );
+                    (changed, git::origin_slug(&dir))
+                })
+                .collect::<Vec<_>>()
+        })
+        .await
+        .map_err(|e| Error::Other(format!("background work failed: {e}")))?
+    };
 
-        let mut row = CheckoutPr {
-            checkout_id: checkout.id.clone(),
-            repo,
-            pr: None,
-            checks: Vec::new(),
-            reviews: Vec::new(),
-            past: Vec::new(),
-            verdict: "none".into(),
-            base: checkout.base.clone(),
-            changed,
-            error: None,
-        };
+    // Then GitHub, for every repo at once.
+    let rows = checkouts.into_iter().zip(local).map(|(checkout, (changed, slug))| {
+        let task = &task;
+        async move {
+            let repo = state
+                .config
+                .project(&checkout.project_id)
+                .map(|p| p.name)
+                .unwrap_or_else(|_| "(unknown)".into());
 
-        // One repo without a GitHub remote should not fail the whole view.
-        match git::origin_slug(&dir) {
-            Ok((owner, name)) => {
-                match client.pulls_for_branch(&owner, &name, &task.branch).await {
-                    Ok(mut all) if !all.is_empty() => {
-                        // The open one is the one still being decided. With
-                        // none open, the newest says what became of the branch.
-                        let at = all.iter().position(|p| p.state == "open").unwrap_or(0);
-                        let found = all.remove(at);
+            let mut row = CheckoutPr {
+                checkout_id: checkout.id.clone(),
+                repo,
+                pr: None,
+                checks: Vec::new(),
+                reviews: Vec::new(),
+                past: Vec::new(),
+                verdict: "none".into(),
+                base: checkout.base.clone(),
+                changed,
+                error: None,
+            };
 
-                        if found.state == "open" {
-                            // None of the three needs anything from the
-                            // others, and this runs for every repository of
-                            // every task on a timer — so they go together
-                            // rather than in turn.
-                            //
-                            // The listing carries no comment counts, which is
-                            // why the one being shown in full is fetched
-                            // again rather than reported with those silently
-                            // zeroed.
-                            let (checks, reviews, full) = tokio::join!(
-                                client.checks(&owner, &name, &task.branch),
-                                client.reviews(&owner, &name, found.number),
-                                client.pull(&owner, &name, found.number),
-                            );
+            // One repo without a GitHub remote should not fail the whole view.
+            match slug {
+                Ok((owner, name)) => {
+                    match client.pulls_for_branch(&owner, &name, &task.branch).await {
+                        Ok(mut all) if !all.is_empty() => {
+                            // The open one is the one still being decided. With
+                            // none open, the newest says what became of the branch.
+                            let at = all.iter().position(|p| p.state == "open").unwrap_or(0);
+                            let found = all.remove(at);
 
-                            row.checks = checks.unwrap_or_default();
-                            row.reviews = reviews.unwrap_or_default();
-                            row.verdict = github::verdict(&row.reviews).to_string();
-                            row.pr = Some(full.ok().unwrap_or(found));
-                        } else {
-                            // Closed is final: its checks and reviews will not
-                            // change, and nothing on screen reads them. Three
-                            // calls saved per finished repository, on every
-                            // sweep, for as long as the task is kept — which
-                            // is what keeps a dozen done tasks from eating
-                            // the API budget the open ones need.
-                            row.pr = Some(found);
+                            if found.state == "open" {
+                                // None of the three needs anything from the
+                                // others, and this runs for every repository of
+                                // every task on a timer — so they go together
+                                // rather than in turn.
+                                //
+                                // The listing carries no comment counts, which is
+                                // why the one being shown in full is fetched
+                                // again rather than reported with those silently
+                                // zeroed.
+                                let (checks, reviews, full) = tokio::join!(
+                                    client.checks(&owner, &name, &task.branch),
+                                    client.reviews(&owner, &name, found.number),
+                                    client.pull(&owner, &name, found.number),
+                                );
+
+                                row.checks = checks.unwrap_or_default();
+                                row.reviews = reviews.unwrap_or_default();
+                                row.verdict = github::verdict(&row.reviews).to_string();
+                                row.pr = Some(full.ok().unwrap_or(found));
+                            } else {
+                                // Closed is final: its checks and reviews will not
+                                // change, and nothing on screen reads them. Three
+                                // calls saved per finished repository, on every
+                                // sweep, for as long as the task is kept — which
+                                // is what keeps a dozen done tasks from eating
+                                // the API budget the open ones need.
+                                row.pr = Some(found);
+                            }
+                            row.past = all;
                         }
-                        row.past = all;
+                        Ok(_) => {}
+                        Err(e) => row.error = Some(e.to_string()),
                     }
-                    Ok(_) => {}
-                    Err(e) => row.error = Some(e.to_string()),
                 }
+                Err(e) => row.error = Some(e.to_string()),
             }
-            Err(e) => row.error = Some(e.to_string()),
+            row
         }
-        out.push(row);
-    }
-    Ok(out)
+    });
+    Ok(futures_util::future::join_all(rows).await)
 }
 
 #[derive(Debug, Serialize)]

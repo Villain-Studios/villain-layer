@@ -116,13 +116,14 @@ impl Jira {
         let raw = v.as_array().cloned().unwrap_or_default();
 
         let mut out: Vec<IssueType> = Vec::new();
+        let mut icons: Vec<String> = Vec::new();
         for t in raw {
             let name = str_at(&t, "name");
             // A site repeats a type per project scheme; one entry each is enough.
             if name.is_empty() || out.iter().any(|e| e.name.eq_ignore_ascii_case(&name)) {
                 continue;
             }
-            let icon_url = t.get("iconUrl").and_then(|u| u.as_str()).unwrap_or_default();
+            icons.push(str_at(&t, "iconUrl"));
             out.push(IssueType {
                 id: str_at(&t, "id"),
                 subtask: t.get("subtask").and_then(|b| b.as_bool()).unwrap_or(false),
@@ -130,9 +131,16 @@ impl Jira {
                     .get("hierarchyLevel")
                     .and_then(|h| h.as_i64())
                     .unwrap_or(0) as i32,
-                icon: self.fetch_icon(icon_url).await,
+                icon: None,
                 name,
             });
+        }
+        // Together, not in turn: a site with thirty types was thirty round
+        // trips before the Tickets view could draw its first badge.
+        let fetched =
+            futures_util::future::join_all(icons.iter().map(|url| self.fetch_icon(url))).await;
+        for (t, icon) in out.iter_mut().zip(fetched) {
+            t.icon = icon;
         }
         Ok(out)
     }
@@ -346,17 +354,21 @@ impl Jira {
     ///
     /// Matched on the field's `schema.custom`, which is the same string on
     /// every Jira; the numeric id after `customfield_` is not.
-    pub async fn epic_link_field(&self) -> Option<String> {
+    ///
+    /// `Ok(None)` is an answer — the site has no such field — and an error is
+    /// not, so the two can be remembered differently.
+    pub async fn epic_link_field(&self) -> Result<Option<String>> {
         const EPIC_LINK: &str = "com.pyxis.greenhopper.jira:gh-epic-link";
         let v = self
             .json(self.req(reqwest::Method::GET, "/rest/api/3/field"))
-            .await
-            .ok()?;
-        v.as_array()?.iter().find_map(|f| {
-            (f.pointer("/schema/custom").and_then(|c| c.as_str()) == Some(EPIC_LINK))
-                .then(|| str_at(f, "id"))
-                .filter(|id| !id.is_empty())
-        })
+            .await?;
+        Ok(v.as_array().and_then(|fields| {
+            fields.iter().find_map(|f| {
+                (f.pointer("/schema/custom").and_then(|c| c.as_str()) == Some(EPIC_LINK))
+                    .then(|| str_at(f, "id"))
+                    .filter(|id| !id.is_empty())
+            })
+        }))
     }
 
     /// What this project demands before it will create an issue of this type.

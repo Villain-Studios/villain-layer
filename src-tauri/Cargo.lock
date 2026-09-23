@@ -5419,6 +5419,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "chrono",
+ "futures-util",
  "keyring",
  "libc",
  "notify-rust",

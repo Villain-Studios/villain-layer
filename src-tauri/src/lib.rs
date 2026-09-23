@@ -99,6 +99,7 @@ pub fn run() {
                 config: ConfigStore::load(handle)?,
                 ptys: PtyManager::default(),
                 jira_types: Default::default(),
+                epic_field_missing: Default::default(),
                 pending_notices: Default::default(),
                 status_cache: Default::default(),
             };

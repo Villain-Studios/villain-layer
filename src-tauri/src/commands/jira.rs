@@ -61,7 +61,7 @@ pub async fn jira_connect(
     let client = Jira::new(&cfg, &token);
     let who = client.myself().await?;
     // Asked once, here, because the id differs on every site.
-    cfg.epic_field = client.epic_link_field().await;
+    cfg.epic_field = client.epic_link_field().await.ok().flatten();
     secrets::set(secrets::JIRA, &token)?;
     state.config.update(|c| c.jira = Some(cfg))?;
     Ok(who.display_name)
@@ -137,22 +137,33 @@ pub async fn jira_issues(state: State<'_, AppState>) -> Result<jira::Page> {
 }
 
 /// Find this site's Epic Link field once, for a connection made before the app
-/// knew to ask. Sites that have no such field are asked again next time, which
-/// is one cheap request and keeps the config free of "we looked and found
-/// nothing" bookkeeping.
+/// knew to ask.
+///
+/// A site with no such field — the common case now, with the parent field
+/// doing the job — is asked once per launch, not on every refresh. The answer
+/// comes from the whole field list, which is hundreds of kilobytes, and was
+/// being fetched ahead of every search. The miss stays out of the config so a
+/// field added later is still found after a restart.
 pub(crate) async fn learn_epic_field(state: &AppState) {
     let Ok((client, cfg)) = jira_client(state) else {
         return;
     };
-    if cfg.epic_field.is_some() {
+    if cfg.epic_field.is_some()
+        || state.epic_field_missing.lock().as_deref() == Some(cfg.base_url.as_str())
+    {
         return;
     }
-    if let Some(field) = client.epic_link_field().await {
-        let _ = state.config.update(|c| {
-            if let Some(j) = c.jira.as_mut() {
-                j.epic_field = Some(field.clone());
-            }
-        });
+    match client.epic_link_field().await {
+        Ok(Some(field)) => {
+            let _ = state.config.update(|c| {
+                if let Some(j) = c.jira.as_mut() {
+                    j.epic_field = Some(field.clone());
+                }
+            });
+        }
+        Ok(None) => *state.epic_field_missing.lock() = Some(cfg.base_url.clone()),
+        // Not an answer: ask again next time.
+        Err(_) => {}
     }
 }
 

@@ -16,6 +16,8 @@ pub struct AppState {
     /// Issue types are per-site and change about never, but each icon is a
     /// separate authenticated fetch, so they are pulled once per run.
     pub jira_types: parking_lot::Mutex<Option<Vec<crate::integrations::jira::IssueType>>>,
+    /// The Jira site already searched for an Epic Link field and found none.
+    pub epic_field_missing: parking_lot::Mutex<Option<String>>,
     /// Notices raised before the UI is listening. Drained once on boot.
     pub pending_notices: parking_lot::Mutex<Vec<AppNotice>>,
     /// Last git-status per checkout. Cold tasks reuse this so a poll does not

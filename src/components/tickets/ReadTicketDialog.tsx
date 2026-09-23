@@ -26,10 +26,17 @@ export function ReadTicketDialog({
   const [transitions, setTransitions] = useState<JiraTransition[]>([]);
   const [moving, setMoving] = useState(false);
 
+  // Keyed on the status as well as the ticket: which moves are on offer
+  // depends on where it is now, and after a move the old list offered the
+  // ones valid from before, which Jira then refused.
   useEffect(() => {
+    let current = true;
     setTransitions([]);
-    api.jiraTransitions(issue.key).then(setTransitions).catch(() => setTransitions([]));
-  }, [issue.key]);
+    api.jiraTransitions(issue.key)
+      .then((t) => { if (current) setTransitions(t); })
+      .catch(() => { if (current) setTransitions([]); });
+    return () => { current = false; };
+  }, [issue.key, issue.status]);
 
   async function doTransition(t: JiraTransition) {
     setMoving(true);

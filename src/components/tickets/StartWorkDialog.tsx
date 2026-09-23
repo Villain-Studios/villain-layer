@@ -29,7 +29,8 @@ export function StartWorkDialog({
   const [transitions, setTransitions] = useState<JiraTransition[]>([]);
   const [picked, setPicked] = useState<string[]>([]);
   const [reason, setReason] = useState<string | null>(null);
-  const [agentId, setAgentId] = useState("");
+  /** Null until a default is picked; "" is the choice of no agent at all. */
+  const [agentId, setAgentId] = useState<string | null>(null);
   const [suffix, setSuffix] = useState("");
   const [base, setBase] = useState("");
   const [baseOptions, setBaseOptions] = useState<string[]>([]);
@@ -40,9 +41,13 @@ export function StartWorkDialog({
   const installed = agents.filter((a) => a.installed);
   const selected = projects.filter((p) => picked.includes(p.id));
 
+  // A default, once. Re-filled whenever the value was empty — and on every
+  // render, since `installed` is a new list each time — this put the first
+  // agent back the moment "No agent" was picked, and Start work launched one.
+  const firstInstalled = installed[0]?.id;
   useEffect(() => {
-    if (!agentId && installed.length) setAgentId(installed[0].id);
-  }, [installed, agentId]);
+    if (agentId === null && firstInstalled) setAgentId(firstInstalled);
+  }, [firstInstalled, agentId]);
 
   useEffect(() => {
     setTransitions([]);
@@ -226,7 +231,7 @@ export function StartWorkDialog({
             : "Starts in the new worktree with the ticket as its opening prompt."
         }
       >
-        <select value={agentId} onChange={(e) => setAgentId(e.target.value)}>
+        <select value={agentId ?? ""} onChange={(e) => setAgentId(e.target.value)}>
           <option value="">No agent — just the worktrees</option>
           {installed.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
         </select>

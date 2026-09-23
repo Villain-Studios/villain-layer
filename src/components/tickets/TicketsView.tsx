@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { copyText } from "../../lib/clipboard";
 import { api } from "../../lib/api";
@@ -189,15 +189,24 @@ export function TicketsView() {
     }
   }
 
+  /**
+   * Only the latest search lands. Ticking "Include done" and unticking it
+   * again sent two, and the slower — usually the wider one — arrived last:
+   * Done tickets listed under a box that said they were not.
+   */
+  const searchSeq = useRef(0);
   async function browse() {
+    const asked = ++searchSeq.current;
     setSearching(true);
     try {
-      setFound(await api.jiraBrowse(browseText.trim(), whose, includeDone, kinds));
+      const page = await api.jiraBrowse(browseText.trim(), whose, includeDone, kinds);
+      if (asked === searchSeq.current) setFound(page);
     } catch (e) {
+      if (asked !== searchSeq.current) return;
       setFound({ issues: [], more: false });
       fail(e);
     } finally {
-      setSearching(false);
+      if (asked === searchSeq.current) setSearching(false);
     }
   }
 
@@ -541,9 +550,15 @@ export function TicketsView() {
           onClose={() => setReading(null)}
           onStart={() => { setOpen(reading); setReading(null); }}
           onMoved={(toStatus) => {
-            toast("success", `${reading.key} → ${toStatus}`);
+            const key = reading.key;
+            toast("success", `${key} → ${toStatus}`);
             setReading((r) => (r ? { ...r, status: toStatus } : r));
-            void refreshIssues();
+            // Then the ticket as Jira now has it: the status category — the
+            // pill's colour — is not something the transition says.
+            void refreshIssues().then(() => {
+              const fresh = useStore.getState().issues.find((i) => i.key === key);
+              if (fresh) setReading((r) => (r && r.key === key ? fresh : r));
+            });
             if (sub === "browse") void browse();
           }}
         />

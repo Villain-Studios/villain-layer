@@ -50,18 +50,24 @@ export function CreateEpicDialog({
     setEpicType(preferredEpic(epics)?.name ?? "");
   }, [epics, epicType]);
 
+  // Keyed on the id and guarded, as in FileIssueDialog: the type list is
+  // rebuilt on every background refresh of the tickets, which re-ran this and
+  // cleared the picks, and a slower earlier answer could land last.
+  const typeId = epics.find((t) => t.name === epicType)?.id;
+  const projectKey = project.trim();
   useEffect(() => {
-    const typeId = epics.find((t) => t.name === epicType)?.id;
-    if (!project.trim() || !typeId) { setNeeded([]); return; }
+    if (!projectKey || !typeId) { setNeeded([]); return; }
+    let current = true;
     setNeededLoading(true);
     setExtra({});
-    api.jiraCreateFields(project.trim(), typeId)
-      .then((f) => setNeeded(f.filter((x) => x.required)))
+    api.jiraCreateFields(projectKey, typeId)
+      .then((f) => { if (current) setNeeded(f.filter((x) => x.required)); })
       // A site that will not describe its own form is no reason to block the
       // dialog: Jira still says what is missing if the create is refused.
-      .catch(() => setNeeded([]))
-      .finally(() => setNeededLoading(false));
-  }, [project, epicType, epics]);
+      .catch(() => { if (current) setNeeded([]); })
+      .finally(() => { if (current) setNeededLoading(false); });
+    return () => { current = false; };
+  }, [projectKey, typeId]);
 
   function extraFields(): Record<string, unknown> {
     const out: Record<string, unknown> = {};
@@ -88,7 +94,9 @@ export function CreateEpicDialog({
   ];
 
   async function createEpic() {
-    if (!summary.trim() || !epicType || !project.trim()) return;
+    // The button's own conditions: Enter in the summary came straight here,
+    // and a second Enter created a second epic.
+    if (busy || !summary.trim() || !epicType || !project.trim() || missing.length > 0) return;
     setBusy(true);
     try {
       const issue = await api.jiraCreateIssue({

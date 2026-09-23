@@ -59,18 +59,25 @@ export function FileIssueDialog({
     setNewType(preferredCreatable(creatable)?.name ?? "");
   }, [creatable, newType]);
 
+  // Keyed on the id, not the list it comes from: that list is rebuilt every
+  // time the tickets refresh in the background, and each rebuild re-ran this
+  // and cleared whatever had already been picked for the required fields.
+  const typeId = creatable.find((t) => t.name === newType)?.id;
   useEffect(() => {
-    const typeId = creatable.find((t) => t.name === newType)?.id;
     if (!projectKey || !typeId) { setNeeded([]); return; }
+    // Only the latest answer lands: switching type quickly otherwise left
+    // the previous type's fields on screen, or cleared the spinner early.
+    let current = true;
     setNeededLoading(true);
     setExtra({});
     api.jiraCreateFields(projectKey, typeId)
-      .then((f) => setNeeded(f.filter((x) => x.required)))
+      .then((f) => { if (current) setNeeded(f.filter((x) => x.required)); })
       // A site that will not describe its own form is no reason to block the
       // dialog: Jira still says what is missing if the create is refused.
-      .catch(() => setNeeded([]))
-      .finally(() => setNeededLoading(false));
-  }, [projectKey, newType, creatable]);
+      .catch(() => { if (current) setNeeded([]); })
+      .finally(() => { if (current) setNeededLoading(false); });
+    return () => { current = false; };
+  }, [projectKey, typeId]);
 
   /// Shaped the way Jira wants each field, from the metadata it gave us.
   function extraFields(): Record<string, unknown> {
@@ -106,7 +113,9 @@ export function FileIssueDialog({
   ];
 
   async function fileIssue() {
-    if (!newSummary.trim() || !newType || !projectKey) return;
+    // The same conditions as the button. Enter in the summary called this
+    // directly, so a second Enter — or key repeat — filed a second ticket.
+    if (filingBusy || !newSummary.trim() || !newType || !projectKey || missing.length > 0) return;
     setFilingBusy(true);
     try {
       const issue = await api.jiraCreateIssue({

@@ -601,6 +601,7 @@ pub(crate) fn remember_pane(state: &AppState, pane: &PaneInfo) {
         },
         agent_id: pane.agent_id.clone(),
         cwd: Some(pane.cwd.clone()),
+        failed: 0,
     };
     let _ = state.config.update(|c| {
         // Replace rather than append: recording the same pane twice is how a
@@ -624,6 +625,10 @@ pub(crate) fn remember_pane(state: &AppState, pane: &PaneInfo) {
 /// session with a lot of churn, and still bounded: this file is written every
 /// time a pane starts.
 pub(crate) const SAVED_PANE_LIMIT: usize = 40;
+
+/// How many launches a saved pane may fail to come back on before it is
+/// forgotten.
+pub(crate) const RESTORE_TRIES: u8 = 3;
 
 /// The most panes a restore will ever open.
 ///
@@ -711,6 +716,17 @@ pub fn restore_panes(app: &AppHandle) {
     let forget = |id: &str| {
         let _ = state.config.update(|c| c.saved_panes.retain(|p| p.id != id));
     };
+    // Kept for another try, a few times: a CLI missing from PATH at one
+    // launch may be back at the next, but a pane whose repo has left the task
+    // never will be.
+    let failed = |id: &str| {
+        let _ = state.config.update(|c| {
+            for p in c.saved_panes.iter_mut().filter(|p| p.id == id) {
+                p.failed = p.failed.saturating_add(1);
+            }
+            c.saved_panes.retain(|p| p.failed < RESTORE_TRIES);
+        });
+    };
 
     // Which agent has already resumed in which folder this restore. Two
     // agents in one folder both ran `--continue`, which picks the newest
@@ -723,6 +739,7 @@ pub fn restore_panes(app: &AppHandle) {
         // restored on the agent's own transcript rather than a worktree.
         if pane.task_id == CHAT_TASK_ID {
             let Some(agent_id) = pane.agent_id.clone() else {
+                forget(&pane.id);
                 continue;
             };
             let room = pane.cwd.clone().map(PathBuf::from);
@@ -739,7 +756,10 @@ pub fn restore_panes(app: &AppHandle) {
             // No remember_pane here: spawning records the pane itself.
             match open_chat(app, &state, agent_id, None, room, resume) {
                 Ok(_) => forget(&pane.id),
-                Err(e) => eprintln!("could not restore a chat: {e}"),
+                Err(e) => {
+                    eprintln!("could not restore a chat: {e}");
+                    failed(&pane.id);
+                }
             }
             continue;
         }
@@ -795,10 +815,13 @@ pub fn restore_panes(app: &AppHandle) {
 
         // Likewise: the spawn recorded it, so recording it again here is what
         // made every restart double the list. A pane that did not come back
-        // keeps its entry, to be tried again next launch.
+        // keeps its entry, to be tried again at the next few launches.
         match restored {
             Ok(_) => forget(&pane.id),
-            Err(e) => eprintln!("could not restore a pane: {e}"),
+            Err(e) => {
+                eprintln!("could not restore a pane: {e}");
+                failed(&pane.id);
+            }
         }
     }
 }

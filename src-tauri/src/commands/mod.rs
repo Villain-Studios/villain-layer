@@ -241,6 +241,7 @@ mod tests {
             kind: kind.into(),
             agent_id: if kind == "agent" { Some("claude".into()) } else { None },
             cwd: Some(cwd.into()),
+            failed: 0,
         }
     }
 

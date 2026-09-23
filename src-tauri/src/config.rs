@@ -161,6 +161,11 @@ pub struct SavedPane {
     /// back to its saved conversation.
     #[serde(default)]
     pub cwd: Option<String>,
+    /// Launches this has failed to come back on. A pane that cannot return —
+    /// its repo removed from the task, its CLI uninstalled — was otherwise
+    /// tried at every launch for good, ahead of panes that really were open.
+    #[serde(default)]
+    pub failed: u8,
 }
 
 /// Presentation preferences. Terminal text scales separately from the chrome,

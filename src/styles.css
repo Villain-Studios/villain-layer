@@ -357,7 +357,9 @@ textarea { resize: vertical; font-family: var(--mono); }
 .diff-file .p { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .diff-file .n { font-size: 11px; }
 
-.diff-body { flex: 1; overflow: auto; font-family: var(--mono); font-size: 13px; user-select: text; }
+/* A size container, so a note can be as wide as the pane showing it — see
+   `.inline-comment`. */
+.diff-body { flex: 1; overflow: auto; font-family: var(--mono); font-size: 13px; user-select: text; container-type: inline-size; }
 /* As wide as the longest line, and never narrower than the pane. Rows take
    their width from this, so a highlight runs the whole way across instead of
    stopping where that particular line's text happens to end. */
@@ -390,6 +392,11 @@ textarea { resize: vertical; font-family: var(--mono); }
 .diff-line.meta { color: var(--dimmer); }
 .diff-line.commented { background: rgba(167, 139, 250, 0.1); }
 
+/* A width of its own, and held in view. Inside `.diff-lines`, which is as wide
+   as its longest line, a note was sized as one unwrapped line — a long one
+   widened the whole diff, and the box to type it in stretched to the widest
+   line of code. Sticky, so scrolling right to read code does not scroll the
+   note away. */
 .inline-comment {
   margin: 4px 0 4px 46px;
   padding: 7px 9px;
@@ -398,17 +405,26 @@ textarea { resize: vertical; font-family: var(--mono); }
   border-radius: 0 var(--radius) var(--radius) 0;
   font-family: var(--sans);
   white-space: normal;
+  box-sizing: border-box;
+  width: min(640px, calc(100cqw - 58px));
+  position: sticky;
+  left: 46px;
 }
-.inline-comment .body { font-size: 13px; line-height: 1.5; }
+/* Notes keep the line breaks they were written with. */
+.inline-comment .body { font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
 .inline-comment .actions { margin-top: 6px; display: flex; gap: 6px; }
 
+/* Wraps rather than running off the edge: with a couple of agents and the
+   commit picker it outgrew windows narrower than ~1450px, and `.content`
+   clipped what did not fit — Send included. */
 .review-tray {
   border-top: 1px solid var(--border);
   background: var(--panel);
   padding: 8px 12px;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 14px;
+  gap: 8px 14px;
 }
 .review-tray-group { flex: none; }
 .review-tray-group .subtabs { margin-left: 0; }

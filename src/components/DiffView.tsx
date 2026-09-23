@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { api } from "../lib/api";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { api, errMessage } from "../lib/api";
 import { reportRepoResults } from "../lib/report";
 import { useStore } from "../store";
 import type {
@@ -37,8 +37,12 @@ function parseDiff(patch: string): DiffLine[] {
   // exactly the same, and reading those as headers dropped them from the
   // numbering and drew them as metadata.
   let inHunk = false;
+  // A patch ends in a newline, and the empty string after it was drawn as one
+  // more numbered line that a note could be left on.
+  const body = patch.endsWith("\n") ? patch.slice(0, -1) : patch;
+  if (!body) return out;
 
-  for (const raw of patch.split("\n")) {
+  for (const raw of body.split("\n")) {
     if (raw.startsWith("@@")) {
       const m = /@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(raw);
       newLine = m ? Number(m[1]) : 0;
@@ -47,14 +51,10 @@ function parseDiff(patch: string): DiffLine[] {
     } else if (raw.startsWith("diff ")) {
       inHunk = false;
       out.push({ kind: "meta", text: raw, newLine: null });
-    } else if (
-      !inHunk && (
-        raw.startsWith("index ") ||
-        raw.startsWith("--- ") || raw.startsWith("+++ ") ||
-        raw.startsWith("new file") || raw.startsWith("deleted file") ||
-        raw.startsWith("similarity ") || raw.startsWith("rename ")
-      )
-    ) {
+    } else if (!inHunk) {
+      // Before the first hunk it is all header: the names, the index, and
+      // anything git adds — "old mode", "Binary files … differ" — which,
+      // unlisted, was numbered from 0 as though it were the file.
       out.push({ kind: "meta", text: raw, newLine: null });
     } else if (raw.startsWith("+")) {
       out.push({ kind: "add", text: raw, newLine: newLine++ });
@@ -142,6 +142,40 @@ const fileKey = (f: ChangedFile) => `${f.checkout_id}:${f.path}`;
 /** Lines drawn before the rest is held back behind a click. */
 const LINE_BUDGET = 3000;
 
+/**
+ * The box a note is typed into, holding its own text.
+ *
+ * In the diff's state, every keystroke re-rendered the whole diff — three
+ * thousand rows — to change one textarea.
+ */
+function NoteEditor({ onAdd, onCancel }: { onAdd: (text: string) => void; onCancel: () => void }) {
+  const [text, setText] = useState("");
+  return (
+    <div className="inline-comment">
+      <textarea
+        rows={3}
+        autoFocus
+        value={text}
+        placeholder="What should the agent change here?"
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) onAdd(text);
+          if (e.key === "Escape") onCancel();
+        }}
+      />
+      <div className="actions">
+        <button className="btn btn-sm btn-primary" onClick={() => onAdd(text)}>
+          Add note
+        </button>
+        <button className="btn btn-sm" onClick={onCancel}>
+          Cancel
+        </button>
+        <span style={{ color: "var(--dimmer)", fontSize: 11 }}>⌘↵ to add</span>
+      </div>
+    </div>
+  );
+}
+
 export function DiffView({ task }: { task: TaskView }) {
   const fail = useStore((s) => s.fail);
   const toast = useStore((s) => s.toast);
@@ -158,10 +192,18 @@ export function DiffView({ task }: { task: TaskView }) {
 
   const [files, setFiles] = useState<ChangedFile[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
-  const [patch, setPatch] = useState("");
+  /**
+   * The patch on screen and the file it belongs to. Kept apart from the
+   * selection so a patch is never drawn under another file's name: a slower
+   * answer for the last file used to land after the next one's, and a failed
+   * fetch left the previous patch up — where a note then took the new
+   * file's path with the old file's line.
+   */
+  const [patch, setPatch] = useState<{ key: string; text: string } | null>(null);
+  /** Why there is no patch to draw, when there is a reason. */
+  const [patchNote, setPatchNote] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Draft[]>([]);
   const [composing, setComposing] = useState<{ line: number; code: string } | null>(null);
-  const [text, setText] = useState("");
   const [committing, setCommitting] = useState(false);
   const [commitBusy, setCommitBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -185,7 +227,8 @@ export function DiffView({ task }: { task: TaskView }) {
 
   const multi = task.checkouts.length > 1;
   const current = files.find((f) => fileKey(f) === selected) ?? null;
-  const [facts, setFacts] = useState<RepoBranchFacts[]>([]);
+  /** Null until measured: "0 commits, never pushed" is a claim, not a placeholder. */
+  const [facts, setFacts] = useState<RepoBranchFacts[] | null>(null);
 
   // Flat list for the picker, newest first within each repo. Multi-repo rows
   // are prefixed so two identical subjects stay distinguishable.
@@ -204,15 +247,21 @@ export function DiffView({ task }: { task: TaskView }) {
     : -1;
   const pinned = pinIndex >= 0 ? commitOptions[pinIndex] : null;
 
+  // Only the latest list lands. Uncommitted → Whole branch → Uncommitted
+  // sent three, and the slow branch one arriving last filled the Uncommitted
+  // tab with the whole branch.
+  const loadSeq = useRef(0);
   async function load() {
+    const asked = ++loadSeq.current;
     try {
       const list = await api.diffFiles(task.id, scope, pin);
+      if (asked !== loadSeq.current) return;
       setFiles(list);
       setSelected((cur) =>
         cur && list.some((f) => fileKey(f) === cur) ? cur : (list[0] ? fileKey(list[0]) : null),
       );
     } catch (e) {
-      fail(e);
+      if (asked === loadSeq.current) fail(e);
     }
   }
 
@@ -235,20 +284,45 @@ export function DiffView({ task }: { task: TaskView }) {
   }, [task.id, scope, changedCount, files.length]);
 
   // What the numbers are measured against. Asked of git rather than worked out
-  // from the file list, and reloaded with it so the two always agree.
+  // from the file list, and reloaded with it so the two always agree. Only
+  // where they are shown: it is several git calls per repo, and it ran on
+  // every refresh of the Uncommitted list, which never reads it.
+  useEffect(() => { setFacts(null); }, [task.id]);
   useEffect(() => {
-    api.taskBranchFacts(task.id).then(setFacts).catch(() => setFacts([]));
-  }, [task.id, files]);
+    if (scope !== "branch") return;
+    let current = true;
+    api.taskBranchFacts(task.id)
+      .then((f) => { if (current) setFacts(f); })
+      .catch(() => { if (current) setFacts([]); });
+    return () => { current = false; };
+  }, [task.id, scope, files]);
 
   // Keyed on the list as well as the selection: a reload that keeps the same
   // file selected still has to fetch its patch again, or Refresh updates the
   // numbers in the list beside a diff that has not moved.
+  const currentKey = current ? fileKey(current) : null;
   useEffect(() => {
-    if (!current) { setPatch(""); return; }
+    setPatchNote(null);
+    if (!current || !currentKey) { setPatch(null); return; }
+    // Not asked for: an untracked file listed as binary is either not text or
+    // too big to read on every refresh, and reading it whole was how opening
+    // this tab on a large log froze the window.
+    if (current.binary && current.origin === "untracked") {
+      setPatch(null);
+      setPatchNote("Binary, or too large to show as a diff.");
+      return;
+    }
+    let live = true;
     api.diffFile(current.checkout_id, current.path, scope, pin?.sha ?? null)
-      .then(setPatch)
-      .catch(fail);
-  }, [current?.checkout_id, current?.path, scope, pin?.sha, fail, files]);
+      .then((text) => { if (live) setPatch({ key: currentKey, text }); })
+      .catch((e) => {
+        if (!live) return;
+        setPatch(null);
+        setPatchNote(errMessage(e));
+      });
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentKey, scope, pin?.sha, files]);
 
   function pickScope(next: DiffScope) {
     setScope(next);
@@ -299,15 +373,25 @@ export function DiffView({ task }: { task: TaskView }) {
     }
   }, [installed, startAgentId]);
 
-  const parsed = useMemo(() => parseDiff(patch), [patch]);
+  const shownPatch = patch && patch.key === currentKey ? patch.text : "";
+  const parsed = useMemo(() => parseDiff(shownPatch), [shownPatch]);
   // Every line is a div, and a div per line of a generated file is what makes
   // opening this tab stutter. Showing the first few thousand keeps it instant;
   // anything past that is not being read line by line anyway.
   const [wholeFile, setWholeFile] = useState(false);
-  useEffect(() => { setWholeFile(false); }, [selected]);
-  const lines = wholeFile ? parsed : parsed.slice(0, LINE_BUDGET);
+  // A note half written belongs to the line it was opened on. Keyed by line
+  // number alone, it followed to the next file and was saved against that
+  // file, with the first file's code quoted under it.
+  useEffect(() => { setWholeFile(false); setComposing(null); }, [selected]);
+  const lines = useMemo(
+    () => (wholeFile ? parsed : parsed.slice(0, LINE_BUDGET)),
+    [parsed, wholeFile],
+  );
   const hidden = parsed.length - lines.length;
-  const fileDrafts = drafts.filter((d) => selected && `${d.checkoutId}:${d.path}` === selected);
+  const fileDrafts = useMemo(
+    () => drafts.filter((d) => selected && `${d.checkoutId}:${d.path}` === selected),
+    [drafts, selected],
+  );
 
   // Files grouped by repo, in the order the task's repos are listed.
   const groups = useMemo(() => {
@@ -362,7 +446,7 @@ export function DiffView({ task }: { task: TaskView }) {
     });
   }
 
-  function addDraft() {
+  function addDraft(text: string) {
     if (!composing || !current || !text.trim()) { setComposing(null); return; }
     setDrafts((d) => [
       ...d,
@@ -376,9 +460,12 @@ export function DiffView({ task }: { task: TaskView }) {
         code: composing.code,
       },
     ]);
-    setText("");
     setComposing(null);
   }
+  // Read through a ref so the rows below can be memoised without holding an
+  // old `current` or `composing`.
+  const addDraftRef = useRef(addDraft);
+  addDraftRef.current = addDraft;
 
   function commentsFor(checkoutId: string | null): ReviewComment[] {
     return drafts.map((d) => ({
@@ -444,9 +531,14 @@ export function DiffView({ task }: { task: TaskView }) {
   async function commit() {
     setCommitBusy(true);
     try {
-      reportRepoResults(toast, await api.commitTask(task.id, message.trim()), "Committed");
-      setCommitting(false);
-      setMessage("");
+      const results = await api.commitTask(task.id, message.trim());
+      reportRepoResults(toast, results, "Committed");
+      // A hook that fails comes back as a result, not an error. Closing the
+      // dialog then threw the message away with the repo still uncommitted.
+      if (results.every((r) => r.ok)) {
+        setCommitting(false);
+        setMessage("");
+      }
       await Promise.all([load(), refreshTasks()]);
     } catch (e) {
       fail(e);
@@ -493,6 +585,15 @@ export function DiffView({ task }: { task: TaskView }) {
       };
     }
 
+    if (facts === null) {
+      return {
+        what: "measuring the branch…",
+        detail: "Asking git where this branch started and what it holds.",
+        label: "Whole branch",
+        adds,
+        dels,
+      };
+    }
     const commits = facts.reduce((n, f) => n + f.commits, 0);
     const unpushed = facts.reduce((n, f) => n + f.unpushed, 0);
     const guessed = facts.filter((f) => !f.baseline_recorded);
@@ -591,6 +692,64 @@ export function DiffView({ task }: { task: TaskView }) {
     </div>
   ) : null;
 
+  // The rows, memoised: typing in a note or the commit message, a poll, or
+  // anything else that redraws this view no longer rebuilds thousands of them.
+  const composingLine = composing?.line ?? null;
+  const linesView = useMemo(
+    () =>
+      lines.map((l, i) => {
+        const anchored = l.newLine !== null
+          ? fileDrafts.filter((d) => d.line === l.newLine)
+          : [];
+        const isComposing = composingLine === l.newLine && l.newLine !== null;
+        return (
+          <div key={i}>
+            <div
+              className={
+                "diff-line " +
+                (l.kind === "add" ? "add" : l.kind === "del" ? "del" :
+                  l.kind === "hunk" ? "hunk" : l.kind === "meta" ? "meta" : "") +
+                (anchored.length ? " commented" : "")
+              }
+            >
+              <span
+                className="ln"
+                onClick={() => {
+                  if (l.newLine === null) return;
+                  setComposing({ line: l.newLine, code: l.text.slice(1) });
+                }}
+              >
+                {l.newLine ?? ""}
+              </span>
+              <span className="tx">{l.text || " "}</span>
+            </div>
+
+            {anchored.map((d) => (
+              <div key={d.id} className="inline-comment">
+                <div className="body">{d.body}</div>
+                <div className="actions">
+                  <button
+                    className="btn btn-sm btn-danger"
+                    onClick={() => setDrafts((all) => all.filter((x) => x.id !== d.id))}
+                  >
+                    Remove
+                  </button>
+                </div>
+              </div>
+            ))}
+
+            {isComposing && (
+              <NoteEditor
+                onAdd={(text) => addDraftRef.current(text)}
+                onCancel={() => setComposing(null)}
+              />
+            )}
+          </div>
+        );
+      }),
+    [lines, fileDrafts, composingLine],
+  );
+
   if (files.length === 0) {
     const where = multi ? "any of the task's repos" : "this worktree";
     return (
@@ -683,77 +842,10 @@ export function DiffView({ task }: { task: TaskView }) {
               {current.repo} / {current.path}
             </div>
           )}
+          {patchNote && <div className="diff-more">{patchNote}</div>}
           <div className="diff-body">
           <div className="diff-lines">
-          {lines.map((l, i) => {
-            const anchored = l.newLine !== null
-              ? fileDrafts.filter((d) => d.line === l.newLine)
-              : [];
-            const isComposing = composing?.line === l.newLine && l.newLine !== null;
-            return (
-              <div key={i}>
-                <div
-                  className={
-                    "diff-line " +
-                    (l.kind === "add" ? "add" : l.kind === "del" ? "del" :
-                      l.kind === "hunk" ? "hunk" : l.kind === "meta" ? "meta" : "") +
-                    (anchored.length ? " commented" : "")
-                  }
-                >
-                  <span
-                    className="ln"
-                    onClick={() => {
-                      if (l.newLine === null) return;
-                      setComposing({ line: l.newLine, code: l.text.slice(1) });
-                      setText("");
-                    }}
-                  >
-                    {l.newLine ?? ""}
-                  </span>
-                  <span className="tx">{l.text || " "}</span>
-                </div>
-
-                {anchored.map((d) => (
-                  <div key={d.id} className="inline-comment">
-                    <div className="body">{d.body}</div>
-                    <div className="actions">
-                      <button
-                        className="btn btn-sm btn-danger"
-                        onClick={() => setDrafts((all) => all.filter((x) => x.id !== d.id))}
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  </div>
-                ))}
-
-                {isComposing && (
-                  <div className="inline-comment">
-                    <textarea
-                      rows={3}
-                      autoFocus
-                      value={text}
-                      placeholder="What should the agent change here?"
-                      onChange={(e) => setText(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) addDraft();
-                        if (e.key === "Escape") setComposing(null);
-                      }}
-                    />
-                    <div className="actions">
-                      <button className="btn btn-sm btn-primary" onClick={addDraft}>
-                        Add note
-                      </button>
-                      <button className="btn btn-sm" onClick={() => setComposing(null)}>
-                        Cancel
-                      </button>
-                      <span style={{ color: "var(--dimmer)", fontSize: 11 }}>⌘↵ to add</span>
-                    </div>
-                  </div>
-                )}
-              </div>
-            );
-          })}
+          {linesView}
           </div>
           </div>
         </div>

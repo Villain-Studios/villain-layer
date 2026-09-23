@@ -402,6 +402,15 @@ export function Combo({
     ? options.filter((o) => o.toLowerCase().includes(text.trim().toLowerCase()))
     : options;
 
+  /**
+   * Set when a key has already decided the value, so the blur that follows
+   * does not decide it again. Enter committed the highlighted option and then
+   * blurred, and blur — still holding the text as typed — committed that
+   * too: arrow to `release/2.1` from "rel", press Enter, and the base was
+   * saved as "rel". Escape saved the typed text the same way.
+   */
+  const decided = useRef(false);
+
   function commit(v: string) {
     seen.current = v;
     setText(v);
@@ -422,6 +431,10 @@ export function Combo({
         onBlur={() => {
           setOpen(false);
           setTyped(false);
+          if (decided.current) {
+            decided.current = false;
+            return;
+          }
           if (allowFree) commit(text);
           else setText(value);
         }}
@@ -435,12 +448,22 @@ export function Combo({
             setCursor((c) => Math.max(c - 1, -1));
           } else if (e.key === "Enter") {
             e.preventDefault();
+            decided.current = true;
             commit(cursor >= 0 && shown[cursor] ? shown[cursor] : text);
             e.currentTarget.blur();
           } else if (e.key === "Escape") {
             setText(value);
-            setOpen(false);
-            e.currentTarget.blur();
+            setTyped(false);
+            setCursor(-1);
+            if (open) {
+              // Dismissing the list is all this Escape means. Let through, it
+              // reached the dialog's own Escape and closed the whole thing.
+              e.stopPropagation();
+              setOpen(false);
+            } else {
+              decided.current = true;
+              e.currentTarget.blur();
+            }
           }
         }}
       />

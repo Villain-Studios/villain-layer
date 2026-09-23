@@ -224,10 +224,21 @@ pub fn remove_project(state: State<AppState>, id: String) -> Result<()> {
             .filter(|ch| ch.project_id == id)
             .map(|ch| ch.id.clone())
             .collect();
+        // The tasks this removal leaves with nothing, and only those. Taking
+        // every task with no repositories also took ones that were already
+        // empty — a task whose last repo was removed to be replaced — which
+        // vanished when some unrelated repository was forgotten.
+        let touched: std::collections::HashSet<String> = c
+            .checkouts
+            .iter()
+            .filter(|ch| ch.project_id == id)
+            .map(|ch| ch.task_id.clone())
+            .collect();
         c.checkouts.retain(|ch| ch.project_id != id);
-        // Drop tasks that have no repositories left.
-        let live: Vec<String> = c.checkouts.iter().map(|ch| ch.task_id.clone()).collect();
-        c.tasks.retain(|t| live.contains(&t.id));
+        let live: std::collections::HashSet<&str> =
+            c.checkouts.iter().map(|ch| ch.task_id.as_str()).collect();
+        c.tasks
+            .retain(|t| !touched.contains(&t.id) || live.contains(t.id.as_str()));
         gone
     })?;
     state.status_cache.lock().retain(|cid, _| !gone.contains(cid));

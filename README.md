@@ -334,7 +334,9 @@ src-tauri/src/
   git.rs            worktree lifecycle, status, diff — the git CLI, not libgit2,
                     so hooks and credential helpers keep working
   pty.rs            one PTY per pane via portable-pty; output is base64-framed to
-                    the frontend so multi-byte sequences never split
+                    the frontend so multi-byte sequences never split, and counted
+                    by position, so a terminal back on screen gets only what it
+                    missed
   shellenv.rs       asks your login shell for its real PATH — a GUI app launched
                     from Finder cannot see ~/.local/bin otherwise
   agents.rs         the agent catalogue and how each one takes an opening prompt

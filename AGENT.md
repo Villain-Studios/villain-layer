@@ -78,6 +78,13 @@ live process kills it and takes its agents with it, and the same is true of
   project — which on macOS means a permission prompt for Photos, Downloads
   and Music. `run()` in `lib.rs` sets it once, which is the only place a new
   spawn site cannot forget.
+- **A terminal outlives the view that shows it.** `Terminal.tsx` keeps one
+  xterm per pane in a pool and moves its element into whichever view mounts
+  a `TerminalPane`; unmounting only parks it, and it is disposed when the
+  pane leaves the store's list. Only a terminal on screen is fed — a hidden
+  one detaches, and `pty_attach` sends it what came after the last byte it
+  drew. One xterm per mount meant every task or view switch rebuilt it and
+  replayed 256KB of scrollback.
 - **A terminal has to be told its size.** xterm emits `onResize` only when
   its own grid changes, so a process spawned at the default 100×30 stays
   there if the fit happens to agree. Push the dimensions after every fit.

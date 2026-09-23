@@ -215,39 +215,52 @@ impl GitHub {
 
     /// Every review submitted on a pull request, oldest first.
     pub async fn reviews(&self, owner: &str, repo: &str, number: u64) -> Result<Vec<Review>> {
-        let v = self
-            .json(self.req(
-                reqwest::Method::GET,
-                &format!("/repos/{owner}/{repo}/pulls/{number}/reviews?per_page=100"),
-            ))
-            .await?;
+        // Every page. They come oldest first, so stopping at the first cut
+        // off the newest — and each inline reply is a review of its own, so a
+        // busy PR passes a hundred quickly. The verdict then came from an old
+        // "changes requested" with the approval after it out of sight.
+        let mut all: Vec<Value> = Vec::new();
+        for page in 1..=10 {
+            let v = self
+                .json(self.req(
+                    reqwest::Method::GET,
+                    &format!("/repos/{owner}/{repo}/pulls/{number}/reviews?per_page=100&page={page}"),
+                ))
+                .await?;
+            let got = v.as_array().map(|a| a.len()).unwrap_or(0);
+            if let Some(arr) = v.as_array() {
+                all.extend(arr.iter().cloned());
+            }
+            if got < 100 {
+                break;
+            }
+        }
 
-        Ok(v.as_array()
-            .map(|arr| {
-                arr.iter()
-                    .map(|r| Review {
-                        author: r
-                            .pointer("/user/login")
-                            .and_then(|l| l.as_str())
-                            .unwrap_or_default()
-                            .to_string(),
-                        state: s(r, "state"),
-                        submitted_at: r
-                            .get("submitted_at")
-                            .and_then(|x| x.as_str())
-                            .map(str::to_string),
-                        url: s(r, "html_url"),
-                    })
-                    .collect()
+        Ok(all
+            .iter()
+            .map(|r| Review {
+                author: r
+                    .pointer("/user/login")
+                    .and_then(|l| l.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                state: s(r, "state"),
+                submitted_at: r
+                    .get("submitted_at")
+                    .and_then(|x| x.as_str())
+                    .map(str::to_string),
+                url: s(r, "html_url"),
             })
-            .unwrap_or_default())
+            .collect())
     }
 
     pub async fn checks(&self, owner: &str, repo: &str, git_ref: &str) -> Result<Vec<CheckRun>> {
         let v = self
             .json(self.req(
                 reqwest::Method::GET,
-                &format!("/repos/{owner}/{repo}/commits/{git_ref}/check-runs"),
+                // The default page is thirty. A matrix build past that could
+                // hide the failing run, and the panel went green.
+                &format!("/repos/{owner}/{repo}/commits/{git_ref}/check-runs?per_page=100"),
             ))
             .await?;
 

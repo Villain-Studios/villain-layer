@@ -582,7 +582,19 @@ pub async fn github_open_prs(
                     if opened.len() == 1 { "" } else { "s" },
                     lines.join("\n"),
                 );
-                let _ = jira.comment(key, &text).await;
+                // Said, not swallowed: this only runs for PRs opened by this
+                // call, so a retry finds them already open and never posts —
+                // the ticket that is meant to be the hub would just not know.
+                if let Err(e) = jira.comment(key, &text).await {
+                    results.push(RepoResult {
+                        checkout_id: key.clone(),
+                        repo: key.clone(),
+                        ok: false,
+                        detail: format!(
+                            "the PRs are open, but the comment linking them failed ({e}); add them to the ticket by hand"
+                        ),
+                    });
+                }
             }
         }
 

@@ -381,20 +381,36 @@ impl Jira {
         project_key: &str,
         issue_type_id: &str,
     ) -> Result<Vec<CreateField>> {
-        let v = self
-            .json(self.req(
-                reqwest::Method::GET,
-                &format!(
-                    "/rest/api/3/issue/createmeta/{project_key}/issuetypes/{issue_type_id}"
-                ),
-            ))
-            .await?;
-
-        let fields = v
-            .get("fields")
-            .and_then(|f| f.as_array())
-            .cloned()
-            .unwrap_or_default();
+        // Paged, fifty to a page by default. Reading the first page alone
+        // lost whatever came after it — and a required field past the
+        // fiftieth never reached the form, so creating failed with "X is
+        // required" for a field nobody had been asked about.
+        let path = format!("/rest/api/3/issue/createmeta/{project_key}/issuetypes/{issue_type_id}");
+        let mut fields: Vec<Value> = Vec::new();
+        for _ in 0..20 {
+            let at = fields.len().to_string();
+            let v = self
+                .json(
+                    self.req(reqwest::Method::GET, &path)
+                        .query(&[("startAt", at.as_str()), ("maxResults", "100")]),
+                )
+                .await?;
+            let page = v
+                .get("fields")
+                .and_then(|f| f.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let total = v.get("total").and_then(Value::as_u64);
+            let got = page.len();
+            fields.extend(page);
+            let done = match total {
+                Some(total) => fields.len() as u64 >= total,
+                None => true,
+            };
+            if got == 0 || done {
+                break;
+            }
+        }
 
         Ok(fields
             .iter()
@@ -429,6 +445,23 @@ impl Jira {
             .collect())
     }
 
+    /// The issue types one project offers, as (id, name).
+    pub async fn project_issue_types(&self, project_key: &str) -> Result<Vec<(String, String)>> {
+        let v = self
+            .json(
+                self.req(
+                    reqwest::Method::GET,
+                    &format!("/rest/api/3/issue/createmeta/{project_key}/issuetypes"),
+                )
+                .query(&[("maxResults", "200")]),
+            )
+            .await?;
+        Ok(v.get("issueTypes")
+            .and_then(|t| t.as_array())
+            .map(|a| a.iter().map(|t| (str_at(t, "id"), str_at(t, "name"))).collect())
+            .unwrap_or_default())
+    }
+
     /// Move an issue into whatever this workflow calls "in progress".
     ///
     /// Picked by status category rather than by name: "In Progress", "Doing",
@@ -453,16 +486,10 @@ impl Jira {
     }
 
     pub async fn comment(&self, key: &str, text: &str) -> Result<()> {
-        let body = json!({
-            "body": {
-                "type": "doc",
-                "version": 1,
-                "content": [{
-                    "type": "paragraph",
-                    "content": [{ "type": "text", "text": text }]
-                }]
-            }
-        });
+        // A paragraph per line. One text node holding newlines is not
+        // something ADF breaks on, so a list of PR links, or an agent's
+        // multi-line note, arrived as one run-on line.
+        let body = json!({ "body": text_to_adf(text) });
         self.json(
             self.req(
                 reqwest::Method::POST,

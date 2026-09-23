@@ -63,6 +63,11 @@ pub async fn jira_connect(
     // Asked once, here, because the id differs on every site.
     cfg.epic_field = client.epic_link_field().await.ok().flatten();
     secrets::set(secrets::JIRA, &token)?;
+    // Another site, or the same one reconnected: either way what was cached
+    // about the last connection is not to be trusted. The types were kept
+    // until restart, and the epic search was built from the old site's names.
+    *state.jira_types.lock() = None;
+    *state.epic_field_missing.lock() = None;
     state.config.update(|c| c.jira = Some(cfg))?;
     Ok(who.display_name)
 }
@@ -1004,8 +1009,46 @@ pub async fn jira_create_fields(
     project_key: String,
     issue_type_id: String,
 ) -> Result<Vec<jira::CreateField>> {
-    let (client, _) = jira_client(&state)?;
-    client.create_fields(&project_key, &issue_type_id).await
+    create_fields_for(&state, &project_key, &issue_type_id).await
+}
+
+/// `create_fields`, for a type id that may belong to another project.
+///
+/// The type list is one entry per name, but a team-managed project has its
+/// own "Task" with an id of its own, so the id picked from that list is often
+/// some other project's — and Jira answers it with a 404. When it does, the
+/// same name is looked up in the project being filed into.
+pub(crate) async fn create_fields_for(
+    state: &AppState,
+    project_key: &str,
+    issue_type_id: &str,
+) -> Result<Vec<jira::CreateField>> {
+    let (client, _) = jira_client(state)?;
+    let first = client.create_fields(project_key, issue_type_id).await;
+    if first.is_ok() {
+        return first;
+    }
+    let name = jira_issue_types_inner(state, false)
+        .await
+        .ok()
+        .and_then(|types| types.into_iter().find(|t| t.id == issue_type_id).map(|t| t.name));
+    let Some(name) = name else {
+        return first;
+    };
+    let own = client
+        .project_issue_types(project_key)
+        .await
+        .ok()
+        .and_then(|types| {
+            types
+                .into_iter()
+                .find(|(id, n)| n.eq_ignore_ascii_case(&name) && id != issue_type_id)
+                .map(|(id, _)| id)
+        });
+    match own {
+        Some(id) => client.create_fields(project_key, &id).await,
+        None => first,
+    }
 }
 
 /// File a ticket without starting work on it.

@@ -561,14 +561,13 @@ async fn call(app: &AppHandle, name: &str, args: Value) -> Result<Value> {
         )?),
 
         "jira_create_fields" => {
-            let (client, _) = commands::jira_client(&state)?;
             Ok(serde_json::to_value(
-                client
-                    .create_fields(
-                        required(&args, "project_key")?,
-                        required(&args, "issue_type_id")?,
-                    )
-                    .await?,
+                commands::create_fields_for(
+                    &state,
+                    required(&args, "project_key")?,
+                    required(&args, "issue_type_id")?,
+                )
+                .await?,
             )?)
         }
 

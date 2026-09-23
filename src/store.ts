@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { create } from "zustand";
 import { api, errMessage } from "./lib/api";
 import { read, readOneOf, write } from "./lib/persist";
@@ -442,13 +443,50 @@ export const useStore = create<State>((set, get) => {
   };
 });
 
+/**
+ * Panes stopped on purpose — Stop, or the old agent in a handoff — whose exit
+ * is not news.
+ *
+ * `kill_pane` keeps the pane on screen, so its exit arrives like any other:
+ * stopping an agent put "exited with 143" up as an error and posted "finished"
+ * to Slack for work that had not finished.
+ */
+const stopping = new Set<string>();
+export function markStopping(paneId: string) {
+  stopping.add(paneId);
+}
+/** Whether this exit was asked for. Answers once. */
+export function stoppedOnPurpose(paneId: string): boolean {
+  return stopping.delete(paneId);
+}
+
 export const selectedTask = (s: State) =>
   s.tasks.find((t) => t.id === s.selectedTask) ?? null;
 
 /** A running agent that has printed nothing for a while is usually waiting. */
 const IDLE_AFTER_MS = 45_000;
 
-export function paneState(pane: PaneInfo): { label: string; dot: string } {
+/**
+ * The time, for labels that change with it: "idle — may need you", "2m ago".
+ *
+ * Those were worked out from `Date.now()` whenever something happened to
+ * redraw, and an agent that has gone quiet is exactly one whose pane stops
+ * changing — so nothing redrew, and it said "working" for as long as it sat
+ * waiting on a prompt. Ticks only while the window is in front.
+ */
+export function useNow(everyMs: number): number {
+  const active = useStore((s) => s.appActive);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    setNow(Date.now());
+    const t = setInterval(() => setNow(Date.now()), everyMs);
+    return () => clearInterval(t);
+  }, [active, everyMs]);
+  return now;
+}
+
+export function paneState(pane: PaneInfo, now = Date.now()): { label: string; dot: string } {
   if (pane.running && pane.notice === "usage_limit") {
     return { label: "out of budget — hand off", dot: "gone" };
   }
@@ -461,7 +499,7 @@ export function paneState(pane: PaneInfo): { label: string; dot: string } {
       dot: "gone",
     };
   }
-  if (Date.now() - new Date(pane.last_output_at).getTime() > IDLE_AFTER_MS) {
+  if (now - new Date(pane.last_output_at).getTime() > IDLE_AFTER_MS) {
     return { label: "idle — may need you", dot: "idle" };
   }
   return { label: "working", dot: "live" };

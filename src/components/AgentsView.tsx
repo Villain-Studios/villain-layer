@@ -1,11 +1,11 @@
 import { useState } from "react";
 
 import { api } from "../lib/api";
-import { CHAT_TASK_ID, paneState, useStore } from "../store";
+import { CHAT_TASK_ID, markStopping, paneState, useNow, useStore } from "../store";
 import { SidebarToggle, Spinner } from "./ui";
 
-function ago(iso: string): string {
-  const s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+function ago(iso: string, now: number): string {
+  const s = Math.max(0, Math.round((now - new Date(iso).getTime()) / 1000));
   if (s < 5) return "just now";
   if (s < 60) return `${s}s ago`;
   if (s < 3600) return `${Math.round(s / 60)}m ago`;
@@ -21,6 +21,7 @@ export function AgentsView() {
   const select = useStore((s) => s.select);
   const setView = useStore((s) => s.setView);
   const fail = useStore((s) => s.fail);
+  const now = useNow(5_000);
 
   /// Stopping asks the agent to exit and waits up to five seconds for it to
   /// save, so the row does not change until then. Say which one is stopping.
@@ -28,6 +29,7 @@ export function AgentsView() {
 
   async function stop(paneId: string) {
     setStopping(paneId);
+    markStopping(paneId);
     try {
       await api.killPane(paneId);
       await refreshPanes();
@@ -67,7 +69,7 @@ export function AgentsView() {
       {working.map((pane) => {
         const task = tasks.find((t) => t.id === pane.task_id);
         const isChat = pane.task_id === CHAT_TASK_ID;
-        const st = paneState(pane);
+        const st = paneState(pane, now);
         const agent = agents.find((a) => a.id === pane.agent_id);
 
         return (
@@ -99,7 +101,7 @@ export function AgentsView() {
               </div>
             </div>
 
-            <span className="when">{ago(pane.last_output_at)}</span>
+            <span className="when">{ago(pane.last_output_at, now)}</span>
 
             <button
               className="btn btn-sm"

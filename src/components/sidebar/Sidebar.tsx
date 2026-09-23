@@ -2,7 +2,7 @@ import { Fragment, useState, type ReactNode } from "react";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { api, errMessage } from "../../lib/api";
 import { copyText } from "../../lib/clipboard";
-import { paneState, taskReview, taskTotals, useStore, type TaskReview } from "../../store";
+import { paneState, taskReview, taskTotals, useNow, useStore, type TaskReview } from "../../store";
 import type { TaskView } from "../../lib/types";
 import { BusyOverlay, Confirm, ContextMenu, Field, Modal, Spinner, type MenuItem } from "../ui";
 import { RepoPicker } from "../RepoPicker";
@@ -33,6 +33,7 @@ export function Sidebar() {
   const toast = useStore((s) => s.toast);
   const fail = useStore((s) => s.fail);
   const cursorIde = useStore((s) => s.cursorIde);
+  const now = useNow(10_000);
 
   const [creating, setCreating] = useState(false);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -253,7 +254,7 @@ export function Sidebar() {
 
   // The same panes AgentsView counts, so the row and the view it opens agree.
   const fleet = panes.filter((p) => p.kind === "agent" && p.running);
-  const fleetWaiting = fleet.some((p) => paneState(p).dot === "idle");
+  const fleetWaiting = fleet.some((p) => paneState(p, now).dot === "idle");
 
   // Three lists, because they are three questions. Writing, waiting on a
   // reviewer, and landed (update the ticket) are not the same job — and a
@@ -335,7 +336,7 @@ export function Sidebar() {
           const mine = panes.filter((p) => p.task_id === task.id && p.running);
           const live = mine.length;
           // Surface "waiting on you" here too, not just in the overview.
-          const waiting = mine.some((p) => paneState(p).dot === "idle");
+          const waiting = mine.some((p) => paneState(p, now).dot === "idle");
           const totals = taskTotals(task);
           const multi = task.checkouts.length > 1;
           const isOpen = expanded[task.id] ?? false;

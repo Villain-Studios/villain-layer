@@ -11,7 +11,7 @@ import {
   unseenReviews,
   reviewIdentity,
 } from "./lib/notify";
-import { CHAT_TASK_ID, selectedTask, taskTotals, useStore, type View } from "./store";
+import { CHAT_TASK_ID, selectedTask, stoppedOnPurpose, taskTotals, useStore, type View } from "./store";
 import type { TaskView } from "./lib/types";
 import { Sidebar } from "./components/Sidebar";
 import { Terminals } from "./components/Terminals";
@@ -245,19 +245,21 @@ function Watchers() {
       }
 
       if (pane.kind !== "agent" || pane.task_id === CHAT_TASK_ID) return;
+      if (stoppedOnPurpose(pane.id)) return;
 
       const owner = state.tasks.find((t) => t.id === pane.task_id);
+      const how = pane.exit_code === 0 ? "finished" : `exited with ${pane.exit_code ?? "?"}`;
       state.toast(
         pane.exit_code === 0 ? "info" : "error",
-        pane.exit_code === 0
-          ? `${pane.title} finished in ${owner?.name ?? "a task"}`
-          : `${pane.title} exited with ${pane.exit_code} in ${owner?.name ?? "a task"}`,
+        `${pane.title} ${how} in ${owner?.name ?? "a task"}`,
       );
 
       if (state.settings?.slack_connected) {
-        // The backend decides whether this kind of message is muted.
+        // The backend decides whether this kind of message is muted. Worded
+        // from the exit code: a crash reported as "finished" is worse than
+        // no message.
         await api.slackNotify(
-          `${pane.title} finished — *${owner?.name ?? pane.task_id}*`,
+          `${pane.title} ${how} — *${owner?.name ?? pane.task_id}*`,
           owner
             ? `\`${owner.branch}\`${owner.issue_key ? ` · ${owner.issue_key}` : ""} · ${
                 owner.checkouts.length

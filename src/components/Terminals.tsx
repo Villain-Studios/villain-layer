@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, errMessage } from "../lib/api";
 import { read, write } from "../lib/persist";
-import { useStore } from "../store";
+import { markStopping, useStore } from "../store";
 import type { PaneInfo, Resumable, TaskView } from "../lib/types";
 import { TerminalPane } from "./Terminal";
 import { ContextMenu, Field, Modal, Spinner } from "./ui";
@@ -45,6 +45,8 @@ export function Terminals({ task }: { task: TaskView }) {
   const [scope, setScope] = useState<string | null>(null);
   /** Last auto-fetched briefing; if the textarea still matches, scope changes replace it. */
   const fetchedPrompt = useRef("");
+  /** Which handoff briefing request is the current one. */
+  const handoffAsk = useRef(0);
   const cursorIde = useStore((s) => s.cursorIde);
 
   const multi = task.checkouts.length > 1;
@@ -55,11 +57,18 @@ export function Terminals({ task }: { task: TaskView }) {
   // directory — so a conversation can be picked up even though the process is
   // long gone. Re-checked when panes change, since starting one creates a
   // transcript and ending one is when you want to resume.
+  //
+  // Only for a scope that belongs to this task. Switching tasks renders once
+  // with the last task's repo still picked, and that answer — or a slower
+  // earlier one — offered another task's conversations here.
+  const scopeHere = scope && task.checkouts.some((c) => c.id === scope) ? scope : null;
   useEffect(() => {
-    api.resumableAgents(task.id, scope)
-      .then(setResumable)
-      .catch(() => setResumable([]));
-  }, [task.id, scope, panes.length]);
+    let current = true;
+    api.resumableAgents(task.id, scopeHere)
+      .then((r) => { if (current) setResumable(r); })
+      .catch(() => { if (current) setResumable([]); });
+    return () => { current = false; };
+  }, [task.id, scopeHere, panes.length]);
 
   // Prefill (and refresh on Start-in change) so the text matches where the
   // agent will actually run. Edits the user typed are kept until they change
@@ -164,8 +173,6 @@ export function Terminals({ task }: { task: TaskView }) {
       setActive(pane.id);
     } catch (e) {
       fail(e);
-    } finally {
-      setHandoffBusy(false);
     }
   }
 
@@ -198,11 +205,15 @@ export function Terminals({ task }: { task: TaskView }) {
       return;
     }
     setHandoff({ from, agentId: target.id });
+    setHandoffPrompt("");
     setHandoffLoading(true);
+    const asked = ++handoffAsk.current;
+    // Only the latest ask lands: a slow briefing for one pane arriving after
+    // the dialog was reopened for another replaced what was on screen.
     api.handoffPrompt(from.id)
-      .then(setHandoffPrompt)
-      .catch(fail)
-      .finally(() => setHandoffLoading(false));
+      .then((p) => { if (asked === handoffAsk.current) setHandoffPrompt(p); })
+      .catch((e) => { if (asked === handoffAsk.current) fail(e); })
+      .finally(() => { if (asked === handoffAsk.current) setHandoffLoading(false); });
   }
 
   /// Spawns the new agent, then spends the grace period stopping the old one.
@@ -218,13 +229,22 @@ export function Terminals({ task }: { task: TaskView }) {
         handoff.from.checkout_id,
         handoffPrompt.trim() || null,
       );
-      if (stopOld) await api.killPane(handoff.from.id).catch(() => {});
+      if (stopOld) {
+        markStopping(handoff.from.id);
+        await api.killPane(handoff.from.id).catch(() => {});
+      }
       setHandoff(null);
       setHandoffPrompt("");
       await refreshPanes();
       setActive(pane.id);
     } catch (e) {
       fail(e);
+    } finally {
+      // Cleared here, where it was set. It lived in launchAgent's finally,
+      // so after one handoff the dialog opened already busy, and after a
+      // failed one it could not be closed at all — Cancel disabled, and
+      // Escape, ✕ and the backdrop all ignored while busy.
+      setHandoffBusy(false);
     }
   }
 

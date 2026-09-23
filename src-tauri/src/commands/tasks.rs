@@ -387,6 +387,7 @@ pub(crate) fn create_checkout(
         path: path.to_string_lossy().to_string(),
         base,
         base_commit: Some(base_commit).filter(|c| !c.is_empty()),
+        push_lease: None,
     };
     state
         .config

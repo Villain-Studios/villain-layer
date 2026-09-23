@@ -62,6 +62,12 @@ pub struct Checkout {
     /// from anywhere else.
     #[serde(default)]
     pub base_commit: Option<String>,
+    /// What the remote branch was when this worktree last rebased, until the
+    /// next push. A rebased branch can only be pushed by replacing the remote
+    /// one, and this is the only commit it may replace: anything else there
+    /// was pushed by someone else since.
+    #[serde(default)]
+    pub push_lease: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -237,6 +243,9 @@ pub struct AppConfig {
     /// Where task directories are created. Defaults to ~/.villain-worktrees.
     #[serde(default)]
     pub worktree_root: Option<String>,
+    /// Merge or rebase, for Update from base: whichever was used last.
+    #[serde(default)]
+    pub update_by: crate::git::UpdateBy,
     /// Repos last used, keyed "epic:ACME-12" / "project:ACME". Prefills the picker.
     #[serde(default)]
     pub last_repos: HashMap<String, Vec<String>>,
@@ -289,6 +298,7 @@ impl AppConfig {
                 // Nothing recorded the branch point back then; the diff falls
                 // back to the merge base for these.
                 base_commit: None,
+                push_lease: None,
             });
         }
         self.version = SCHEMA_VERSION;

@@ -290,8 +290,12 @@ fn push_task_inner(state: &AppState, task_id: String) -> Result<Vec<RepoResult>>
             .project(&checkout.project_id)
             .map(|p| p.name)
             .unwrap_or_else(|_| "(unknown)".into());
-        let (ok, detail) = match git::push(&PathBuf::from(&checkout.path), &task.branch) {
-            Ok(_) => (true, "pushed".into()),
+        let lease = checkout.push_lease.as_deref();
+        let (ok, detail) = match git::push(&PathBuf::from(&checkout.path), &task.branch, lease) {
+            Ok(_) => {
+                pushed(state, &checkout.id);
+                (true, if lease.is_some() { "pushed, replacing the pre-rebase branch" } else { "pushed" }.into())
+            }
             Err(e) => (false, e.to_string()),
         };
         results.push(RepoResult {
@@ -319,25 +323,41 @@ pub struct RepoUpdate {
     pub detail: String,
 }
 
-/// Merge each repository's base into the task branch.
+/// A push went through, so a lease taken at the last rebase has been spent.
+pub(crate) fn pushed(state: &AppState, checkout_id: &str) {
+    let _ = state.config.update(|c| {
+        if let Some(found) = c.checkouts.iter_mut().find(|c| c.id == checkout_id) {
+            found.push_lease = None;
+        }
+    });
+}
+
+/// Bring each repository's base into the task branch, merging or rebasing.
 ///
 /// Fetched first, all together, so "up to date" means with the remote and
-/// not with whatever this clone last heard. Off the command thread: a fetch
-/// per repository and a merge that runs the repository's hooks.
+/// not with whatever this clone last heard. A rebase fetches the task branch
+/// too: it has to know what is on the remote branch before it rewrites it.
+/// Off the command thread: fetches, and an update that runs the repository's
+/// hooks.
 #[tauri::command]
 pub async fn update_from_base(
     app: AppHandle,
     task_id: String,
     checkout_ids: Option<Vec<String>>,
+    by: git::UpdateBy,
 ) -> Result<Vec<RepoUpdate>> {
-    super::blocking(app, move |state| update_from_base_inner(state, task_id, checkout_ids)).await
+    super::blocking(app, move |state| update_from_base_inner(state, task_id, checkout_ids, by)).await
 }
 
 fn update_from_base_inner(
     state: &AppState,
     task_id: String,
     checkout_ids: Option<Vec<String>>,
+    by: git::UpdateBy,
 ) -> Result<Vec<RepoUpdate>> {
+    let task = state.config.task(&task_id)?;
+    // Offered first next time: a team that rebases rebases every time.
+    state.config.update(|c| c.update_by = by)?;
     let checkouts: Vec<_> = state
         .config
         .checkouts_of(&task_id)
@@ -345,12 +365,20 @@ fn update_from_base_inner(
         .filter(|c| checkout_ids.as_ref().is_none_or(|ids| ids.contains(&c.id)))
         .filter(|c| std::path::Path::new(&c.path).is_dir())
         .collect();
-    git::fetch_bases(
-        &checkouts
-            .iter()
-            .map(|c| (PathBuf::from(&c.path), c.base.clone()))
-            .collect::<Vec<_>>(),
-    );
+    let fetch = |name: &dyn Fn(&crate::config::Checkout) -> String| {
+        git::fetch_bases(
+            &checkouts
+                .iter()
+                .map(|c| (PathBuf::from(&c.path), name(c)))
+                .collect::<Vec<_>>(),
+        )
+    };
+    fetch(&|c| c.base.clone());
+    // One after the other, not together: two fetches at once in one
+    // repository race for its FETCH_HEAD.
+    if by == git::UpdateBy::Rebase {
+        fetch(&|_| task.branch.clone());
+    }
 
     let mut out = Vec::new();
     for checkout in checkouts {
@@ -368,17 +396,25 @@ fn update_from_base_inner(
             conflicts: Vec::new(),
             detail: String::new(),
         };
-        match git::update_from_base(&PathBuf::from(&checkout.path), &checkout.base) {
+        let dir = PathBuf::from(&checkout.path);
+        // Read before the rebase: afterwards the local branch no longer
+        // follows on from it, and it is the one commit a push may replace.
+        let remote = git::remote_tip(&dir, &task.branch);
+        match git::update_from_base(&dir, &checkout.base, by) {
             Ok((updated, target)) => {
                 match updated {
                     git::Updated::UpToDate => {
                         row.outcome = "up_to_date";
                         row.detail = "already up to date".into();
                     }
-                    git::Updated::Merged { commits } => {
-                        row.outcome = "merged";
+                    git::Updated::Applied { commits } => {
+                        row.outcome = "updated";
                         row.commits = commits;
-                        row.detail = format!("merged {commits} commit{}", if commits == 1 { "" } else { "s" });
+                        let s = if commits == 1 { "" } else { "s" };
+                        row.detail = match by {
+                            git::UpdateBy::Merge => format!("merged {commits} commit{s}"),
+                            git::UpdateBy::Rebase => format!("rebased onto {commits} new commit{s}"),
+                        };
                     }
                     git::Updated::Conflicts(files) => {
                         row.outcome = "conflicts";
@@ -392,13 +428,18 @@ fn update_from_base_inner(
                 }
                 // Recorded even for a conflict: it is where the branch is
                 // heading, and `baseline` passes over a point the branch has
-                // not reached — so while the merge is unfinished, or if it is
+                // not reached — so while the update is unfinished, or if it is
                 // abandoned, the diff is measured as it was before.
                 if row.outcome != "up_to_date" {
-                    let id = checkout.id.clone();
+                    let (id, rebased) = (checkout.id.clone(), by == git::UpdateBy::Rebase);
                     state.config.update(|c| {
                         if let Some(found) = c.checkouts.iter_mut().find(|c| c.id == id) {
                             found.base_commit = Some(target.clone());
+                            // Kept from an earlier rebase not yet pushed: the
+                            // remote has not moved since, or this one refused.
+                            if rebased && found.push_lease.is_none() {
+                                found.push_lease = remote.clone();
+                            }
                         }
                     })?;
                 }
@@ -413,35 +454,47 @@ fn update_from_base_inner(
     Ok(out)
 }
 
-/// Abandon a conflicted update in one repository.
+/// Abandon a conflicted merge or rebase in one repository.
 #[tauri::command]
-pub async fn abort_merge(app: AppHandle, checkout_id: String) -> Result<()> {
+pub async fn abort_update(app: AppHandle, checkout_id: String) -> Result<()> {
     super::blocking(app, move |state| {
         let checkout = state.config.checkout(&checkout_id)?;
-        let done = git::abort_merge(&PathBuf::from(&checkout.path));
+        let done = git::abort_update(&PathBuf::from(&checkout.path));
         state.status_cache.lock().remove(&checkout_id);
         done
     })
     .await
 }
 
-/// One repository's unfinished merge, as the prompt describes it.
+/// One repository's unfinished update, as the prompt describes it.
 pub(crate) struct Conflicted {
     pub repo: String,
     /// The agent is sitting in this repository, so its paths go bare.
     pub here: bool,
     pub base: String,
+    pub by: git::UpdateBy,
     pub files: Vec<String>,
 }
 
 pub(crate) fn conflict_prompt(branch: &str, repos: &[Conflicted]) -> String {
+    let rebasing = repos.iter().any(|r| r.by == git::UpdateBy::Rebase);
+    let merging = repos.iter().any(|r| r.by == git::UpdateBy::Merge);
+    let what = match (merging, rebasing) {
+        (true, true) => "merge or rebase",
+        (false, true) => "rebase",
+        _ => "merge",
+    };
     let mut out = format!(
-        "Bringing `{branch}` up to date with its base branch stopped on merge conflicts. \
-         The merge is still in progress in {} — do not start it again or abort it.\n\n",
+        "Bringing `{branch}` up to date with its base branch stopped on conflicts. \
+         The {what} is still in progress in {} — do not start it again or abort it.\n\n",
         if repos.len() == 1 { "that worktree" } else { "each of these worktrees" },
     );
     for r in repos {
-        out.push_str(&format!("{} (merging origin/{}):\n", r.repo, r.base));
+        let verb = match r.by {
+            git::UpdateBy::Merge => "merging",
+            git::UpdateBy::Rebase => "rebasing onto",
+        };
+        out.push_str(&format!("{} ({verb} origin/{}):\n", r.repo, r.base));
         for f in &r.files {
             if r.here {
                 out.push_str(&format!("- {f}\n"));
@@ -454,9 +507,24 @@ pub(crate) fn conflict_prompt(branch: &str, repos: &[Conflicted]) -> String {
     out.push_str(
         "For each file, work out what both sides were for and keep both where you can — \
          the base's change is someone else's finished work, and this branch's is ours. \
-         Then build and run the tests, `git add` the files and finish with \
-         `git commit --no-edit`. If two changes cannot both be kept, stop and tell me \
-         which, and why, before choosing.",
+         Then build and run the tests and `git add` the files. ",
+    );
+    if merging {
+        out.push_str("Finish a merge with `git commit --no-edit`. ");
+    }
+    if rebasing {
+        // The two words git uses are backwards from what they mean in a
+        // merge, and an agent that reaches for `--ours` gets the base.
+        out.push_str(
+            "Continue a rebase with `GIT_EDITOR=true git rebase --continue`; it replays one \
+             commit at a time, so it can stop again on a later one — resolve each the same way \
+             until it finishes. During a rebase `--ours` is the base and `--theirs` is this \
+             branch's commit. Do not push: the history has been rewritten, and the app pushes it \
+             only over the commit it was rebased from. ",
+        );
+    }
+    out.push_str(
+        "If two changes cannot both be kept, stop and tell me which, and why, before choosing.",
     );
     out
 }
@@ -484,9 +552,7 @@ pub async fn send_merge_conflicts(
             .into_iter()
             .filter_map(|c| {
                 let dir = PathBuf::from(&c.path);
-                if !git::merge_in_progress(&dir) {
-                    return None;
-                }
+                let by = git::in_progress(&dir)?;
                 Some(Conflicted {
                     repo: state
                         .config
@@ -495,6 +561,7 @@ pub async fn send_merge_conflicts(
                         .unwrap_or_else(|_| "(unknown)".into()),
                     here: scope.as_deref() == Some(c.id.as_str()),
                     base: c.base,
+                    by,
                     files: git::conflicted_files(&dir),
                 })
             })
@@ -521,13 +588,28 @@ mod tests {
         let prompt = conflict_prompt(
             "ACME-1",
             &[
-                Conflicted { repo: "api".into(), here: true, base: "main".into(), files: vec!["src/a.ts".into()] },
-                Conflicted { repo: "web".into(), here: false, base: "develop".into(), files: vec!["b.ts".into()] },
+                Conflicted { repo: "api".into(), here: true, base: "main".into(), by: git::UpdateBy::Merge, files: vec!["src/a.ts".into()] },
+                Conflicted { repo: "web".into(), here: false, base: "develop".into(), by: git::UpdateBy::Merge, files: vec!["b.ts".into()] },
             ],
         );
         assert!(prompt.contains("api (merging origin/main):\n- src/a.ts\n"));
         assert!(prompt.contains("web (merging origin/develop):\n- web/b.ts\n"));
         assert!(prompt.contains("each of these worktrees"));
         assert!(prompt.contains("git commit --no-edit"));
+        assert!(!prompt.contains("rebase --continue"));
+    }
+
+    #[test]
+    fn a_rebase_prompt_says_how_to_continue_and_not_to_push() {
+        let prompt = conflict_prompt(
+            "ACME-1",
+            &[Conflicted { repo: "api".into(), here: false, base: "main".into(), by: git::UpdateBy::Rebase, files: vec!["a.ts".into()] }],
+        );
+        assert!(prompt.contains("api (rebasing onto origin/main):\n- api/a.ts\n"));
+        assert!(prompt.contains("The rebase is still in progress"));
+        assert!(prompt.contains("GIT_EDITOR=true git rebase --continue"));
+        assert!(prompt.contains("`--ours` is the base"));
+        assert!(prompt.contains("Do not push"));
+        assert!(!prompt.contains("commit --no-edit"));
     }
 }

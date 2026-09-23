@@ -33,6 +33,7 @@ import type {
   TaskPrs,
   TaskView,
   UiPrefs,
+  UpdateBy,
   AppNotice,
 } from "./types";
 
@@ -132,9 +133,10 @@ export const api = {
   commitTask: (taskId: string, message: string) =>
     invoke<RepoResult[]>("commit_task", { taskId, message }),
   /** Merge each repo's base into the branch; all of the task's repos when `checkoutIds` is null. */
-  updateFromBase: (taskId: string, checkoutIds: string[] | null) =>
-    invoke<RepoUpdate[]>("update_from_base", { taskId, checkoutIds }),
-  abortMerge: (checkoutId: string) => invoke<void>("abort_merge", { checkoutId }),
+  updateFromBase: (taskId: string, checkoutIds: string[] | null, by: UpdateBy) =>
+    invoke<RepoUpdate[]>("update_from_base", { taskId, checkoutIds, by }),
+  /** Abandon a conflicted merge or rebase, putting the branch back. */
+  abortUpdate: (checkoutId: string) => invoke<void>("abort_update", { checkoutId }),
   /** Typed into `paneId` when given; otherwise only returned, to start an agent with. */
   sendMergeConflicts: (taskId: string, paneId: string | null, scope: string | null) =>
     invoke<string>("send_merge_conflicts", { taskId, paneId, scope }),

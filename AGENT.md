@@ -100,7 +100,12 @@ live process kills it and takes its agents with it, and the same is true of
 - **The user's git config applies to every git the app runs.** `merge.ff =
   only` made every update from base fail with "Not possible to fast-forward"
   until the merge said `--ff` itself. Anything the app relies on git doing,
-  it spells out.
+  it spells out — `-c` for what has no flag, since an older git ignores a
+  config key it does not know but refuses an option it does not.
+- **A rebased branch is pushed with a lease, never `--force`.** The commit the
+  remote branch was at is recorded on the checkout (`push_lease`) when it
+  rebases and cleared by the next push. Any new push site goes through
+  `git::push` with it.
 - **GitHub's PR listing is state-scoped.** `state=open` drops a PR the moment
   it closes, so anything that wants history has to ask for `state=all`.
 

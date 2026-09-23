@@ -154,14 +154,24 @@ macOS may suspend. Settings → Appearance → Notifications turns it off.
    contains it, so a commit made after the merge keeps its branch.
 
 **Keeping up with the base.** *Update from base* in the task header fetches
-each repo's base and merges it into the task branch — a merge, like GitHub's
-own *Update branch*, so an open PR keeps its history and nothing needs a force
-push. A repo with uncommitted edits is skipped rather than merged over. A
-conflict is left in progress, because that is the state it can be resolved
-from: hand it to an agent, which is told which files in which repos and to
-finish with `git commit --no-edit`, or abandon the merge to put the branch
-back. A PR card whose branch GitHub reports as behind or conflicting says so,
-and opens the same dialog.
+each repo's base and takes it into the task branch, by merging or rebasing —
+whichever was used last is offered first.
+
+- **Merge** works like GitHub's own *Update branch*: an open PR keeps its
+  history and nothing needs a force push.
+- **Rebase** replays the branch on the base, for teams that keep history
+  straight. It refuses while the remote branch has commits the worktree does
+  not, since pushing the rebased branch would drop them. The next push —
+  *Push all*, or opening PRs — replaces the remote branch with
+  `--force-with-lease` set to the commit it was rebased from, so a push by
+  anyone else in between makes it refuse instead of overwriting.
+
+A repo with uncommitted edits is skipped. A conflict is left in progress,
+because that is the state it can be resolved from: hand it to an agent, which
+is told which files in which repos and how to finish — `git commit --no-edit`,
+or `git rebase --continue` until the rebase is done, and not to push — or
+abandon it to put the branch back. A PR card whose branch GitHub reports as
+behind or conflicting says so, and opens the same dialog.
 
 Repos join and leave a task at any time: expand a task in the sidebar for
 `+ add repo`, or the `✕` on a repo row to drop it. You rarely know the full

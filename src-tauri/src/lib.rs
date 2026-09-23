@@ -183,7 +183,7 @@ pub fn run() {
             commands::commit_task,
             commands::push_task,
             commands::update_from_base,
-            commands::abort_merge,
+            commands::abort_update,
             commands::send_merge_conflicts,
             commands::jira_connect,
             commands::jira_issues,

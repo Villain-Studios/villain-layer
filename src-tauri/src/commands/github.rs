@@ -881,13 +881,14 @@ pub async fn github_open_prs(
             // A push is a network round trip with no timeout of its own; on
             // the async workers it held up the MCP server until git gave up.
             let (owner, name) = {
-                let (dir, branch) = (dir.clone(), task.branch.clone());
+                let (dir, branch, lease) = (dir.clone(), task.branch.clone(), checkout.push_lease.clone());
                 off_runtime(move || {
-                    git::push(&dir, &branch)?;
+                    git::push(&dir, &branch, lease.as_deref())?;
                     git::origin_slug(&dir)
                 })
                 .await??
             };
+            super::diff::pushed(&state, &checkout.id);
 
             let (pr, new) = match client.pull_for_branch(&owner, &name, &task.branch).await? {
                 Some(existing) => (existing, false),

@@ -318,7 +318,8 @@ pub(crate) fn chat_room(state: &AppState, id: &str) -> Result<PathBuf> {
 }
 
 /// Everything the app itself writes into a task folder.
-pub(crate) const GENERATED_FILES: &[&str] = &["CLAUDE.md", "AGENTS.md", ".mcp.json", "PR_DESCRIPTION.md"];
+pub(crate) const GENERATED_FILES: &[&str] =
+    &["CLAUDE.md", "AGENTS.md", ".mcp.json", "PR_DESCRIPTION.md", super::github::FEEDBACK_FILE];
 
 /// Where generated agent files (`.mcp.json`, context) may safely be written.
 ///

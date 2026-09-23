@@ -288,6 +288,111 @@ impl GitHub {
             .unwrap_or_default())
     }
 
+    /// What reviewers have said on a pull request: its review threads, the
+    /// bodies of submitted reviews, and the conversation.
+    ///
+    /// GraphQL, because REST cannot say whether a thread was resolved — and
+    /// handing an agent every thread a reviewer already closed is asking it to
+    /// redo work that was accepted.
+    pub async fn pr_feedback(&self, owner: &str, repo: &str, number: u64) -> Result<PrFeedback> {
+        const QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) {
+          repository(owner: $owner, name: $name) {
+            pullRequest(number: $number) {
+              author { login }
+              reviewThreads(first: 100) {
+                nodes {
+                  isResolved isOutdated path line originalLine
+                  comments(first: 30) { nodes { author { login __typename } body url createdAt } }
+                }
+              }
+              reviews(last: 50) { nodes { author { login __typename } state body url submittedAt } }
+              comments(last: 50) { nodes { author { login __typename } body url createdAt } }
+            }
+          }
+        }";
+        let v = self
+            .json(
+                self.client
+                    .post(graphql_url(&self.api_url))
+                    .header("Authorization", format!("Bearer {}", self.token))
+                    .header("User-Agent", "villain-layer")
+                    .json(&json!({
+                        "query": QUERY,
+                        "variables": { "owner": owner, "name": repo, "number": number },
+                    })),
+            )
+            .await?;
+        parse_feedback(&v)
+    }
+
+    /// Check runs on a ref that failed, with what they said about it.
+    ///
+    /// Cancelled is left out: it is nearly always a newer push superseding the
+    /// run, not something wrong with the code.
+    pub async fn failed_checks(&self, owner: &str, repo: &str, git_ref: &str) -> Result<Vec<FailedCheck>> {
+        let v = self
+            .json(self.req(
+                reqwest::Method::GET,
+                &format!("/repos/{owner}/{repo}/commits/{git_ref}/check-runs?per_page=100"),
+            ))
+            .await?;
+        let mut out: Vec<FailedCheck> = Vec::new();
+        for c in v.get("check_runs").and_then(|c| c.as_array()).into_iter().flatten() {
+            let conclusion = c.get("conclusion").and_then(|x| x.as_str()).unwrap_or("");
+            if !matches!(conclusion, "failure" | "timed_out" | "action_required" | "startup_failure") {
+                continue;
+            }
+            let name = s(c, "name");
+            // The same workflow runs once for the push and again for the pull
+            // request; one account of each failure is enough.
+            if out.iter().any(|f| f.name == name) {
+                continue;
+            }
+            let output = |k: &str| c.pointer(&format!("/output/{k}")).and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+            let summary = [output("title"), output("summary"), output("text")]
+                .into_iter()
+                .filter(|t| !t.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            out.push(FailedCheck {
+                name,
+                conclusion: conclusion.to_string(),
+                url: c.get("html_url").and_then(|x| x.as_str()).map(str::to_string),
+                summary: clip_tail(&summary, SUMMARY_BUDGET),
+                log: None,
+                job_id: (c.pointer("/app/slug").and_then(|x| x.as_str()) == Some("github-actions"))
+                    .then(|| c.get("id").and_then(|x| x.as_u64()))
+                    .flatten(),
+            });
+        }
+        Ok(out)
+    }
+
+    /// The end of a GitHub Actions job's log, where the failure usually is.
+    ///
+    /// The log is a redirect to storage elsewhere; reqwest drops the token on
+    /// the way, which that URL does not want anyway. Read a chunk at a time
+    /// keeping only the tail, because a chatty job's log runs to tens of
+    /// megabytes and only its last screenful says why it failed.
+    pub async fn job_log_tail(&self, owner: &str, repo: &str, job_id: u64) -> Result<String> {
+        let mut res = self
+            .req(reqwest::Method::GET, &format!("/repos/{owner}/{repo}/actions/jobs/{job_id}/logs"))
+            .send()
+            .await?;
+        let status = res.status();
+        if !status.is_success() {
+            return Err(Error::Other(format!("GitHub {status} reading the job log")));
+        }
+        let mut tail: Vec<u8> = Vec::new();
+        while let Some(chunk) = res.chunk().await? {
+            tail.extend_from_slice(&chunk);
+            if tail.len() > LOG_KEEP * 2 {
+                tail.drain(..tail.len() - LOG_KEEP);
+            }
+        }
+        Ok(log_excerpt(&String::from_utf8_lossy(&tail)))
+    }
+
     /// Open pull requests matching a search query, newest activity first.
     ///
     /// One page. This feeds an inbox, and the search API is rate-limited
@@ -636,6 +741,192 @@ fn s(v: &Value, key: &str) -> String {
         .to_string()
 }
 
+
+/// Everything reviewers said on one pull request.
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct PrFeedback {
+    /// Who opened it — their own replies are not feedback.
+    pub author: String,
+    pub threads: Vec<ReviewThread>,
+    /// Submitted reviews that say something. A bare approval has no body and
+    /// nothing to act on, so it is left out.
+    pub reviews: Vec<Note>,
+    pub comments: Vec<Note>,
+}
+
+/// An inline conversation on a line of the diff.
+#[derive(Debug, Clone, Serialize)]
+pub struct ReviewThread {
+    pub path: String,
+    /// Null when the line is gone from the current diff.
+    pub line: Option<u64>,
+    pub resolved: bool,
+    /// The code under it has changed since, so it may already be answered.
+    pub outdated: bool,
+    pub url: String,
+    pub comments: Vec<Note>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Note {
+    pub author: String,
+    /// Written by an app — a coverage bot, a linter — not a person.
+    pub bot: bool,
+    /// For a review: APPROVED, CHANGES_REQUESTED or COMMENTED.
+    pub state: Option<String>,
+    pub body: String,
+    pub url: String,
+    pub at: Option<String>,
+}
+
+/// A check run that failed, and what it left to go on.
+#[derive(Debug, Clone, Serialize)]
+pub struct FailedCheck {
+    pub name: String,
+    pub conclusion: String,
+    pub url: Option<String>,
+    /// The run's own report — for an external CI, the only account there is.
+    pub summary: String,
+    /// The end of the job's log, when it ran on GitHub Actions.
+    pub log: Option<String>,
+    #[serde(skip)]
+    pub job_id: Option<u64>,
+}
+
+/// Where the GraphQL endpoint is, from the REST base: `api.github.com` has
+/// it at `/graphql`, and an Enterprise Server at `/api/graphql` beside
+/// `/api/v3`.
+pub(crate) fn graphql_url(api_url: &str) -> String {
+    let base = api_url.trim_end_matches('/');
+    format!("{}/graphql", base.strip_suffix("/v3").unwrap_or(base))
+}
+
+/// How much of a check's own report to keep.
+const SUMMARY_BUDGET: usize = 3_000;
+/// How much of a log to read to the end of.
+const LOG_KEEP: usize = 2 * 1024 * 1024;
+/// How many lines of log an agent is handed per failed job.
+const LOG_LINES: usize = 80;
+const LOG_BUDGET: usize = 8_000;
+
+/// Keep the end of `text`, where a report's conclusion is, within `max` bytes.
+fn clip_tail(text: &str, max: usize) -> String {
+    if text.len() <= max {
+        return text.to_string();
+    }
+    let mut cut = text.len() - max;
+    while !text.is_char_boundary(cut) {
+        cut += 1;
+    }
+    format!("…{}", &text[cut..])
+}
+
+/// The part of an Actions log that says why the job failed.
+///
+/// Every line carries a timestamp, and the job ends with cleanup steps that
+/// say nothing: taken literally, the last eighty lines of a failed build were
+/// "Post job cleanup" and a cache upload. The window ends at the last line
+/// Actions marked as an error, or before the cleanup when nothing was marked.
+pub(crate) fn log_excerpt(raw: &str) -> String {
+    let lines: Vec<String> = crate::pty::strip_ansi(raw)
+        .lines()
+        .map(|l| {
+            // Every line opens with when it was written: `2026-09-23T10:00:00.1234567Z `.
+            let l = match l.split_once(' ') {
+                Some((stamp, rest)) if stamp.len() >= 20 && stamp.ends_with('Z') && stamp.as_bytes()[4] == b'-' => rest,
+                _ => l,
+            };
+            l.trim_end().to_string()
+        })
+        .filter(|l| !l.starts_with("##[endgroup]"))
+        .map(|l| match l.strip_prefix("##[group]") {
+            Some(rest) => format!("▸ {rest}"),
+            None => l.replace("##[error]", "ERROR: ").replace("##[warning]", "warning: "),
+        })
+        .collect();
+
+    let end = match lines.iter().rposition(|l| l.starts_with("ERROR: ")) {
+        Some(at) => (at + 1).min(lines.len()),
+        None => lines
+            .iter()
+            .position(|l| l.starts_with("▸ Post job cleanup") || l.starts_with("Post job cleanup"))
+            .unwrap_or(lines.len()),
+    };
+    let start = end.saturating_sub(LOG_LINES);
+    clip_tail(lines[start..end].join("\n").trim(), LOG_BUDGET)
+}
+
+fn parse_note(v: &Value) -> Note {
+    Note {
+        author: v.pointer("/author/login").and_then(|x| x.as_str()).unwrap_or("ghost").to_string(),
+        bot: v.pointer("/author/__typename").and_then(|x| x.as_str()) == Some("Bot"),
+        state: v.get("state").and_then(|x| x.as_str()).map(str::to_string),
+        body: s(v, "body").trim().to_string(),
+        url: s(v, "url"),
+        at: v
+            .get("createdAt")
+            .or_else(|| v.get("submittedAt"))
+            .and_then(|x| x.as_str())
+            .map(str::to_string),
+    }
+}
+
+pub(crate) fn parse_feedback(v: &Value) -> Result<PrFeedback> {
+    // GraphQL answers 200 with the failure inside: a PR that does not exist,
+    // or a token without access, arrives as `errors` and a null.
+    if let Some(msg) = v.pointer("/errors/0/message").and_then(|m| m.as_str()) {
+        return Err(Error::Other(format!("GitHub: {msg}")));
+    }
+    let pr = v
+        .pointer("/data/repository/pullRequest")
+        .filter(|p| !p.is_null())
+        .ok_or_else(|| Error::Other("GitHub did not return that pull request".into()))?;
+    let nodes = |path: &str| {
+        pr.pointer(path)
+            .and_then(|n| n.as_array())
+            .cloned()
+            .unwrap_or_default()
+    };
+
+    let threads = nodes("/reviewThreads/nodes")
+        .iter()
+        .map(|t| {
+            let comments: Vec<Note> = t
+                .pointer("/comments/nodes")
+                .and_then(|n| n.as_array())
+                .map(|a| a.iter().map(parse_note).collect())
+                .unwrap_or_default();
+            ReviewThread {
+                path: s(t, "path"),
+                line: t
+                    .get("line")
+                    .and_then(|x| x.as_u64())
+                    .or_else(|| t.get("originalLine").and_then(|x| x.as_u64())),
+                resolved: t.get("isResolved").and_then(|x| x.as_bool()).unwrap_or(false),
+                outdated: t.get("isOutdated").and_then(|x| x.as_bool()).unwrap_or(false),
+                url: comments.first().map(|c| c.url.clone()).unwrap_or_default(),
+                comments,
+            }
+        })
+        .filter(|t| !t.comments.is_empty())
+        .collect();
+
+    Ok(PrFeedback {
+        author: pr.pointer("/author/login").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        threads,
+        reviews: nodes("/reviews/nodes")
+            .iter()
+            .map(parse_note)
+            .filter(|r| !r.body.is_empty())
+            .collect(),
+        comments: nodes("/comments/nodes")
+            .iter()
+            .map(parse_note)
+            .filter(|c| !c.body.is_empty())
+            .collect(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -833,5 +1124,79 @@ mod tests {
             ]),
             "approved"
         );
+    }
+    #[test]
+    fn graphql_sits_beside_rest_on_both_kinds_of_host() {
+        assert_eq!(graphql_url("https://api.github.com"), "https://api.github.com/graphql");
+        assert_eq!(graphql_url("https://ghe.example.com/api/v3/"), "https://ghe.example.com/api/graphql");
+    }
+
+    #[test]
+    fn a_log_excerpt_ends_at_the_error_not_the_cleanup() {
+        let mut raw = String::new();
+        for i in 0..200 {
+            raw.push_str(&format!("2026-09-23T10:00:00.1234567Z noise {i}\n"));
+        }
+        raw.push_str("2026-09-23T10:00:01.0000000Z ##[group]Run bun test\n");
+        raw.push_str("2026-09-23T10:00:02.0000000Z \u{1b}[31mexpected 2, got 3\u{1b}[0m\n");
+        raw.push_str("2026-09-23T10:00:02.0000000Z ##[endgroup]\n");
+        raw.push_str("2026-09-23T10:00:03.0000000Z ##[error]Process completed with exit code 1.\n");
+        raw.push_str("2026-09-23T10:00:04.0000000Z Post job cleanup.\n");
+        raw.push_str("2026-09-23T10:00:04.0000000Z Cache saved\n");
+
+        let out = log_excerpt(&raw);
+        assert!(out.ends_with("ERROR: Process completed with exit code 1."), "{out}");
+        assert!(out.contains("▸ Run bun test"));
+        assert!(out.contains("expected 2, got 3"));
+        assert!(!out.contains("2026-09-23T"));
+        assert!(!out.contains("Cache saved"));
+        assert!(!out.contains("noise 100"), "kept more than the window");
+    }
+
+    #[test]
+    fn without_an_error_marker_the_excerpt_stops_before_cleanup() {
+        let raw = "2026-09-23T10:00:00.1Z test failed\n2026-09-23T10:00:00.2Z Post job cleanup.\n2026-09-23T10:00:00.3Z done\n";
+        assert_eq!(log_excerpt(raw), "test failed");
+    }
+
+    #[test]
+    fn feedback_keeps_threads_with_their_state_and_drops_empty_reviews() {
+        let v = json!({ "data": { "repository": { "pullRequest": {
+            "author": { "login": "me" },
+            "reviewThreads": { "nodes": [
+                { "isResolved": false, "isOutdated": false, "path": "src/a.ts", "line": 12, "originalLine": 10,
+                  "comments": { "nodes": [
+                    { "author": { "login": "ana", "__typename": "User" }, "body": "Off by one?", "url": "u1", "createdAt": "t" },
+                    { "author": { "login": "me", "__typename": "User" }, "body": "Looking", "url": "u2", "createdAt": "t" }
+                  ] } },
+                { "isResolved": true, "isOutdated": true, "path": "src/b.ts", "line": null, "originalLine": 4,
+                  "comments": { "nodes": [
+                    { "author": { "login": "cov", "__typename": "Bot" }, "body": "Uncovered", "url": "u3", "createdAt": "t" }
+                  ] } }
+            ] },
+            "reviews": { "nodes": [
+                { "author": { "login": "ana", "__typename": "User" }, "state": "APPROVED", "body": "", "url": "r1", "submittedAt": "t" },
+                { "author": { "login": "bo", "__typename": "User" }, "state": "CHANGES_REQUESTED", "body": "Needs a test", "url": "r2", "submittedAt": "t" }
+            ] },
+            "comments": { "nodes": [] }
+        } } } });
+        let fb = parse_feedback(&v).unwrap();
+        assert_eq!(fb.author, "me");
+        assert_eq!(fb.threads.len(), 2);
+        assert_eq!(fb.threads[0].line, Some(12));
+        assert_eq!(fb.threads[0].url, "u1");
+        assert_eq!(fb.threads[0].comments.len(), 2);
+        assert!(fb.threads[1].resolved && fb.threads[1].outdated);
+        // Gone from the diff: the line it was left on, not nothing.
+        assert_eq!(fb.threads[1].line, Some(4));
+        assert!(fb.threads[1].comments[0].bot);
+        assert_eq!(fb.reviews.len(), 1);
+        assert_eq!(fb.reviews[0].state.as_deref(), Some("CHANGES_REQUESTED"));
+    }
+
+    #[test]
+    fn a_graphql_error_is_an_error() {
+        let v = json!({ "data": { "repository": null }, "errors": [{ "message": "Could not resolve to a Repository" }] });
+        assert!(parse_feedback(&v).unwrap_err().to_string().contains("Could not resolve"));
     }
 }

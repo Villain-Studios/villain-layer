@@ -7,6 +7,7 @@ import type {
   CheckoutPr,
   CreateField,
   DiffScope,
+  FeedbackItem,
   FoundRepo,
   JiraIssue,
   JiraIssueType,
@@ -17,6 +18,7 @@ import type {
   Project,
   RepoBranchFacts,
   RepoCommits,
+  RepoFeedback,
   RepoResult,
   RepoSuggestion,
   Resumable,
@@ -206,6 +208,12 @@ export const api = {
     invoke<string>("github_retarget_pr", { checkoutId }),
   githubOpenPrs: (taskId: string, title: string, body: string, draft: boolean) =>
     invoke<RepoResult[]>("github_open_prs", { taskId, title, body, draft }),
+  githubPrFeedback: (taskId: string) =>
+    invoke<RepoFeedback[]>("github_pr_feedback", { taskId }),
+  /** Typed into `paneId` when given; otherwise only returned, to start an agent with. */
+  sendPrFeedback: (
+    taskId: string, paneId: string | null, scope: string | null, items: FeedbackItem[],
+  ) => invoke<string>("send_pr_feedback", { taskId, paneId, scope, items }),
 
   // slack
   slackConnect: (secret: string, channel: string) =>

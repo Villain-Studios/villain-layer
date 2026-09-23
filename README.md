@@ -135,6 +135,15 @@ macOS may suspend. Settings → Appearance → Notifications turns it off.
    PRs* pushes each and opens one PR per repo — then posts all the links back to
    the Jira ticket as a single comment, and one summary to Slack.
 
+6. **Answer review.** *Feedback → agent* on the Pull requests tab gathers what
+   came back on every open PR in the task: unresolved review threads, review
+   and conversation comments, and each failing check with the end of its log —
+   up to the line GitHub Actions marked as the error, not the cleanup steps
+   after it. Pick what matters and it goes to the agent as a file in the task
+   folder, with paths qualified by repo as for Diff notes. Resolved threads
+   are left out, and threads you replied to last, bots and anything already
+   sent start unpicked. Nothing is posted to GitHub.
+
 Repos join and leave a task at any time: expand a task in the sidebar for
 `+ add repo`, or the `✕` on a repo row to drop it. You rarely know the full
 blast radius when you start.

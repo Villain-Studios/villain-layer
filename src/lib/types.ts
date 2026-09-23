@@ -258,6 +258,66 @@ export interface RepoBranchFacts {
   has_remote: boolean;
 }
 
+/** One comment, review or reply on a pull request. */
+export interface FeedbackNote {
+  author: string;
+  /** Written by an app — a coverage bot, a linter — not a person. */
+  bot: boolean;
+  /** For a review: APPROVED, CHANGES_REQUESTED or COMMENTED. */
+  state: string | null;
+  body: string;
+  url: string;
+  at: string | null;
+}
+
+export interface ReviewThread {
+  path: string;
+  line: number | null;
+  resolved: boolean;
+  /** The code under it has changed since. */
+  outdated: boolean;
+  url: string;
+  comments: FeedbackNote[];
+}
+
+export interface FailedCheck {
+  name: string;
+  conclusion: string;
+  url: string | null;
+  summary: string;
+  /** The end of the job's log, for a GitHub Actions job. */
+  log: string | null;
+}
+
+/** What reviewers and CI have said on one repository's open PR. */
+export interface RepoFeedback {
+  checkout_id: string;
+  repo: string;
+  number: number;
+  title: string;
+  url: string;
+  /** Who opened the PR. */
+  author: string;
+  threads: ReviewThread[];
+  reviews: FeedbackNote[];
+  comments: FeedbackNote[];
+  checks: FailedCheck[];
+  error: string | null;
+}
+
+/** A piece of feedback chosen to go to an agent. */
+export type FeedbackItem =
+  | {
+      kind: "thread"; checkout_id: string; path: string; line: number | null;
+      outdated: boolean; url: string; comments: { author: string; body: string }[];
+    }
+  | { kind: "review"; checkout_id: string; author: string; state: string | null; body: string; url: string }
+  | { kind: "comment"; checkout_id: string; author: string; body: string; url: string }
+  | {
+      kind: "check"; checkout_id: string; name: string; conclusion: string;
+      url: string | null; summary: string; log: string | null;
+    };
+
 export interface TaskPrs {
   task_id: string;
   rows: CheckoutPr[];

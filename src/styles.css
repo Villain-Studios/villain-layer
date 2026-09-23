@@ -451,6 +451,7 @@ textarea { resize: vertical; font-family: var(--mono); }
   color: var(--dim);
 }
 .review-target select { width: auto; max-width: 200px; }
+.btn .badge,
 .review-tray-actions .badge {
   margin-left: 6px;
   font-size: 11px;
@@ -483,6 +484,51 @@ textarea { resize: vertical; font-family: var(--mono); }
 }
 .check:last-child { border-bottom: none; }
 .check .name { flex: 1; font-family: var(--mono); font-size: 12.5px; }
+
+/* The feedback picker: one row per thread, comment or failing check. */
+.fb-repo { margin-bottom: 16px; }
+.fb-item {
+  display: flex;
+  gap: 9px;
+  align-items: flex-start;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border-soft);
+  font-size: 13px;
+}
+.fb-item:last-of-type { border-bottom: none; }
+.fb-item input[type="checkbox"] { width: auto; margin-top: 3px; flex: none; }
+.fb-main { flex: 1; min-width: 0; cursor: pointer; }
+.fb-head { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.fb-head.mono { font-family: var(--mono); font-size: 12.5px; font-weight: 400; }
+.fb-body {
+  color: var(--dim);
+  margin-top: 3px;
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.fb-log {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  max-height: 280px;
+  overflow: auto;
+  background: var(--bg);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+  cursor: text;
+}
+.fb-note { font-size: 12.5px; padding-top: 6px; }
 
 .status-pill {
   font-size: 11px;

@@ -208,6 +208,8 @@ pub fn run() {
             commands::task_branch_facts,
             commands::github_retarget_pr,
             commands::github_open_prs,
+            commands::github_pr_feedback,
+            commands::send_pr_feedback,
             commands::slack_connect,
             commands::slack_notify,
             commands::set_slack_prefs,

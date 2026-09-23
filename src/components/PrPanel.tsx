@@ -7,6 +7,7 @@ import { reportRepoResults } from "../lib/report";
 import { reviewComments, taskReview, useStore, type TaskReview } from "../store";
 import type { CheckoutPr, CheckRun, Review, TaskView } from "../lib/types";
 import { Combo, Field, Modal, Spinner } from "./ui";
+import { PrFeedback } from "./PrFeedback";
 
 /**
  * The latest review from each reviewer, which is the one GitHub itself shows.
@@ -79,6 +80,14 @@ function worstByName(checks: CheckRun[]): CheckRun[] {
 
 const NO_ROWS: CheckoutPr[] = [];
 
+/** A finished run that went wrong. Cancelled is left out: that is usually a newer push. */
+function failed(c: CheckRun) {
+  return (
+    c.status === "completed" &&
+    !["success", "skipped", "neutral", "cancelled"].includes(c.conclusion ?? "")
+  );
+}
+
 function checkColor(c: CheckRun) {
   if (c.status !== "completed") return "var(--amber)";
   if (c.conclusion === "success") return "var(--green)";
@@ -123,6 +132,7 @@ export function PrPanel({ task }: { task: TaskView }) {
   const [branches, setBranches] = useState<Record<string, string[]>>({});
   /** Whether the "open a pull request" dialog is up. */
   const [creating, setCreating] = useState(false);
+  const [feedback, setFeedback] = useState(false);
   /** Which PR cards are expanded, when there are enough to be worth folding. */
   const [cards, setCards] = useState<Record<string, boolean>>({});
   const [showPast, setShowPast] = useState(false);
@@ -333,6 +343,9 @@ export function PrPanel({ task }: { task: TaskView }) {
     ...r.past.map((pr) => ({ row: r, pr })),
   ]);
   const entries = live.length + earlier.length;
+  // What there is to hand an agent: counts from the sweep, so the button can
+  // say so before anything is fetched.
+  const failing = live.reduce((n, r) => n + worstByName(r.checks).filter(failed).length, 0);
 
   const repoRows = (
     <div className="muted" style={{ marginBottom: 10, lineHeight: 1.6 }}>
@@ -396,6 +409,16 @@ export function PrPanel({ task }: { task: TaskView }) {
         )}
         <div className="spacer" />
         {loading && <Spinner />}
+        {live.length > 0 && (
+          <button
+            className="btn btn-sm"
+            title="Pick review threads, comments and failing checks to hand an agent"
+            onClick={() => setFeedback(true)}
+          >
+            Feedback → agent
+            {said + failing > 0 && <span className="badge">{said + failing}</span>}
+          </button>
+        )}
         <button className="btn btn-sm" onClick={() => void load()}>Refresh</button>
         <button className="btn btn-sm" disabled={busy} onClick={() => void push()}>
           Push all
@@ -593,6 +616,8 @@ export function PrPanel({ task }: { task: TaskView }) {
           ))}
         </div>
       )}
+
+      {feedback && <PrFeedback task={task} onClose={() => setFeedback(false)} />}
 
       {creating && (
         <Modal

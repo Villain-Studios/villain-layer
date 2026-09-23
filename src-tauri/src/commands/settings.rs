@@ -72,15 +72,10 @@ pub fn set_ui_prefs(state: State<AppState>, ui: UiPrefs) -> Result<()> {
     state.config.update(|c| c.ui = ui)
 }
 
-/// A banner, and what a click on it should open.
+/// A banner, and what a click on it should open: `target` is handed back
+/// untouched in `system-notify-click` — a view name (`reviews`, `tickets`,
+/// `chat`, `work`) or `task:<id>`.
 ///
-/// `target` is handed back untouched in `system-notify-click`: a view name
-/// (`reviews`, `tickets`) or `task:<id>`.
-#[tauri::command]
-pub fn system_notify(app: AppHandle, title: String, body: String, target: String) -> Result<()> {
-    banner(&app, title, body, target)
-}
-
 /// The notification plugin's desktop backend shows the banner and drops the
 /// click — `show` never waits for it — so a click could focus the app and
 /// still leave you on whichever view you had left. This shows it itself and
@@ -136,6 +131,8 @@ pub async fn disconnect(app: AppHandle, which: String) -> Result<()> {
 }
 
 fn disconnect_inner(state: &AppState, which: &str) -> Result<()> {
+    // What was seen on that site says nothing about the next one.
+    state.news.forget();
     match which {
         "jira" => {
             secrets::delete(secrets::JIRA)?;

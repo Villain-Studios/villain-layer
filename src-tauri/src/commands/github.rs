@@ -266,8 +266,15 @@ pub struct TeamReviews {
 }
 
 #[tauri::command]
-pub async fn github_review_queue(state: State<'_, AppState>) -> Result<ReviewQueue> {
-    let (client, cfg) = github_client(&state)?;
+pub async fn github_review_queue(app: AppHandle, state: State<'_, AppState>) -> Result<ReviewQueue> {
+    let queue = review_queue(&state).await?;
+    crate::news::saw_reviews(&app, &queue);
+    Ok(queue)
+}
+
+/// The queue itself, for the UI and for the watch that banners what is new.
+pub(crate) async fn review_queue(state: &AppState) -> Result<ReviewQueue> {
+    let (client, cfg) = github_client(state)?;
     // The two searches need nothing from each other, so they go together;
     // only the de-duplication waits for both.
     let team = async {

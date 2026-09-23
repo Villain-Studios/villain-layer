@@ -6,6 +6,7 @@ mod error;
 mod git;
 mod integrations;
 mod mcp;
+mod news;
 mod pty;
 mod secrets;
 mod shellenv;
@@ -103,6 +104,7 @@ pub fn run() {
                 epic_field_missing: Default::default(),
                 pending_notices: Default::default(),
                 status_cache: Default::default(),
+                news: Default::default(),
             };
             app.manage(state);
 
@@ -141,6 +143,7 @@ pub fn run() {
             });
 
             attention::spawn(handle.clone());
+            news::spawn(handle.clone());
 
             // Put back the panes that were open last time. Off the startup
             // path too: each agent spawn waits on the login shell's PATH.
@@ -218,7 +221,6 @@ pub fn run() {
             commands::slack_notify,
             commands::set_slack_prefs,
             commands::get_settings,
-            commands::system_notify,
             commands::take_notices,
             commands::set_worktree_root,
             commands::set_ui_prefs,

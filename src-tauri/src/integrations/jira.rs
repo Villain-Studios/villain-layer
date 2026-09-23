@@ -19,7 +19,7 @@ pub struct Jira {
     epic_field: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct Issue {
     pub key: String,
     pub summary: String,

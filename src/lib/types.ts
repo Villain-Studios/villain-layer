@@ -434,8 +434,9 @@ export interface Settings {
 }
 
 /**
- * What a click on a banner opens, handed back in `system-notify-click`. The
- * backend's agent watch sends `task:<id>` and `work` itself.
+ * What a click on a banner opens, handed back in `system-notify-click`. Every
+ * banner is the backend's: reviews and tickets from `news.rs`, agents from
+ * `attention.rs`.
  */
 export type NotifyTarget = "reviews" | "tickets" | "work" | "chat" | `task:${string}`;
 

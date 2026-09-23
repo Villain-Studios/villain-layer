@@ -153,9 +153,16 @@ pub(crate) async fn jira_issue_types_inner(
 }
 
 #[tauri::command]
-pub async fn jira_issues(state: State<'_, AppState>) -> Result<jira::Page> {
-    learn_epic_field(&state).await;
-    let (client, cfg) = jira_client(&state)?;
+pub async fn jira_issues(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<jira::Page> {
+    let page = my_issues(&state).await?;
+    crate::news::saw_tickets(&app, &page.issues);
+    Ok(page)
+}
+
+/// Your queue, for the UI and for the watch that banners what is new.
+pub(crate) async fn my_issues(state: &AppState) -> Result<jira::Page> {
+    learn_epic_field(state).await;
+    let (client, cfg) = jira_client(state)?;
     let jql = cfg
         .jql
         .clone()

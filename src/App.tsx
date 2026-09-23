@@ -3,16 +3,9 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api } from "./lib/api";
-import {
-  announceReviews,
-  announceTickets,
-  nextReviewKeys,
-  prepareNotifications,
-  unseenReviews,
-  reviewIdentity,
-} from "./lib/notify";
+import { prepareNotifications } from "./lib/notify";
 import { CHAT_TASK_ID, needsYou, selectedTask, stoppedOnPurpose, taskTotals, useStore, type View } from "./store";
-import type { TaskView } from "./lib/types";
+import type { NotifyTarget, TaskView } from "./lib/types";
 import { Sidebar } from "./components/Sidebar";
 import { Terminals } from "./components/Terminals";
 import { DiffView } from "./components/DiffView";
@@ -57,9 +50,6 @@ function Watchers() {
   const refreshPanes = useStore((s) => s.refreshPanes);
   const refreshPrs = useStore((s) => s.refreshPrs);
   const refreshReviewQueue = useStore((s) => s.refreshReviewQueue);
-  const reviewQueue = useStore((s) => s.reviewQueue);
-  const issues = useStore((s) => s.issues);
-  const issuesLoaded = useStore((s) => s.issuesLoaded);
   const notifyOn = useStore((s) => s.settings?.ui.system_notifications);
   const refreshTasks = useStore((s) => s.refreshTasks);
   const setAppActive = useStore((s) => s.setAppActive);
@@ -70,12 +60,6 @@ function Watchers() {
   const seenPrs = useRef(
     new Map<string, { verdict: string; comments: number; merged: boolean }>(),
   );
-  /** Review-queue identities already shown. Null until the first snapshot. */
-  const seenReviews = useRef<Set<string> | null>(null);
-  /** The team list's first arrival is a snapshot, not news. */
-  const teamPrimed = useRef(false);
-  /** Ticket keys already shown. Null until the first successful fetch. */
-  const seenTickets = useRef<Set<string> | null>(null);
 
   useEffect(() => { void refreshAll().catch(fail); }, [refreshAll, fail]);
 
@@ -199,19 +183,16 @@ function Watchers() {
     void refreshReviewQueue({ quiet: true });
   }, [refreshReviewQueue, githubConnected]);
 
-  // Reviews and tickets keep being asked about while the window is in the
-  // background. The other polls stop then — a git status of every worktree is
-  // what made an idle app feel busy — but a banner can only be news if we are
-  // still looking. Three minutes, and only the two lists a banner is about.
+  // Your tickets, every three minutes while the window is in front. While it
+  // is away the backend looks for itself, for the banners: a hidden
+  // webview's timers are the ones macOS throttles or stops.
   useEffect(() => {
-    if (notifyOn === false) return;
     const t = setInterval(() => {
       const s = useStore.getState();
-      if (s.settings?.github_connected) void s.refreshReviewQueue({ quiet: true });
-      if (s.settings?.jira_connected) void s.refreshIssues({ quiet: true });
+      if (s.appActive && s.settings?.jira_connected) void s.refreshIssues({ quiet: true });
     }, 180_000);
     return () => clearInterval(t);
-  }, [notifyOn]);
+  }, []);
 
   useEffect(() => {
     if (!notifyOn) return;
@@ -386,49 +367,8 @@ function Watchers() {
     }
   }, [prs, tasks, toast]);
 
-  // A review request or an assigned ticket that was not in the previous list.
-  // The first snapshot is recorded and not announced: opening the app would
-  // otherwise banner every pull request and ticket already waiting.
   useEffect(() => {
-    if (!reviewQueue) {
-      seenReviews.current = null;
-      teamPrimed.current = false;
-      return;
-    }
-    const prev = seenReviews.current;
-    let fresh = unseenReviews(reviewQueue, prev);
-    const team = reviewQueue.team;
-    const teamOk = !!(team && !team.error);
-    // No team configured: the next time one appears, that list is a snapshot.
-    if (!team) teamPrimed.current = false;
-    if (teamOk && !teamPrimed.current) {
-      const teamKeys = new Set(team.prs.map(reviewIdentity));
-      fresh = fresh.filter((pr) => !teamKeys.has(reviewIdentity(pr)));
-      teamPrimed.current = true;
-    }
-    seenReviews.current = nextReviewKeys(reviewQueue, prev);
-    if (!prev || fresh.length === 0) return;
-    if (useStore.getState().appActive || !useStore.getState().settings?.ui.system_notifications) return;
-    void announceReviews(fresh).catch(() => {});
-  }, [reviewQueue]);
-
-  useEffect(() => {
-    if (!issuesLoaded) {
-      seenTickets.current = null;
-      return;
-    }
-    const prev = seenTickets.current;
-    const keys = new Set(issues.map((i) => i.key));
-    seenTickets.current = keys;
-    if (!prev) return;
-    const fresh = issues.filter((i) => !prev.has(i.key));
-    if (fresh.length === 0) return;
-    if (useStore.getState().appActive || !useStore.getState().settings?.ui.system_notifications) return;
-    void announceTickets(fresh).catch(() => {});
-  }, [issues, issuesLoaded]);
-
-  useEffect(() => {
-    const p = listen<string>("system-notify-click", (e) => {
+    const p = listen<NotifyTarget>("system-notify-click", (e) => {
       const target = e.payload;
       const s = useStore.getState();
       if (target === "reviews" || target === "tickets" || target === "chat") s.setView(target);

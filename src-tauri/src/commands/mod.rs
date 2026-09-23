@@ -23,6 +23,8 @@ pub struct AppState {
     /// Last git-status per checkout. Cold tasks reuse this so a poll does not
     /// shell out once per every worktree the user has ever opened.
     pub status_cache: parking_lot::Mutex<HashMap<String, CachedStatus>>,
+    /// Reviews and tickets already seen, so a banner is only for what is new.
+    pub news: crate::news::Seen,
 }
 
 /// Snapshot of one checkout's status, reused until it goes hot or ages out.

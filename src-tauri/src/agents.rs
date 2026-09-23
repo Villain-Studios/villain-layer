@@ -184,15 +184,31 @@ fn with_trust(text: &str, dir: &Path) -> Option<String> {
     serde_json::to_string_pretty(&root).ok()
 }
 
-/// The shell command every hook runs: post the event it was handed to the
-/// app's own server, naming the pane from the environment the app started it
-/// with — so the same CLI started anywhere else, where those are unset, posts
-/// nothing. Always exits 0, so a hook can never fail or block the agent's turn.
-const POST_HOOK: &str = "[ -n \"$VILLAIN_HOOK_URL\" ] && [ -n \"$VILLAIN_PANE\" ] && \
-    curl -s -m 2 -o /dev/null -X POST \
-    -H \"Authorization: Bearer $VILLAIN_HOOK_TOKEN\" \
-    -H 'Content-Type: application/json' \
-    --data-binary @- \"$VILLAIN_HOOK_URL/$VILLAIN_PANE\"; exit 0";
+/// The shell command a hook runs: post the event to the app's own server,
+/// naming the pane from the environment the app started it with — so the same
+/// CLI started anywhere else, where those are unset, posts nothing. Always
+/// exits 0, so a hook can never fail or block the agent's turn.
+///
+/// Only a notification is sent as the agent handed it over, since only there
+/// does the payload say anything the name does not. The rest post their name
+/// and throw the payload away: PostToolUse carries the tool's whole output,
+/// megabytes for a big read, sent on every call — and past the server's 2MB
+/// the post was refused and the event lost.
+fn post_hook(event: &str) -> String {
+    let body = if event == "Notification" {
+        "--data-binary @-".to_string()
+    } else {
+        format!("-d '{{\"hook_event_name\":\"{event}\"}}'")
+    };
+    let drain = if event == "Notification" { "" } else { "cat >/dev/null; " };
+    format!(
+        "{drain}[ -n \"$VILLAIN_HOOK_URL\" ] && [ -n \"$VILLAIN_PANE\" ] && \
+         curl -s -m 2 -o /dev/null -X POST \
+         -H \"Authorization: Bearer $VILLAIN_HOOK_TOKEN\" \
+         -H 'Content-Type: application/json' \
+         {body} \"$VILLAIN_HOOK_URL/$VILLAIN_PANE\"; exit 0"
+    )
+}
 
 /// The events that say what a Claude-style agent is doing.
 ///
@@ -213,14 +229,16 @@ const HOOK_EVENTS: &[&str] = &[
 /// Its output cannot: it repaints its prompt every few seconds while it waits,
 /// so an agent two days idle read as working.
 pub fn claude_hook_settings() -> serde_json::Value {
-    let report = serde_json::json!([{
-        "matcher": "*",
-        "hooks": [{ "type": "command", "command": POST_HOOK, "timeout": 5 }]
-    }]);
+    let report = |e: &str| {
+        serde_json::json!([{
+            "matcher": "*",
+            "hooks": [{ "type": "command", "command": post_hook(e), "timeout": 5 }]
+        }])
+    };
     serde_json::json!({
         "hooks": HOOK_EVENTS
             .iter()
-            .map(|e| (e.to_string(), report.clone()))
+            .map(|e| (e.to_string(), report(e)))
             .collect::<serde_json::Map<_, _>>()
     })
 }
@@ -231,12 +249,12 @@ pub fn claude_hook_settings() -> serde_json::Value {
 /// payloads, so one reading serves both. The file is its own shape all the
 /// same: `bash`, not `command`, and a version.
 pub fn copilot_hooks() -> serde_json::Value {
-    let report = serde_json::json!([{ "type": "command", "bash": POST_HOOK, "timeoutSec": 5 }]);
+    let report = |e: &str| serde_json::json!([{ "type": "command", "bash": post_hook(e), "timeoutSec": 5 }]);
     serde_json::json!({
         "version": 1,
         "hooks": HOOK_EVENTS
             .iter()
-            .map(|e| (e.to_string(), report.clone()))
+            .map(|e| (e.to_string(), report(e)))
             .collect::<serde_json::Map<_, _>>()
     })
 }
@@ -376,35 +394,47 @@ pub fn prepare_launch(
             )];
         }
         Integration::Gemini => {
-            if let (Some(mcp), Some(folder)) = (mcp, own_folder) {
-                gemini_project_server(folder, mcp.url)?;
+            if let Some(folder) = own_folder {
+                gemini_project_settings(folder, mcp.map(|m| m.url))?;
             }
         }
     }
     Ok(launch)
 }
 
-/// Name the app's server in Gemini CLI's project settings for `folder`,
-/// keeping whatever else is there. Gemini expands `$VAR` in its settings, so
-/// the token stays in the environment.
-fn gemini_project_server(folder: &Path, url: &str) -> std::io::Result<()> {
+/// Gemini CLI's project settings for `folder`: the app's server, and the
+/// context file the app writes, keeping whatever else is there. Gemini
+/// expands `$VAR` in its settings, so the token stays in the environment.
+///
+/// It reads GEMINI.md and nothing else by default, so the task and chat
+/// context the app writes as AGENTS.md went unread, and a Gemini agent
+/// started knowing nothing of its ticket.
+fn gemini_project_settings(folder: &Path, url: Option<&str>) -> std::io::Result<()> {
     let path = folder.join(".gemini").join("settings.json");
     let mut root = std::fs::read_to_string(&path)
         .ok()
         .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
         .filter(|v| v.is_object())
         .unwrap_or_else(|| serde_json::json!({}));
-    let servers = root
+    if let Some(url) = url {
+        let servers = root
+            .as_object_mut()
+            .map(|o| o.entry("mcpServers").or_insert_with(|| serde_json::json!({})));
+        if let Some(servers) = servers.and_then(|s| s.as_object_mut()) {
+            servers.insert(
+                crate::mcp::SERVER_NAME.into(),
+                serde_json::json!({
+                    "httpUrl": url,
+                    "headers": { "Authorization": "Bearer $VILLAIN_MCP_TOKEN" }
+                }),
+            );
+        }
+    }
+    let context = root
         .as_object_mut()
-        .map(|o| o.entry("mcpServers").or_insert_with(|| serde_json::json!({})));
-    if let Some(servers) = servers.and_then(|s| s.as_object_mut()) {
-        servers.insert(
-            crate::mcp::SERVER_NAME.into(),
-            serde_json::json!({
-                "httpUrl": url,
-                "headers": { "Authorization": "Bearer $VILLAIN_MCP_TOKEN" }
-            }),
-        );
+        .map(|o| o.entry("context").or_insert_with(|| serde_json::json!({})));
+    if let Some(context) = context.and_then(|c| c.as_object_mut()) {
+        context.insert("fileName".into(), serde_json::json!(["AGENTS.md", "GEMINI.md"]));
     }
     std::fs::create_dir_all(folder.join(".gemini"))?;
     replace_file(&path, &serde_json::to_vec_pretty(&root).unwrap_or_default(), None)
@@ -928,6 +958,11 @@ mod tests {
         }
         assert!(claude["hooks"].get("PreToolUse").is_none());
         assert_eq!(copilot["version"], 1);
+        // A tool's output stays where it is; a notification's words come along.
+        let after_tool = claude["hooks"]["PostToolUse"][0]["hooks"][0]["command"].as_str().unwrap();
+        assert!(!after_tool.contains("@-") && after_tool.contains(r#"{"hook_event_name":"PostToolUse"}"#));
+        let notice = claude["hooks"]["Notification"][0]["hooks"][0]["command"].as_str().unwrap();
+        assert!(notice.contains("--data-binary @-"));
     }
 
     #[test]
@@ -1021,6 +1056,8 @@ mod tests {
         assert_eq!(v["ui"]["theme"], "x");
         assert_eq!(v["mcpServers"]["villain-layer"]["httpUrl"], "http://127.0.0.1:9/mcp");
         assert_eq!(v["mcpServers"]["villain-layer"]["headers"]["Authorization"], "Bearer $VILLAIN_MCP_TOKEN");
+        // And it reads the context the app writes, which is not GEMINI.md.
+        assert_eq!(v["context"]["fileName"], serde_json::json!(["AGENTS.md", "GEMINI.md"]));
         // In a worktree: nothing written at all.
         let wt = dir.join("worktree");
         std::fs::create_dir_all(&wt).unwrap();

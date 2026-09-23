@@ -183,7 +183,12 @@ pub struct SavedPane {
 
 /// Presentation preferences. Terminal text scales separately from the chrome,
 /// because xterm measures its own cell grid and a page zoom would fight it.
+///
+/// Every field defaults, the struct as a whole: one missing field without
+/// its own default made the whole config unreadable, and the app started
+/// with no tasks.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct UiPrefs {
     pub scale: f32,
     pub terminal_font_size: u16,
@@ -276,6 +281,12 @@ impl AppConfig {
     /// Fold v1 workspaces into single-checkout tasks, keeping their ids so
     /// selection and any running panes survive the upgrade.
     fn migrate(&mut self) -> bool {
+        // Written by a newer build. Nothing here knows how to read it back
+        // down; the version is left as it is, so going back to that build
+        // does not take this one's word for what the file holds.
+        if self.version > SCHEMA_VERSION {
+            return false;
+        }
         if self.workspaces.is_empty() {
             let bumped = self.version != SCHEMA_VERSION;
             self.version = SCHEMA_VERSION;
@@ -366,6 +377,19 @@ impl ConfigStore {
             AppConfig::default()
         };
 
+        // An older build running over a newer build's config drops whatever
+        // it does not know on its first save. A copy first, once per version.
+        if inner.version > SCHEMA_VERSION {
+            let kept = path.with_extension(format!("json.v{}", inner.version));
+            if !kept.exists() {
+                let _ = std::fs::copy(&path, &kept);
+            }
+            eprintln!(
+                "config.json is from a newer build (version {}); a copy is at {}",
+                inner.version,
+                kept.display()
+            );
+        }
         let changed = inner.migrate();
 
         let store = Self {
@@ -511,6 +535,24 @@ mod tests {
         assert_eq!(checkout.project_id, "p1");
         assert_eq!(checkout.path, "/wt/acme-1-fix-login");
         assert_eq!(checkout.base, "main");
+    }
+
+    #[test]
+    fn a_config_missing_a_preference_still_loads() {
+        let cfg: AppConfig = serde_json::from_str(
+            r#"{"version":2,"tasks":[{"id":"t","name":"n","root":"/r","branch":"b","created_at":"2026-01-01T00:00:00Z"}],"ui":{"restore_panes":false}}"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.tasks.len(), 1);
+        assert!(!cfg.ui.restore_panes);
+        assert_eq!(cfg.ui.terminal_font_size, UiPrefs::default().terminal_font_size);
+    }
+
+    #[test]
+    fn a_newer_builds_config_keeps_its_version() {
+        let mut cfg: AppConfig = serde_json::from_str(r#"{"version":99}"#).unwrap();
+        assert!(!cfg.migrate());
+        assert_eq!(cfg.version, 99);
     }
 
     #[test]

@@ -1,527 +1,134 @@
 # Villain Layer
 
-An agent development environment: run coding agents in parallel, each isolated in
-its own git worktree, with real terminals, diff review, Jira, GitHub Enterprise
-and Slack wired in.
+A macOS desktop app for working with coding agents: one place to take a
+ticket, give an agent a fresh worktree of every repository the ticket
+touches, watch which agents need you, and carry the work through review,
+pull requests and back to Jira.
 
-Tauri 2 (Rust) + React 19. macOS only for now: the agent hooks are POSIX shell
-and `curl`, and stopping a pane uses Unix signals.
+It runs the agent CLIs you already use (Claude Code, GitHub Copilot CLI,
+OpenCode, Gemini CLI) in real terminals, and connects them to Jira, GitHub
+and Slack through the app, so no agent holds your credentials.
+
+**Status: beta, internal.** macOS only. Not signed or notarised yet.
+
+## What it does
+
+- **Tasks, not branches.** A task is one ticket across one or more repos:
+  one branch name, one folder, a git worktree per repo. Several tasks,
+  and several agents per task, run side by side without touching each
+  other or your own clones.
+- **Start from the ticket.** Pick a Jira ticket and the app suggests the
+  repos, creates the worktrees, moves the ticket to in progress, and starts
+  an agent with the ticket as its prompt.
+- **Know who needs you.** Every agent reports what it is doing: working,
+  asking for permission, or done. The window, the dock count and
+  notifications say which ones are waiting on you.
+- **Review before it leaves.** A diff across all the task's repos, with
+  notes on lines you can send straight to the agent. Commit, update from
+  the base branch (merge or rebase), push.
+- **Pull requests.** Open one PR per repo, see checks and reviews, and hand
+  review threads and failing CI logs to the agent in one go. When they
+  merge, one step puts the task away: worktrees, branches and the ticket.
+- **Tools for the agents.** The app runs an MCP server that its agents use
+  to search Jira, file tickets, open PRs, post to Slack and start other
+  tasks, with a confirmation for anything irreversible.
+- **Chat.** Agents that belong to no task, for questions about your tickets
+  and repos.
+
+The full list, with the rules each feature follows, is in
+[`docs/features.md`](docs/features.md).
 
 ## Requirements
 
-- macOS, with the Xcode Command Line Tools (for `git`; `xcode-select --install`)
-- `curl`, which macOS ships
-- at least one agent CLI on your login shell's PATH: Claude Code, GitHub
-  Copilot CLI, OpenCode or Gemini CLI
-- to build it: Rust (stable) and [bun](https://bun.sh)
+To run it:
 
-## Getting started
+- macOS
+- git, from the Xcode Command Line Tools (`xcode-select --install`)
+- at least one agent CLI on your `PATH`: `claude`, `copilot`, `opencode`
+  or `gemini`, already signed in
+- optional: a Jira Cloud site, GitHub (or GitHub Enterprise), Slack
+
+To build it, also:
+
+- [Rust](https://rustup.rs) (stable)
+- [Bun](https://bun.sh)
+
+## Install
 
 ```bash
+git clone <this repository>
+cd villain-layer
 bun install
-bun run tauri dev
-```
-
-That shares a config with an installed build. If you keep one for daily use, run
-the dev build under its own identity instead — see below.
-
-To produce a distributable app bundle:
-
-```bash
-bun run tauri build
-```
-
-On macOS, to build one and install it over the copy in `/Applications`:
-
-```bash
 bun run release:mac
 ```
 
-It refuses while the app is running, before building anything. Replacing a
-bundle under a live process kills it, and takes its agents with it.
-
-### Two instances at once
-
-Developing the app while using it means two copies running: an installed release
-build doing the real work, and a dev build changing under you. They cannot share
-state. The config is read once at launch and written back whole, so two
-instances pointed at one file would take turns erasing each other's tasks.
-
-The dev build therefore runs under its own identity:
-
-```bash
-bun run dev:app
-```
-
-That merges `src-tauri/tauri.dev.conf.json` over the normal config, giving the
-dev build the identifier `dev.villain.layer.dev` and with it a config directory
-of its own. Point its worktree root somewhere separate too — Settings, or
-`worktree_root` in that config — so dev task folders do not land among real
-ones. The keychain item is shared, so the dev build inherits the Jira, GitHub
-and Slack tokens without asking again.
-
-One dev build at a time: Vite holds port 1420 with `strictPort`, so a second
-`bun run dev:app` fails loudly instead of running against a server that belongs
-to the other one.
-
-## The model: one task, many repos
-
-A **task** is one unit of work — usually one Jira ticket. It owns one
-**checkout** per repository the change touches, all on the same branch, laid out
-as sibling folders under one task directory:
-
-```
-~/.villain-worktrees/ACME-123-fix-login-race/
-  api/          worktree of api,        branch acme-123-fix-login-race
-  web/          worktree of web,        branch acme-123-fix-login-race
-  shared-lib/   worktree of shared-lib, branch acme-123-fix-login-race
-```
-
-That layout is the point. An agent started at the **task root** sees every repo
-at once, so it can change an API contract and its consumer in a single session —
-which is usually why a ticket spans repos in the first place. Cross-repo tickets
-are cross-repo because the changes are coupled.
-
-One branch name across every repo also means sibling PRs are findable by branch
-alone, with no extra bookkeeping.
-
-### Branch names
-
-A ticket's branch is its key: `ACME-21215`. If you want something more descriptive,
-the Start work dialog takes an optional suffix, giving `ACME-21215-locale-switch` —
-typed however you like, slugified on the way in. The task folder is named after
-the branch, so the two are always findable from each other.
-
-Tasks created without a ticket get `villain/<slug-of-the-name>`, and the New task
-dialog takes a fully explicit branch name if you would rather set one yourself.
-
-## Layout
-
-Five top-level views:
-
-| | |
-|---|---|
-| **Work** | your tasks. With one selected: its terminals, diff and pull requests. With none selected: every agent across every task — what it is doing, how long since it last printed, and whether it has gone quiet waiting for you |
-| **Tickets** | your Jira backlog, grouped by epic, with each issue's own Jira type icon; *Browse* looks past your own queue, and a ticket or an epic can be filed from here — with a description drafted from its summary, where Claude Code is installed |
-| **Reviews** | pull requests waiting on your review, and — if a review team is set — on that team's |
-| **Chat** | a standing agent with no worktree |
-| **Repos** | the repositories Villain Layer knows about, and their groups |
-
-Work flows Tickets → Work: an issue becomes a task.
-
-Every agent reads as *working*, *needs you* (asking permission, or finished and
-not yet looked at), or *idle* (finished and seen, or never given anything).
-Output cannot tell these apart — Claude Code repaints its prompt every few
-seconds while doing nothing, so an agent idle for two days read as working — so
-where a CLI will say for itself, it is asked to, for that launch only and
-without touching the user's own configuration:
-
-| CLI | How it reports | Added to the launch |
-|---|---|---|
-| Claude Code | hooks: prompt, tool run, permission, turn finished | `--settings <app dir>/claude-hooks.json` |
-| GitHub Copilot CLI | the same hooks, as a plugin | `--plugin-dir <app dir>/copilot-plugin` |
-| OpenCode | a plugin forwarding its event bus | `OPENCODE_CONFIG_CONTENT` with the plugin added to the user's own |
-| Gemini CLI | its window title (`◇ Ready`, `✋ Action Required`, `✦ …`) | nothing for this; see below for its tools |
-
-The hooks post to `/hook/<pane>` on the app's server, finding it from
-`VILLAIN_HOOK_URL`, `VILLAIN_HOOK_TOKEN` and `VILLAIN_PANE` in the pane's
-environment — so the same CLI started anywhere else posts nothing. That token
-is good for `/hook` and nothing else: a hook is a shell command, whose header
-anyone on the machine can read off `ps`. Each post is just the event's name,
-except a notification's, whose words say whether it is asking. Pressing a key
-on a pane that is asking counts as answering it, since nothing reports the
-moment a permission is given; Esc or ^C on a working or asking one ends the
-turn, which Claude Code's hooks do not report either.
-
-Only CLIs that can say for themselves are offered. Cursor's CLI takes hooks
-only from fixed files in the home folder and the repository and has none for
-asking, so it is left out for now; Codex, Aider and Amp can report, but are
-left out until they have been checked against an installed copy. If a CLI's
-reports stop arriving — hooks switched off in its own settings, say — its
-state falls back to its output, ignoring what arrives just after the app sent
-it something (a key's echo, the repaint after a resize or a focus change),
-with 45 seconds of real silence read as finished.
-
-Finished stops counting once the pane has been on screen. What needs you is
-counted on the Work tab, on *All agents*, and on the dock icon — the same
-number in all three — and the overview lists those agents first. A chat counts
-when it is asking permission, not when it has answered: sitting at its prompt
-is what a chat is for. While the window is in the background an agent that
-starts needing you, or exits without being asked to, gets a banner; clicking
-it opens its task, or Chat. The backend watches for this rather than the
-webview, whose polls stop while the window is away and whose timers macOS may
-suspend — and the same goes for the banners about a new review request or a
-newly assigned ticket. Settings → Appearance → Notifications turns each off.
-
-## The loop
-
-1. **Add repos.** `+` on the Repositories section. *Scan a folder* points at a
-   parent directory — `~/code/backend`, say — and finds every git repo up to three
-   levels down, so a whole stack goes in at once, landing in a group named after
-   the folder you scanned; *Pick folders* selects specific ones (⌘-click for
-   several). Repos must already be cloned locally.
-2. **Start a task.** Either `+` on the Tasks section, or open a ticket in the
-   Tickets tab and press *Start work* — pick the repositories it touches, and you
-   get a worktree in each plus an agent primed with the ticket *and* the folder
-   layout.
-3. **Watch it work.** Panes run either at the task root or inside one repo; the
-   `all / api / web` tags in the pane bar pick the scope for whatever you launch
-   next. Shells sit alongside agents for dev servers and test watchers.
-4. **Review.** The Diff tab shows every change across every repo, grouped by
-   repo. Click a line number to leave a note; *Send to agent* batches them into
-   one prompt. Notes are path-qualified with their repo when the target agent is
-   sitting at the task root, so `api/src/auth.ts:42` is never ambiguous.
-5. **Ship.** *Draft with agent* on the Pull requests tab writes the
-   description: a quick one-shot pass over the diff first (Claude Code, a small
-   model), and failing that the agent that did the work is asked — it knows what
-   the diff cannot say: what it tried, what it left unfinished, where review
-   effort is best spent. One commit message commits every repo that changed. *Push & open
-   PRs* pushes each and opens one PR per repo — then posts all the links back to
-   the Jira ticket as a single comment, and one summary to Slack.
-
-6. **Answer review.** *Feedback → agent* on the Pull requests tab gathers what
-   came back on every open PR in the task: unresolved review threads, review
-   and conversation comments, and each failing check with the end of its log —
-   up to the line GitHub Actions marked as the error, not the cleanup steps
-   after it. Pick what matters and it goes to the agent as a file in the task
-   folder, with paths qualified by repo as for Diff notes. Resolved threads
-   are left out, and threads you replied to last, bots and anything already
-   sent start unpicked. Nothing is posted to GitHub.
-
-7. **Finish.** Once every PR has merged the task moves to *Done*, and *Finish
-   task* (on the Pull requests tab, or right-click the task) puts it away: its
-   terminals stop, its worktrees and folder go, the local branch is deleted in
-   each repo, and the ticket moves to a status in Jira's *done* category —
-   picked by category, so whatever the board calls it. Each step only runs if
-   the one before went: a worktree git will not remove keeps the task, and the
-   ticket is not touched. A branch is deleted only when the merged PR's head
-   contains it, so a commit made after the merge keeps its branch — the task
-   still goes and the ticket still moves, since what was reviewed has landed.
-   Jira's *done* category also holds Won't Do and Duplicate, so the status is
-   picked for you only when there is one.
-
-**Keeping up with the base.** *Update from base* in the task header fetches
-each repo's base and takes it into the task branch, by merging or rebasing —
-whichever was used last is offered first.
-
-- **Merge** works like GitHub's own *Update branch*: an open PR keeps its
-  history and nothing needs a force push.
-- **Rebase** replays the branch on the base, for teams that keep history
-  straight. It refuses while the remote branch has commits the worktree does
-  not, since pushing the rebased branch would drop them — unless those are the
-  branch's own, from before a rebase not yet pushed. The next push — *Push
-  all*, or opening PRs — replaces the remote branch with `--force-with-lease`
-  set to the commit it was rebased from, so a push by anyone else in between
-  makes it refuse instead of overwriting.
-
-A repo with uncommitted edits is skipped, and so is one not on the task's
-branch. Nothing is committed or pushed in a repo while its update is half done. A conflict is left in progress,
-because that is the state it can be resolved from: hand it to an agent, which
-is told which files in which repos and how to finish — `git commit --no-edit`,
-or `git rebase --continue` until the rebase is done, and not to push — or
-abandon it to put the branch back. A PR card whose branch GitHub reports as
-behind or conflicting says so, and opens the same dialog.
-
-Repos join and leave a task at any time: expand a task in the sidebar for
-`+ add repo`, or the `✕` on a repo row to drop it. You rarely know the full
-blast radius when you start.
-
-## Organising a dozen repositories
-
-Past about ten repos a flat list stops being usable, so repos carry a **group**
-— `frontend`, `backend`, whatever you like — and one repo belongs to exactly one
-group. Groups are collapsible in the sidebar and in the picker, and the picker
-gets a filter box and select-all per group.
-
-Which repos a ticket needs is then answered from what you did last, most
-confident first:
-
-1. **The epic.** What the last task under the same epic used. Tickets in one epic
-   usually hit the same repos.
-2. **The Jira project.** What the last task in the project used.
-
-Whatever it picks, the picker says *why* — "preselected from last task under
-ACME-21131" — so a stale guess is visible rather than silent, and you can always
-change it.
-
-## Chat
-
-A standing agent with no worktree, for the work that happens before a task
-exists: asking a question, drafting a ticket, pulling context together. It runs
-in a scratch folder under the worktree root, so it can keep notes between
-sessions, and it starts with your own CLI configuration — so whatever MCP servers
-you have set up for your agent CLI are available here too. If your agent
-can reach Jira and Slack, you can ask it to read a thread and file a ticket
-without leaving the app.
-
-It is deliberately not a bespoke chat UI: it is the same agent CLI you already
-pay for, in the same terminal, so there is no second API key and no second set of
-tool integrations to maintain.
-
-## When an agent runs out, or the app restarts
-
-**Handing off.** No agent CLI can resume another's session — Claude Code,
-Copilot, OpenCode and Gemini each keep their own transcript format, and
-translating between them would break on every release. So the ⇄ on an agent
-pane moves the *work* rather than the conversation: the ticket, the commits and
-diff so far, and the tail of the outgoing agent's terminal, stripped of ANSI and
-de-duplicated. That last part matters — running out of budget is exactly when an
-agent cannot summarise itself.
-
-The app also watches pane output for the CLIs' own limit messages. When one
-appears the pane is flagged, the Work overview marks it, and a banner offers the
-handoff. It is best-effort pattern matching, deliberately specific enough not to
-fire when an agent merely reads code about rate limiting.
-
-Stopping an agent, closing a pane and quitting the app all signal the process
-group with SIGTERM and wait before insisting. This is not politeness for its own
-sake: insisting is SIGKILL to the whole group, which an agent cannot catch, so
-it dies without writing the transcript that makes the session resumable at all.
-(portable-pty's own `ChildKiller::kill` is only a SIGHUP to the leader, which an
-agent ignoring SIGTERM ignored too — and ran on after its pane was gone.) Quitting
-was worse still — with no exit handler the agent got SIGHUP from the closing
-terminal and went the same way.
-
-**Resuming.** Panes do not survive the app closing — they are processes, not
-records. But the CLIs keep transcripts per working directory, and every task has
-its own, so the conversation can be picked up even though the process is gone.
-Panes that were open when the app closed are reopened when it starts, resuming
-each agent's conversation where its CLI can — turn it off in Settings →
-Appearance. Where a saved conversation exists but nothing is running, Terminals
-also offers *⟲ Resume Claude Code* with how long ago it was last active. The app reads each CLI's own store rather than
-keeping its own list, so it is right about sessions it never started.
-
-Only Claude Code supports this today (`--continue`); the others are listed
-without it rather than claiming support that has not been verified.
-
-**A new worktree is an untrusted folder.** Claude Code asks "do you trust the
-files in this folder?" the first time it runs anywhere new, and every task is
-somewhere new — so it asks once per task, and until it is answered the agent has
-not started, written a transcript, or read the prompt it was given. That looks
-exactly like an agent silently doing nothing, so the app watches for the question
-and says so in the pane and in the Work overview.
-
-## Agents can drive the app
-
-Villain Layer hosts its own MCP server, so an agent it launches reaches Jira,
-GitHub and Slack through the credentials the app already holds — no second
-login, and no copy of your Jira, GitHub or Slack tokens anywhere the agent can
-read. It also sees live app state and can act on it.
-
-| | |
-|---|---|
-| Read | `list_tasks`, `list_repos`, `task_diff`, `task_prs`, `jira_search`, `jira_get_issue`, `jira_issue_types`, `jira_create_fields`, `slack_diagnose`, `handoff_prompt` |
-| Read, if allowed | `list_panes`, `pane_output` — only with Settings → Appearance → *Let agents read terminal output* on, since scrollback can hold anything that was printed |
-| Write | `jira_create_issue` (with whatever `jira_create_fields` says the project requires), `jira_comment`, `jira_transition`, `slack_post`, `slack_delete`, `slack_cleanup`, `create_task`, `start_work`, `add_repo`, `forget_repo`, `open_prs` |
-
-Slack messages the app posts are recorded, because only a bot can delete a
-bot's messages — without that they are litter nobody can clear. `slack_delete`
-takes permalinks and needs only `chat:write`; `slack_cleanup` finds them itself
-but needs `channels:read` and `channels:history`, and says so when they are
-missing.
-
-The server binds an ephemeral port on loopback and is gated on a bearer token
-minted fresh each run. Most writes are **not** confirmed — an agent can file a
-ticket or post to Slack unattended, which is the point. A smaller set of
-high-impact tools (`open_prs`, applying a `jira_transition`, `forget_repo`,
-`slack_delete`, and a non-dry-run `slack_cleanup`) refuse unless the call also
-passes `confirm: true`, so the agent has to come back after asking.
-
-Agents get the server handed to them at launch, each CLI the way it takes
-one — never as a file inside a worktree, where it would be an untracked change
-that could be committed by accident:
-
-| CLI | How it is given the server |
-|---|---|
-| Claude Code | `--mcp-config`, pointing at a `.mcp.json` in the app's own folder |
-| GitHub Copilot CLI | `--additional-mcp-config @<that file>` |
-| OpenCode | added to `OPENCODE_CONFIG_CONTENT`, beside the user's own servers |
-| Gemini CLI | the task folder's `.gemini/settings.json` — at the task root only |
-
-Claude Code and Copilot read the server's token from that 0600 file. Where a
-CLI will fill it in from the environment instead (OpenCode, Gemini), it gets
-it as `VILLAIN_MCP_TOKEN` rather than in another file. The same Gemini settings
-also point it at `AGENTS.md`: it reads only `GEMINI.md` by default, and so knew
-nothing of its task. Gemini takes a server from no flag,
-variable or file outside its project settings — it refuses a system settings
-file in a folder root does not own — so a Gemini agent inside a single repo's
-worktree goes without; start it at the task root to give it the tools. Gemini
-also leaves all MCP servers off in a folder it does not trust.
-
-The chat folder holds a `.mcp.json` of its own, written at start-up, and a
-task folder gets one each time an agent starts there, so running `claude` in
-either yourself gets the same tools — for as long as the app keeps running,
-since the port and token are new each launch.
-Claude Code holds a folder's `.mcp.json` server as "pending approval" until
-someone says yes, which in a new task folder every time was noise: for the
-app's own folders the app approves its own server — and only that one — the
-same way it answers the trust question.
-
-## Appearance
-
-Settings → Appearance has two independent controls:
-
-- **Interface scale** (80–160%) — scales the whole chrome at once
-- **Terminal text** (9–24px) — applies to running panes immediately
-
-They are separate on purpose. xterm measures a cell grid to lay out the terminal,
-and a page zoom would leave that calculation fractionally out, so terminal text
-scales on its own rather than riding along with the chrome.
-
-### Why the ticket is the hub
-
-Sibling PRs are linked *through the Jira ticket*, not to each other. Cross-linking
-N PRs to each other needs a second write pass over every PR body once they all
-exist, and it rots the moment you add another repo. The ticket is already the
-shared parent, it is already where non-engineers look, and one comment covers it.
-
-## Integrations
-
-Tokens are verified before they are saved, and they live in the system keychain —
-never in `config.json`. A token field left blank keeps the saved token, but only
-for the site it was saved for; point the URL somewhere else and it has to be
-typed again, so a typo never receives it.
-
-| | Setup | What it gives you |
-|---|---|---|
-| **Jira** | Site URL, account email, [API token](https://id.atlassian.com/manage-profile/security/api-tokens) | Your assigned issues, ticket → worktrees + primed agent, status transitions, and the PR-set comment |
-| **GitHub** | API URL, web URL, PAT with `repo` scope — and `read:org` to name a review team as `@team` | Per-repo PR state and check runs, one-action PR opening across the task, review threads and failing CI for an agent to answer. Point `api_url` at `https://ghe.example.com/api/v3` for Enterprise Server |
-| **Slack** | An app with a bot token — see below | A message when an agent finishes and when a task's PRs open, each switchable |
-
-The default Jira query is `assignee = currentUser() AND statusCategory != Done`,
-scoped to your project key if you set one. Override it with your own JQL in
-Settings.
-
-### Issue types
-
-Type badges come from the Jira site, not from a table in this repo: the backend
-reads `/rest/api/3/issuetype` and inlines each icon as a data URI (the avatar
-URLs need authentication, so an `<img>` tag could not fetch them itself). A
-project with custom types renders exactly as it does in Jira.
-
-The only thing assumed is `hierarchyLevel`, which is structural in Jira itself —
-1 and above is epic-level, 0 a standard issue, -1 a sub-task. That drives the
-card's left accent, so epics stand out even before you read the icon. Types
-whose icon cannot be fetched fall back to a generated badge keyed to the same
-hierarchy rather than vanishing.
-
-### Where tokens live
-
-All three tokens share **one** keychain item, read at most once per launch and
-cached for the life of the process. Connection status comes from the config file
-rather than the keychain, since a config is only written after its token
-verified — so starting the app touches the keychain zero times, and nothing
-prompts until something actually calls an API.
-
-macOS ties "Always Allow" to the exact binary that created the item, so a dev
-build re-prompts after every recompile. The release build is not code-signed
-yet, so it re-prompts after every update as well; a signed build would keep the
-grant.
-
-### Slack
-
-Slack no longer issues standalone tokens or webhooks — everything goes through an
-app. Settings → Slack has the manifest and the steps in-app, but in short: create
-an app at [api.slack.com/apps](https://api.slack.com/apps) *from an app manifest*,
-paste the manifest the app shows you, install it to the workspace, and copy the
-**Bot User OAuth Token** (`xoxb-…`) from OAuth & Permissions.
-
-The manifest requests `chat:write` and `chat:write.public`. The second is what
-lets the bot post to a public channel it has not been invited to; drop it if you
-would rather `/invite` the bot per channel. An existing incoming-webhook URL also
-works — paste it in place of the token and the channel field is ignored.
-
-Not everything belongs in Slack, so each kind of message has its own switch in
-Settings → Slack: agents finishing, pull requests opening, and messages agents
-send themselves through the `slack_post` tool — plus a master switch that mutes
-the lot without disconnecting. The gate is enforced in the backend, so an agent
-cannot route around a setting by calling the tool directly.
-
-Slack's error codes are terse, so they get translated: `not_in_channel` tells you
-to invite the bot or add the scope, `invalid_auth` reminds you the token starts
-with `xoxb-`, and so on.
-
-## How it works
-
-```
-src-tauri/src/
-  config.rs         tasks, checkouts and projects, persisted atomically, with
-                    migration from the v1 one-repo-per-workspace shape
-  git.rs            worktree lifecycle, status, diff — the git CLI, not libgit2,
-                    so hooks and credential helpers keep working
-  pty.rs            one PTY per pane via portable-pty; output is base64-framed to
-                    the frontend so multi-byte sequences never split, and counted
-                    by position, so a terminal back on screen gets only what it
-                    missed
-  shellenv.rs       asks your login shell for its real PATH — a GUI app launched
-                    from Finder cannot see ~/.local/bin otherwise
-  agents.rs         the agent catalogue: how each one takes an opening prompt,
-                    says what it is doing, and is given the MCP server
-  mcp.rs            the app's own MCP server, and /hook for agents' reports
-  attention.rs      agents that need you: the dock count and their banners
-  news.rs           new review requests and tickets, for banners
-  commands/         the Tauri command surface; most commands take a task id and
-                    fan out over its checkouts
-  secrets.rs        keychain access
-  integrations/     jira.rs, github.rs, slack.rs
-```
-
-A panic is written to `~/Library/Logs/villain-layer/panic.log` before the app
-goes, for a packaged build too.
-
-Task folders live under `~/.villain-worktrees` by default; change the location in
-Settings → General. Tasks created by an older version keep their existing
-worktree paths — each checkout records its own path, so both layouts coexist.
-
-Agent panes keep ~256 KB of scrollback in the backend, so switching tabs or
-tasks never loses what an agent printed.
-
-### Agent scope
-
-| Task | Default cwd | Why |
-|---|---|---|
-| One repo | inside the worktree | the agent keeps its normal git awareness |
-| Several repos | the task root | it can read and edit across all of them |
-
-Either is available from the launch modal or the pane-bar scope tags. At the task
-root the cwd is not itself a git repo, so agents' built-in git features degrade —
-that is the trade for cross-repo visibility, and why single-repo tasks do not pay
-it.
-
-### Adding an agent CLI
-
-Any interactive CLI works. Add an entry to `AGENTS` in
-[`src-tauri/src/agents.rs`](src-tauri/src/agents.rs) with its program name and
-how it takes an opening prompt:
-
-- `PromptMode::Positional` — `agent "do the thing"`
-- `PromptMode::Flag("-i")` — `agent -i "do the thing"`
-- `PromptMode::Typed` — no prompt argument; it gets typed into the TUI after start-up
-
-and `integration`, which is how it says whether it is working, asking or done
-and how it is handed the app's MCP server — a variant of `Integration`, with
-its arms in `prepare_launch`, `hook_activity` and `title_reader`. Resuming
-needs `resume_args` and `session_store` as well. A CLI with no way to say what
-it is doing is not added: its state would only be a guess.
-
-Agents not found on your PATH are shown greyed out in Settings → General.
-
-## Tests
-
-```bash
-cd src-tauri && cargo test --lib
-```
-
-About 140 tests, most against real things rather than mocks:
-
-- the git layer against throwaway repositories and remotes: worktrees, one
-  branch across several repos, change detection, merges and rebases and their
-  conflicts, push leases, and users' git config getting in the way
-- the PTY layer through real processes: catch-up by position, the pane cap
-  under racing spawns, and stopping what will not stop
-- each agent CLI's hooks, plugin and MCP wiring, and what their reports mean
-- the MCP server, the attention and news watches, the GitHub and Jira
-  parsing, and config migration
-
-The frontend has no tests of its own; it is checked by driving it with Tauri's
-mocked IPC in a browser.
+That builds the app and installs it as `/Applications/Villain Layer.app`.
+It refuses to run while the app is open, because replacing the app under
+itself would kill every agent in it. Quit it first.
+
+A copy you built yourself opens normally. A copy someone sends you is
+blocked by Gatekeeper, since it is not signed yet: right-click → Open, once.
+
+## Getting started
+
+1. **Add your repositories.** Repos → *Add repositories* → *Scan a
+   folder…* (for example `~/code`), and tick the ones you work in. Group
+   them if you like.
+2. **Connect what you use** (the gear icon, top right):
+   - **Jira**: your site URL, your email, and an API token from
+     id.atlassian.com → Security → API tokens.
+   - **GitHub**: a token with the `repo` scope. For Enterprise, the API URL
+     is `https://<host>/api/v3`. To see your team's review queue, set the
+     team as `org/slug`, or as `@slug` with the `read:org` scope.
+   - **Slack** (optional): Settings → Slack shows an app manifest. Create a
+     Slack app from it, install it, and paste its bot token (`xoxb-…`) and
+     a channel. An incoming-webhook URL works too.
+3. **Start work.** Tickets → click a ticket → Start work. Check the repos
+   and the base branch, pick an agent, Start.
+4. **Work with the agent** in the task's Terminals tab. A dot's colour and
+   the "N need you" badge say when it is waiting on you.
+5. **Review** in the Diff tab: click a line number to leave a note, then
+   *Send to agent*. Commit when it is right.
+6. **Pull requests** tab: *Open pull request*. When reviews come in,
+   *Feedback → agent* hands over the threads and failing checks.
+7. **When the PRs have merged**, right-click the task → *Finish task*.
+
+## What it changes on your machine
+
+- **Task folders** go in `~/.villain-worktrees/` (settable). Each holds a
+  worktree per repo, plus the app's context files for the agents.
+- **`~/.claude.json`**: with *Trust the folders this app creates* on (the
+  default), the app marks its own task folders as trusted, so Claude Code
+  does not stop to ask. It touches nothing else in that file, and never a
+  folder outside the task folder location.
+- **Tokens** are kept in the macOS keychain (item `dev.villain.layer`).
+  They are never written to a file. Until the app is signed, macOS asks
+  for keychain access again after every update: *Always Allow* is tied to
+  the exact binary.
+- **Settings and tasks** are in
+  `~/Library/Application Support/dev.villain.layer/config.json`.
+
+The complete list is in [`docs/features.md`](docs/features.md#14-what-the-app-writes-on-your-machine).
+
+## When something goes wrong
+
+- **The app quit unexpectedly**: the reason is in
+  `~/Library/Logs/villain-layer/panic.log`. Please attach it to the report.
+- **"MCP server unavailable"** at startup: agents will work, but without
+  the app's Jira, GitHub and Slack tools until the next launch.
+- **An agent's dot never changes**: that CLI's status reports are not
+  arriving. Say which CLI and version.
+- **Start over**: quit the app and move `config.json` (above) aside. Your
+  repositories and worktrees on disk are not touched.
+
+## Working on it
+
+Start with [`AGENTS.md`](AGENTS.md). It is the rulebook for people and for
+coding agents alike, and every agent CLI reads it on its own. Then:
+
+- [`CONTRIBUTING.md`](CONTRIBUTING.md): setup, workflow, pull requests
+- [`docs/features.md`](docs/features.md): what the app does, as requirements
+- [`docs/architecture.md`](docs/architecture.md): how it works, and why
+- [`docs/recipes.md`](docs/recipes.md): how to make the common changes
+- [`docs/testing.md`](docs/testing.md): how to verify a change, including
+  the UI in a browser

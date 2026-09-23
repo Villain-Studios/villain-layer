@@ -151,13 +151,15 @@ impl Jira {
         if url.is_empty() {
             return None;
         }
-        let res = self
-            .client
-            .get(url)
-            .header("Authorization", &self.auth)
-            .send()
-            .await
-            .ok()?;
+        // Credentials go only to this site. An icon URL is whatever the
+        // site says, and on some that is a CDN or another host entirely.
+        let own = reqwest::Url::parse(url).ok().zip(reqwest::Url::parse(&self.base_url).ok())
+            .is_some_and(|(icon, site)| icon.origin() == site.origin());
+        let mut req = self.client.get(url);
+        if own {
+            req = req.header("Authorization", &self.auth);
+        }
+        let res = req.send().await.ok()?;
         if !res.status().is_success() {
             return None;
         }
@@ -264,7 +266,7 @@ impl Jira {
 
     pub async fn issue(&self, key: &str) -> Result<Issue> {
         let v = self
-            .json(self.req(reqwest::Method::GET, &format!("/rest/api/3/issue/{key}")))
+            .json(self.req(reqwest::Method::GET, &format!("/rest/api/3/issue/{}", segment(key)?)))
             .await?;
         Ok(self.to_issue(&v))
     }
@@ -273,7 +275,7 @@ impl Jira {
         let v = self
             .json(self.req(
                 reqwest::Method::GET,
-                &format!("/rest/api/3/issue/{key}/transitions"),
+                &format!("/rest/api/3/issue/{}/transitions", segment(key)?),
             ))
             .await?;
 
@@ -304,7 +306,7 @@ impl Jira {
         self.json(
             self.req(
                 reqwest::Method::POST,
-                &format!("/rest/api/3/issue/{key}/transitions"),
+                &format!("/rest/api/3/issue/{}/transitions", segment(key)?),
             )
             .json(&json!({ "transition": { "id": transition_id } })),
         )
@@ -385,7 +387,11 @@ impl Jira {
         // lost whatever came after it — and a required field past the
         // fiftieth never reached the form, so creating failed with "X is
         // required" for a field nobody had been asked about.
-        let path = format!("/rest/api/3/issue/createmeta/{project_key}/issuetypes/{issue_type_id}");
+        let path = format!(
+            "/rest/api/3/issue/createmeta/{}/issuetypes/{}",
+            segment(project_key)?,
+            segment(issue_type_id)?
+        );
         let mut fields: Vec<Value> = Vec::new();
         for _ in 0..20 {
             let at = fields.len().to_string();
@@ -451,7 +457,7 @@ impl Jira {
             .json(
                 self.req(
                     reqwest::Method::GET,
-                    &format!("/rest/api/3/issue/createmeta/{project_key}/issuetypes"),
+                    &format!("/rest/api/3/issue/createmeta/{}/issuetypes", segment(project_key)?),
                 )
                 .query(&[("maxResults", "200")]),
             )
@@ -493,7 +499,7 @@ impl Jira {
         self.json(
             self.req(
                 reqwest::Method::POST,
-                &format!("/rest/api/3/issue/{key}/comment"),
+                &format!("/rest/api/3/issue/{}/comment", segment(key)?),
             )
             .json(&body),
         )
@@ -683,6 +689,20 @@ pub struct Page {
     pub more: bool,
 }
 
+/// A key or id as one segment of a REST path.
+///
+/// Keys reach here from agents through the MCP server, and one reading a
+/// poisoned ticket could be steered into passing `../../…`: an authenticated
+/// GET anywhere on the site. Keys, ids and project keys are all letters,
+/// digits, `-` and `_`.
+fn segment(raw: &str) -> Result<&str> {
+    let raw = raw.trim();
+    if raw.is_empty() || !raw.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        return Err(Error::Other(format!("{raw:?} is not a Jira key")));
+    }
+    Ok(raw)
+}
+
 /// The JQL used when the user has not written their own.
 pub fn default_jql(project_key: Option<&str>) -> String {
     let scope = project_key
@@ -805,6 +825,15 @@ pub fn browse_jql(
 #[cfg(test)]
 mod browse_tests {
     use super::*;
+
+    #[test]
+    fn only_a_key_goes_into_a_path() {
+        assert_eq!(segment(" ACME-12 ").unwrap(), "ACME-12");
+        assert_eq!(segment("10042").unwrap(), "10042");
+        assert!(segment("../../rest/api/3/myself").is_err());
+        assert!(segment("ACME-1?expand=x").is_err());
+        assert!(segment("").is_err());
+    }
 
     #[test]
     fn a_key_is_looked_up_rather_than_searched_for() {

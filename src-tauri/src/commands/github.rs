@@ -168,7 +168,7 @@ pub async fn github_retarget_pr(state: State<'_, AppState>, checkout_id: String)
     let (client, _) = github_client(&state)?;
 
     let dir = PathBuf::from(&checkout.path);
-    let (owner, name) = git::origin_slug(&dir)?;
+    let (owner, name) = off_runtime(move || git::origin_slug(&dir)).await??;
     let pr = client
         .pull_for_branch(&owner, &name, &task.branch)
         .await?

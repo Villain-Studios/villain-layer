@@ -11,6 +11,19 @@ pub struct Slack {
     client: reqwest::Client,
 }
 
+/// What Slack accepts in one section block's text.
+const SECTION_LIMIT: usize = 3000;
+
+/// `text` cut to at most `max` characters, ending with an ellipsis if cut.
+fn clip(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let mut out: String = text.chars().take(max - 1).collect();
+    out.push('…');
+    out
+}
+
 impl Slack {
     pub fn new(secret: &str) -> Self {
         Self {
@@ -32,9 +45,12 @@ impl Slack {
         text: &str,
         context: Option<&str>,
     ) -> Result<Option<Posted>> {
+        // Slack refuses a section over 3000 characters with `invalid_blocks`,
+        // which an agent's longer `slack_post` ran into. The block is cut;
+        // `text`, which has no such limit, keeps all of it for notifications.
         let mut blocks = vec![json!({
             "type": "section",
-            "text": { "type": "mrkdwn", "text": text }
+            "text": { "type": "mrkdwn", "text": clip(text, SECTION_LIMIT) }
         })];
         if let Some(ctx) = context.filter(|c| !c.is_empty()) {
             blocks.push(json!({
@@ -300,5 +316,19 @@ fn explain(code: &str, channel: &str) -> String {
         "is_archived" => format!("{channel} is archived."),
         "rate_limited" => "Slack rate-limited the request; try again shortly.".to_string(),
         other => format!("Slack rejected the message: {other}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_long_post_is_cut_to_what_a_block_takes() {
+        assert_eq!(clip("short", SECTION_LIMIT), "short");
+        let long = "é".repeat(SECTION_LIMIT + 10);
+        let cut = clip(&long, SECTION_LIMIT);
+        assert_eq!(cut.chars().count(), SECTION_LIMIT);
+        assert!(cut.ends_with('…'));
     }
 }

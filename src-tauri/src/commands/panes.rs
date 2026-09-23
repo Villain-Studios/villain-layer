@@ -329,7 +329,13 @@ fn plug_in(
     args.extend(launch.args);
     let mut env = launch.env;
     env.push(("VILLAIN_HOOK_URL".into(), url));
-    env.push(("VILLAIN_HOOK_TOKEN".into(), endpoint.token.clone()));
+    env.push(("VILLAIN_HOOK_TOKEN".into(), endpoint.hook_token.clone()));
+    // Only for the CLIs that fill their MCP header in from a variable. Claude
+    // Code and Copilot read it from the 0600 file, and a token in the
+    // environment is one every command the agent runs inherits.
+    if mcp.is_some() && matches!(def.integration, agents::Integration::Opencode | agents::Integration::Gemini) {
+        env.push(("VILLAIN_MCP_TOKEN".into(), endpoint.token.clone()));
+    }
     env
 }
 

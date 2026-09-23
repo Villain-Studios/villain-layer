@@ -325,7 +325,7 @@ pub struct Launch {
 /// `opencode_config` is any `OPENCODE_CONFIG_CONTENT` the user already has:
 /// what the app needs is added to it, not put in its place.
 ///
-/// The token is read from `VILLAIN_HOOK_TOKEN` wherever the CLI will expand a
+/// The token is read from `VILLAIN_MCP_TOKEN` wherever the CLI will expand a
 /// variable, rather than written into another file.
 pub fn prepare_launch(
     integration: Integration,
@@ -402,7 +402,7 @@ fn gemini_project_server(folder: &Path, url: &str) -> std::io::Result<()> {
             crate::mcp::SERVER_NAME.into(),
             serde_json::json!({
                 "httpUrl": url,
-                "headers": { "Authorization": "Bearer $VILLAIN_HOOK_TOKEN" }
+                "headers": { "Authorization": "Bearer $VILLAIN_MCP_TOKEN" }
             }),
         );
     }
@@ -476,7 +476,7 @@ fn opencode_config_with(existing: Option<&str>, spec: &str, mcp_url: Option<&str
                 serde_json::json!({
                     "type": "remote",
                     "url": url,
-                    "headers": { "Authorization": "Bearer {env:VILLAIN_HOOK_TOKEN}" },
+                    "headers": { "Authorization": "Bearer {env:VILLAIN_MCP_TOKEN}" },
                     "enabled": true
                 }),
             );
@@ -958,7 +958,7 @@ mod tests {
         // Their servers stay; ours is added, its token left to the environment.
         assert_eq!(merged["mcp"]["theirs"]["type"], "local");
         assert_eq!(merged["mcp"]["villain-layer"]["url"], "http://127.0.0.1:9/mcp");
-        assert_eq!(merged["mcp"]["villain-layer"]["headers"]["Authorization"], "Bearer {env:VILLAIN_HOOK_TOKEN}");
+        assert_eq!(merged["mcp"]["villain-layer"]["headers"]["Authorization"], "Bearer {env:VILLAIN_MCP_TOKEN}");
         // Twice is still once.
         let again = opencode_config_with(Some(&merged.to_string()), spec, None);
         assert_eq!(again.matches(spec).count(), 1);
@@ -1020,7 +1020,7 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
         assert_eq!(v["ui"]["theme"], "x");
         assert_eq!(v["mcpServers"]["villain-layer"]["httpUrl"], "http://127.0.0.1:9/mcp");
-        assert_eq!(v["mcpServers"]["villain-layer"]["headers"]["Authorization"], "Bearer $VILLAIN_HOOK_TOKEN");
+        assert_eq!(v["mcpServers"]["villain-layer"]["headers"]["Authorization"], "Bearer $VILLAIN_MCP_TOKEN");
         // In a worktree: nothing written at all.
         let wt = dir.join("worktree");
         std::fs::create_dir_all(&wt).unwrap();

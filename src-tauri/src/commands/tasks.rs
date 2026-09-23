@@ -701,7 +701,10 @@ fn remove_checkout_inner(state: &AppState, checkout_id: String, force: bool) -> 
             }
         }
     }
-    state.ptys.close_checkout(&checkout_id, &checkout.path);
+    // Stopped with the repo, so not wanted back: a task-root agent stopped
+    // here returned at the next launch.
+    let closed = state.ptys.close_checkout(&checkout_id, &checkout.path);
+    let _ = state.config.update(|c| c.saved_panes.retain(|p| !closed.contains(&p.id)));
     let repo = PathBuf::from(&project.path);
     if Path::new(&checkout.path).exists() {
         // A refusal — uncommitted work, without force — keeps the record too:
@@ -885,7 +888,8 @@ fn delete_task_inner(state: &AppState, id: String, force: bool) -> Result<Vec<Re
             return Ok(dirty);
         }
     }
-    state.ptys.close_task(&id);
+    let closed = state.ptys.close_task(&id);
+    let _ = state.config.update(|c| c.saved_panes.retain(|p| !closed.contains(&p.id)));
 
     let mut results = Vec::new();
     for checkout in state.config.checkouts_of(&id) {
@@ -941,6 +945,10 @@ fn delete_task_inner(state: &AppState, id: String, force: bool) -> Result<Vec<Re
         }
         // The folder Gemini CLI's project settings sit in, emptied above.
         let _ = std::fs::remove_dir(dir.join(".gemini"));
+        // Claude Code's record of what was allowed in this folder, which goes
+        // with the folder. Left, it was the one file keeping it on disk.
+        let _ = std::fs::remove_file(dir.join(".claude").join("settings.local.json"));
+        let _ = std::fs::remove_dir(dir.join(".claude"));
     }
     let _ = std::fs::remove_dir(&task.root);
 

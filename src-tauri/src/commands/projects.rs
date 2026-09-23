@@ -214,9 +214,15 @@ fn merge_project(c: &mut crate::config::AppConfig, project: Project) -> Project 
     project
 }
 
+/// Off the command thread: a task this leaves with nothing has its agents
+/// stopped, and stopping waits for them.
 #[tauri::command]
-pub fn remove_project(state: State<AppState>, id: String) -> Result<()> {
-    let gone: Vec<String> = state.config.update(|c| {
+pub async fn remove_project(app: tauri::AppHandle, id: String) -> Result<()> {
+    super::blocking(app, move |state| remove_project_inner(state, &id)).await
+}
+
+pub(crate) fn remove_project_inner(state: &AppState, id: &str) -> Result<()> {
+    let (gone, dropped): (Vec<String>, Vec<String>) = state.config.update(|c| {
         c.projects.retain(|p| p.id != id);
         let gone: Vec<String> = c
             .checkouts
@@ -237,11 +243,23 @@ pub fn remove_project(state: State<AppState>, id: String) -> Result<()> {
         c.checkouts.retain(|ch| ch.project_id != id);
         let live: std::collections::HashSet<&str> =
             c.checkouts.iter().map(|ch| ch.task_id.as_str()).collect();
-        c.tasks
-            .retain(|t| !touched.contains(&t.id) || live.contains(t.id.as_str()));
-        gone
+        let dropped: Vec<String> = c
+            .tasks
+            .iter()
+            .filter(|t| touched.contains(&t.id) && !live.contains(t.id.as_str()))
+            .map(|t| t.id.clone())
+            .collect();
+        c.tasks.retain(|t| !dropped.contains(&t.id));
+        (gone, dropped)
     })?;
     state.status_cache.lock().retain(|cid, _| !gone.contains(cid));
+    // A task that is gone has nowhere to show its terminals. Its agents ran
+    // on out of sight, holding places under the pane cap. The folders stay,
+    // as the removal promises; only the processes the app started go.
+    for task in &dropped {
+        let closed = state.ptys.close_task(task);
+        let _ = state.config.update(|c| c.saved_panes.retain(|p| !closed.contains(&p.id)));
+    }
     Ok(())
 }
 

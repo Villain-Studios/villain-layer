@@ -1,8 +1,11 @@
 //! A Model Context Protocol server, hosted by the app itself.
 //!
-//! Agents launched from Villain Layer get an `.mcp.json` pointing here, so they
+//! Agents launched from Villain Layer are pointed here for the launch, so they
 //! reach Jira, GitHub and Slack through the credentials the app already holds —
-//! no second login, and no copy of the tokens in the agent's environment.
+//! no second login, and no copy of those credentials anywhere the agent can
+//! read. What an agent holds is this server's own token for the run: in a 0600
+//! file for the CLIs that read one, in the environment for those that expand a
+//! variable in their config.
 //! Because the server talks to the *running* app, the tools also see live state
 //! (tasks, worktrees, panes) and can drive it.
 //!
@@ -25,11 +28,16 @@ use crate::error::Result;
 
 const PROTOCOL_VERSION: &str = "2025-06-18";
 
-/// Where the server ended up listening, and the token that admits callers.
+/// Where the server ended up listening, and the tokens that admit callers.
 #[derive(Clone, Debug)]
 pub struct Endpoint {
     pub url: String,
     pub token: String,
+    /// Admits hook posts and nothing else. A hook is a shell command, and the
+    /// shell puts the header on curl's command line, where any process on the
+    /// machine can read it: with the tools' token there, reading `ps` was
+    /// enough to open PRs and post to Slack. This one can only set a dot.
+    pub hook_token: String,
 }
 
 static ENDPOINT: OnceLock<Endpoint> = OnceLock::new();
@@ -65,15 +73,13 @@ pub fn mcp_json() -> Option<Value> {
 struct Ctx {
     app: AppHandle,
     token: String,
+    hook_token: String,
 }
 
 /// Bind to an ephemeral loopback port and serve until the app exits.
 pub async fn serve(app: AppHandle) -> Result<Endpoint> {
-    let token = format!(
-        "{}{}",
-        uuid::Uuid::new_v4().simple(),
-        uuid::Uuid::new_v4().simple()
-    );
+    let mint = || format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple());
+    let (token, hook_token) = (mint(), mint());
 
     let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
         .await
@@ -85,10 +91,11 @@ pub async fn serve(app: AppHandle) -> Result<Endpoint> {
     let endpoint = Endpoint {
         url: format!("http://127.0.0.1:{}/mcp", addr.port()),
         token: token.clone(),
+        hook_token: hook_token.clone(),
     };
     let _ = ENDPOINT.set(endpoint.clone());
 
-    let ctx = Ctx { app, token };
+    let ctx = Ctx { app, token, hook_token };
     let router = Router::new()
         .route("/mcp", post(handle))
         .route("/hook/{pane}", post(hook))
@@ -145,7 +152,7 @@ async fn hook(
     headers: HeaderMap,
     body: Json<Value>,
 ) -> impl IntoResponse {
-    if !bearer_ok(&headers, &ctx.token) {
+    if !bearer_ok(&headers, &ctx.hook_token) {
         return StatusCode::UNAUTHORIZED;
     }
     if take_hook(&ctx.app.state::<AppState>().ptys, &pane, &body.0) {
@@ -770,7 +777,8 @@ async fn call(app: &AppHandle, name: &str, args: Value) -> Result<Value> {
                 })?
                 .clone();
 
-            commands::remove_project(state, found.id.clone())?;
+            let id = found.id.clone();
+            commands::blocking(app.clone(), move |state| commands::remove_project_inner(state, &id)).await?;
             Ok(json!({ "forgot": found.name, "path": found.path }))
         }
 

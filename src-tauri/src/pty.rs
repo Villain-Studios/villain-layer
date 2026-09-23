@@ -1218,9 +1218,10 @@ impl PtyManager {
             .collect()
     }
 
-    /// Kill every pane belonging to a task, used when it is deleted.
-    pub fn close_task(&self, task_id: &str) {
-        self.close_matching(|i| i.task_id == task_id);
+    /// Kill every pane belonging to a task, used when it is deleted. Returns
+    /// the panes closed.
+    pub fn close_task(&self, task_id: &str) -> Vec<String> {
+        self.close_matching(|i| i.task_id == task_id)
     }
 
     /// Kill every pane working inside one checkout, used when a repo leaves a
@@ -1230,14 +1231,14 @@ impl PtyManager {
     /// from the task root can be running inside the worktree with no checkout
     /// recorded, and deleting the folder out from under it is worse than
     /// stopping it.
-    pub fn close_checkout(&self, checkout_id: &str, path: &str) {
+    pub fn close_checkout(&self, checkout_id: &str, path: &str) -> Vec<String> {
         let dir = std::path::Path::new(path);
         self.close_matching(|i| {
             i.checkout_id.as_deref() == Some(checkout_id) || std::path::Path::new(&i.cwd).starts_with(dir)
-        });
+        })
     }
 
-    fn close_matching(&self, pred: impl Fn(&PaneInfo) -> bool) {
+    fn close_matching(&self, pred: impl Fn(&PaneInfo) -> bool) -> Vec<String> {
         // Signal every match first and wait once — stopping them one by one
         // with a five-second grace each is how deleting a task with three
         // agents froze the UI for fifteen seconds.
@@ -1251,7 +1252,7 @@ impl PtyManager {
             ids.into_iter().filter_map(|id| map.remove(&id)).collect()
         };
         if panes.is_empty() {
-            return;
+            return Vec::new();
         }
         for pane in &panes {
             if pane.meta.lock().info.running {
@@ -1267,6 +1268,7 @@ impl PtyManager {
                 Self::force_kill(pane);
             }
         }
+        panes.iter().map(|p| p.meta.lock().info.id.clone()).collect()
     }
 }
 

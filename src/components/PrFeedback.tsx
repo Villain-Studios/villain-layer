@@ -40,8 +40,11 @@ function entries(row: RepoFeedback, sent: Set<string>): { list: Entry[]; resolve
       resolved += 1;
       continue;
     }
-    const key = `t:${t.url}`;
     const last = t.comments[t.comments.length - 1];
+    // By its newest comment, not its first: a thread keyed on where it began
+    // stayed "sent before" when the reviewer answered the fix with "still
+    // wrong" — the one reply most worth sending.
+    const key = `t:${last?.url || t.url}`;
     const why: string[] = [];
     if (sent.has(key)) why.push("sent before");
     if (t.outdated) why.push("outdated");

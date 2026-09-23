@@ -44,7 +44,8 @@ pub async fn github_connect(
             .as_deref()
             .and_then(github::normalize_review_team),
     };
-    let token = stored_or(secrets::GITHUB, &token, "GitHub")?;
+    let was = state.config.read().github.as_ref().map(|g| g.api_url.clone());
+    let token = stored_or(secrets::GITHUB, &token, "GitHub", was.as_deref(), &cfg.api_url)?;
     let login = GitHub::new(&cfg, &token).login().await?;
     secrets::set(secrets::GITHUB, &token)?;
     state.config.update(|c| c.github = Some(cfg))?;
@@ -425,7 +426,13 @@ pub(crate) async fn task_prs(
                                 // again rather than reported with those silently
                                 // zeroed.
                                 let (checks, reviews, full) = tokio::join!(
-                                    client.checks(&owner, &name, &task.branch),
+                                    // The commit, not the branch name: a name is
+                                    // read by the URL, a sha is not.
+                                    client.checks(
+                                        &owner,
+                                        &name,
+                                        if found.head_sha.is_empty() { &task.branch } else { &found.head_sha },
+                                    ),
                                     client.reviews(&owner, &name, found.number),
                                     client.pull(&owner, &name, found.number),
                                 );
@@ -531,18 +538,21 @@ pub async fn github_pr_feedback(
                     client.failed_checks(&owner, &name, &at),
                 );
                 let mut checks = checks.unwrap_or_default();
-                let logs = futures_util::future::join_all(checks.iter().take(LOGS_PER_REPO).map(|c| {
+                // Counted among the checks that have a log to read: six failing
+                // external checks listed first left the Actions job without one.
+                let jobs: Vec<(usize, u64)> = checks
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, c)| c.job_id.map(|id| (i, id)))
+                    .take(LOGS_PER_REPO)
+                    .collect();
+                let logs = futures_util::future::join_all(jobs.iter().map(|&(_, id)| {
                     let (owner, name) = (&owner, &name);
-                    async move {
-                        match c.job_id {
-                            Some(id) => client.job_log_tail(owner, name, id).await.ok(),
-                            None => None,
-                        }
-                    }
+                    async move { client.job_log_tail(owner, name, id).await.ok() }
                 }))
                 .await;
-                for (check, log) in checks.iter_mut().zip(logs) {
-                    check.log = log.filter(|l| !l.is_empty());
+                for (&(i, _), log) in jobs.iter().zip(logs) {
+                    checks[i].log = log.filter(|l| !l.is_empty());
                 }
                 Ok(Some(RepoFeedback {
                     checkout_id: checkout.id.clone(),

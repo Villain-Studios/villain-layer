@@ -686,7 +686,9 @@ pub struct Page {
 /// The JQL used when the user has not written their own.
 pub fn default_jql(project_key: Option<&str>) -> String {
     let scope = project_key
-        .map(|k| format!("project = {k} AND "))
+        // Quoted: a key that is a JQL word — IT, DO, IF — failed the whole
+        // queue with "'it' is a reserved JQL word".
+        .map(|k| format!("project = {} AND ", jql_string(k)))
         .unwrap_or_default();
     format!("{scope}assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC")
 }
@@ -768,7 +770,7 @@ pub fn browse_jql(
     let mut parts: Vec<String> = Vec::new();
 
     if let Some(key) = project_key.map(str::trim).filter(|k| !k.is_empty()) {
-        parts.push(format!("project = {key}"));
+        parts.push(format!("project = {}", jql_string(key)));
     }
     if let Some(clause) = whose.clause() {
         parts.push(clause.to_string());
@@ -788,7 +790,7 @@ pub fn browse_jql(
     }
     if let Some(text) = text.map(str::trim).filter(|t| !t.is_empty()) {
         parts.push(if looks_like_a_key(text) {
-            format!("key = {text}")
+            format!("key = {}", jql_string(text))
         } else {
             format!("text ~ {}", jql_string(text))
         });
@@ -814,7 +816,7 @@ mod browse_tests {
         assert!(!looks_like_a_key("rounding error"));
         assert!(!looks_like_a_key("ACME-21042-fix"));
 
-        assert!(browse_jql(None, Some("ACME-9"), Whose::Anyone, false, &[]).contains("key = ACME-9"));
+        assert!(browse_jql(None, Some("ACME-9"), Whose::Anyone, false, &[]).contains(r#"key = "ACME-9""#));
         assert!(browse_jql(None, Some("rounding"), Whose::Anyone, false, &[])
             .contains("text ~ \"rounding\""));
     }
@@ -844,7 +846,7 @@ mod browse_tests {
 
         assert_eq!(
             browse_jql(Some("ACME"), None, Whose::Unassigned, false, &[]),
-            "project = ACME AND assignee IS EMPTY AND statusCategory != Done ORDER BY updated DESC",
+            r#"project = "ACME" AND assignee IS EMPTY AND statusCategory != Done ORDER BY updated DESC"#,
         );
         assert_eq!(
             browse_jql(None, None, Whose::Anyone, true, &[]),

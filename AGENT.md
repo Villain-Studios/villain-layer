@@ -105,8 +105,8 @@ live process kills it and takes its agents with it, and the same is true of
 - **An agent's output does not say whether it is working.** Claude Code
   repaints its prompt every few seconds while it sits idle, so "printed
   recently" read a two-day-idle agent as working. Each CLI that can say for
-  itself has a `Reports` in `agents.rs` — hooks, a plugin, or its window
-  title — set up per launch by `agents::prepare_reporting`, and posts land on
+  itself has an `Integration` in `agents.rs` — hooks, a plugin, or its window
+  title — set up per launch by `agents::prepare_launch`, and posts land on
   `/hook/<pane>` on the app's server. `pty::PaneMeta::state` believes those
   over output; output only decides for CLIs that report nothing, and not in
   the moment after the app sent the pane something.

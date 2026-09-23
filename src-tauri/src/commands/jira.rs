@@ -21,12 +21,35 @@ use super::tasks::{new_task, NewTask};
 
 /// The token as typed, or the one already in the keychain when the field was
 /// left blank — which is what the settings form says a blank field means.
-pub(crate) fn stored_or(key: &str, typed: &str, what: &'static str) -> Result<String> {
+///
+/// Only for the host it was stored for. A blank field under a mistyped or
+/// pasted URL sent the saved token there to be checked, and saved it as that
+/// host's.
+pub(crate) fn stored_or(
+    key: &str,
+    typed: &str,
+    what: &'static str,
+    stored_for: Option<&str>,
+    url: &str,
+) -> Result<String> {
     let typed = typed.trim();
     if !typed.is_empty() {
         return Ok(typed.to_string());
     }
-    secrets::get(key)?.ok_or(Error::NotConfigured(what))
+    let origin = |u: &str| {
+        reqwest::Url::parse(u)
+            .ok()
+            .map(|u| (u.scheme().to_string(), u.host_str().map(str::to_lowercase), u.port_or_known_default()))
+    };
+    match stored_for {
+        Some(old) if origin(old).is_some() && origin(old) == origin(url) => {
+            secrets::get(key)?.ok_or(Error::NotConfigured(what))
+        }
+        Some(_) => Err(Error::Other(format!(
+            "Enter the {what} token again: the saved one is only sent to the site it was saved for"
+        ))),
+        None => Err(Error::NotConfigured(what)),
+    }
 }
 
 pub(crate) fn jira_client(state: &AppState) -> Result<(Jira, JiraConfig)> {
@@ -56,7 +79,8 @@ pub async fn jira_connect(
         epic_field: None,
     };
     // Changing the project key or JQL should not need the token typed again.
-    let token = stored_or(secrets::JIRA, &token, "Jira")?;
+    let was = state.config.read().jira.as_ref().map(|j| j.base_url.clone());
+    let token = stored_or(secrets::JIRA, &token, "Jira", was.as_deref(), &cfg.base_url)?;
     // Verify before persisting, so a typo never looks like a working setup.
     let client = Jira::new(&cfg, &token);
     let who = client.myself().await?;

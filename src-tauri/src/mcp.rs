@@ -352,7 +352,14 @@ fn tools() -> Vec<Value> {
                 "description": str_prop("Body text; blank lines separate paragraphs"),
                 "issue_type": str_prop("Type name as this site defines it, e.g. Bug or Task. Defaults to Task."),
                 "project_key": str_prop("Defaults to the project configured in the app"),
-                "parent_key": str_prop("Epic or parent key to file this under")
+                "parent_key": str_prop("Epic or parent key to file this under"),
+                "fields": {
+                    "type": "object",
+                    "description": "The other fields jira_create_fields says this project \
+                                    requires, by field id: {\"id\": \"…\"} for one allowed \
+                                    value, a list of them for an array field, e.g. \
+                                    {\"components\": [{\"id\": \"10001\"}]}"
+                }
             }),
             vec!["summary"],
         ),
@@ -642,7 +649,15 @@ async fn call(app: &AppHandle, name: &str, args: Value) -> Result<Value> {
                         None => commands::default_issue_type(&state).await?,
                     },
                     arg(&args, "parent_key"),
-                    &serde_json::Value::Null,
+                    // Without it jira_create_fields was advice nobody could
+                    // act on: a project that demands a component refused
+                    // every issue an agent filed.
+                    // Some clients send an object argument as its JSON text.
+                    &match args.get("fields") {
+                        Some(Value::String(s)) => serde_json::from_str(s).unwrap_or(Value::Null),
+                        Some(v) => v.clone(),
+                        None => Value::Null,
+                    },
                 )
                 .await?;
             Ok(json!({ "key": key, "url": format!("{}/browse/{key}", cfg.base_url) }))

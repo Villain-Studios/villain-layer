@@ -119,13 +119,16 @@ impl GitHub {
         state: &str,
         per_page: u32,
     ) -> Result<Vec<PullRequest>> {
+        // As a query rather than pasted into the URL: `#` and `+` are legal in
+        // a branch name, and pasted in they cut the filter short — no PR was
+        // found, and opening one again failed with "already exists".
+        let head = format!("{owner}:{branch}");
+        let per_page = per_page.to_string();
         let v = self
-            .json(self.req(
-                reqwest::Method::GET,
-                &format!(
-                    "/repos/{owner}/{repo}/pulls?state={state}&head={owner}:{branch}&per_page={per_page}"
-                ),
-            ))
+            .json(
+                self.req(reqwest::Method::GET, &format!("/repos/{owner}/{repo}/pulls"))
+                    .query(&[("state", state), ("head", head.as_str()), ("per_page", per_page.as_str())]),
+            )
             .await?;
         Ok(v.as_array()
             .map(|a| a.iter().map(to_pr).collect())
@@ -263,7 +266,7 @@ impl GitHub {
                 reqwest::Method::GET,
                 // The default page is thirty. A matrix build past that could
                 // hide the failing run, and the panel went green.
-                &format!("/repos/{owner}/{repo}/commits/{git_ref}/check-runs?per_page=100"),
+                &format!("/repos/{owner}/{repo}/commits/{}/check-runs?per_page=100", path_segment(git_ref)),
             ))
             .await?;
 
@@ -295,34 +298,79 @@ impl GitHub {
     /// handing an agent every thread a reviewer already closed is asking it to
     /// redo work that was accepted.
     pub async fn pr_feedback(&self, owner: &str, repo: &str, number: u64) -> Result<PrFeedback> {
-        const QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) {
+        // Threads come oldest first and resolved ones count towards a page,
+        // so one page of 100 dropped the newest threads on a PR that a few
+        // rounds of bot review had filled — and then said every thread was
+        // resolved. Later pages ask for the threads alone.
+        const QUERY: &str = "query($owner: String!, $name: String!, $number: Int!, $after: String, $first: Boolean!) {
           repository(owner: $owner, name: $name) {
             pullRequest(number: $number) {
-              author { login }
-              reviewThreads(first: 100) {
+              author @include(if: $first) { login }
+              reviewThreads(first: 100, after: $after) {
+                pageInfo { hasNextPage endCursor }
                 nodes {
                   isResolved isOutdated path line originalLine
-                  comments(first: 30) { nodes { author { login __typename } body url createdAt } }
+                  comments(first: 100) { nodes { author { login __typename } body url createdAt } }
                 }
               }
-              reviews(last: 50) { nodes { author { login __typename } state body url submittedAt } }
-              comments(last: 50) { nodes { author { login __typename } body url createdAt } }
+              reviews(last: 100) @include(if: $first) { nodes { author { login __typename } state body url submittedAt } }
+              comments(last: 100) @include(if: $first) { nodes { author { login __typename } body url createdAt } }
             }
           }
         }";
-        let v = self
-            .json(
-                self.client
-                    .post(graphql_url(&self.api_url))
-                    .header("Authorization", format!("Bearer {}", self.token))
-                    .header("User-Agent", "villain-layer")
-                    .json(&json!({
-                        "query": QUERY,
-                        "variables": { "owner": owner, "name": repo, "number": number },
-                    })),
-            )
-            .await?;
-        parse_feedback(&v)
+        /// A PR nobody could read through is not one to hand an agent whole.
+        const MAX_PAGES: usize = 10;
+
+        let mut first: Option<Value> = None;
+        let mut after: Option<String> = None;
+        for page in 0..MAX_PAGES {
+            let got = self
+                .json(
+                    self.client
+                        .post(graphql_url(&self.api_url))
+                        .header("Authorization", format!("Bearer {}", self.token))
+                        .header("User-Agent", "villain-layer")
+                        .json(&json!({
+                            "query": QUERY,
+                            "variables": {
+                                "owner": owner, "name": repo, "number": number,
+                                "after": after, "first": page == 0,
+                            },
+                        })),
+                )
+                .await;
+            // A later page that failed is a shorter list, not no list.
+            let v = match got {
+                Ok(v) => v,
+                Err(e) if page == 0 => return Err(e),
+                Err(_) => break,
+            };
+            let threads = "/data/repository/pullRequest/reviewThreads";
+            let more = v
+                .pointer(&format!("{threads}/pageInfo/hasNextPage"))
+                .and_then(|x| x.as_bool())
+                .unwrap_or(false);
+            after = v
+                .pointer(&format!("{threads}/pageInfo/endCursor"))
+                .and_then(|x| x.as_str())
+                .map(str::to_string);
+            match first.as_mut() {
+                None => first = Some(v),
+                Some(all) => {
+                    let (Some(Value::Array(into)), Some(Value::Array(nodes))) = (
+                        all.pointer_mut(&format!("{threads}/nodes")),
+                        v.pointer(&format!("{threads}/nodes")),
+                    ) else {
+                        break;
+                    };
+                    into.extend(nodes.iter().cloned());
+                }
+            }
+            if !more || after.is_none() {
+                break;
+            }
+        }
+        parse_feedback(&first.unwrap_or(Value::Null))
     }
 
     /// Check runs on a ref that failed, with what they said about it.
@@ -333,7 +381,7 @@ impl GitHub {
         let v = self
             .json(self.req(
                 reqwest::Method::GET,
-                &format!("/repos/{owner}/{repo}/commits/{git_ref}/check-runs?per_page=100"),
+                &format!("/repos/{owner}/{repo}/commits/{}/check-runs?per_page=100", path_segment(git_ref)),
             ))
             .await?;
         let mut out: Vec<FailedCheck> = Vec::new();
@@ -377,6 +425,10 @@ impl GitHub {
     pub async fn job_log_tail(&self, owner: &str, repo: &str, job_id: u64) -> Result<String> {
         let mut res = self
             .req(reqwest::Method::GET, &format!("/repos/{owner}/{repo}/actions/jobs/{job_id}/logs"))
+            // The client's 30 seconds cover the body too, and a chatty job's
+            // log over a VPN takes longer than that to read — which surfaced as
+            // "No log could be read" for exactly the logs this is for.
+            .timeout(std::time::Duration::from_secs(120))
             .send()
             .await?;
         let status = res.status();
@@ -871,6 +923,20 @@ fn parse_note(v: &Value) -> Note {
     }
 }
 
+/// A ref as one path segment. A branch may hold `#`, `?`, `%` or a space,
+/// which in a URL end the path or mean something else; its `/` is left alone,
+/// since GitHub reads a ref across them.
+fn path_segment(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    for b in raw.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => out.push(b as char),
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
 pub(crate) fn parse_feedback(v: &Value) -> Result<PrFeedback> {
     // GraphQL answers 200 with the failure inside: a PR that does not exist,
     // or a token without access, arrives as `errors` and a null.
@@ -931,6 +997,13 @@ pub(crate) fn parse_feedback(v: &Value) -> Result<PrFeedback> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_ref_stays_one_path_segment() {
+        assert_eq!(path_segment("villain/ACME-12-fix"), "villain/ACME-12-fix");
+        assert_eq!(path_segment("fix#2 a+b%"), "fix%232%20a%2Bb%25");
+        assert_eq!(path_segment("0a1b2c"), "0a1b2c");
+    }
 
     fn review(author: &str, state: &str) -> Review {
         Review {

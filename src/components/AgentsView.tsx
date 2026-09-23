@@ -25,10 +25,13 @@ export function AgentsView() {
 
   /// Stopping asks the agent to exit and waits up to five seconds for it to
   /// save, so the row does not change until then. Say which one is stopping.
-  const [stopping, setStopping] = useState<string | null>(null);
+  /// Several at once: one id meant stopping B while A was still going gave
+  /// A its button back, and A finishing cleared B's spinner.
+  const [stopping, setStopping] = useState<Set<string>>(new Set());
 
   async function stop(paneId: string) {
-    setStopping(paneId);
+    if (stopping.has(paneId)) return;
+    setStopping((s) => new Set(s).add(paneId));
     markStopping(paneId);
     try {
       await api.killPane(paneId);
@@ -36,7 +39,11 @@ export function AgentsView() {
     } catch (e) {
       fail(e);
     } finally {
-      setStopping(null);
+      setStopping((s) => {
+        const next = new Set(s);
+        next.delete(paneId);
+        return next;
+      });
     }
   }
 
@@ -124,10 +131,10 @@ export function AgentsView() {
             {pane.running && (
               <button
                 className="btn btn-sm btn-danger"
-                disabled={stopping === pane.id}
+                disabled={stopping.has(pane.id)}
                 onClick={() => void stop(pane.id)}
               >
-                {stopping === pane.id ? (
+                {stopping.has(pane.id) ? (
                   <span className="btn-busy"><Spinner />Stopping…</span>
                 ) : (
                   "Stop"

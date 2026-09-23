@@ -296,9 +296,12 @@ function Watchers() {
           `${pane.title} is asking whether to trust ${owner?.name ?? "the worktree"} — answer it in Terminals or it will not start.`,
         );
       } else if (e.payload.notice === "usage_limit") {
+        // A chat has no handoff; a task's agent does.
         state.toast(
           "error",
-          `${pane.title} hit a usage limit in ${owner?.name ?? "a task"} — open it to hand off to another agent.`,
+          pane.task_id === CHAT_TASK_ID
+            ? `${pane.title} hit a usage limit in a chat — start another chat with a different agent.`
+            : `${pane.title} hit a usage limit in ${owner?.name ?? "a task"} — open it to hand off to another agent.`,
         );
       }
     });
@@ -428,7 +431,7 @@ function Watchers() {
     const p = listen<string>("system-notify-click", (e) => {
       const target = e.payload;
       const s = useStore.getState();
-      if (target === "reviews" || target === "tickets") s.setView(target);
+      if (target === "reviews" || target === "tickets" || target === "chat") s.setView(target);
       // Nothing selected is the overview of every agent.
       else if (target === "work") s.select(null);
       else if (target.startsWith("task:")) {
@@ -552,22 +555,24 @@ function TaskMain({ task }: { task: TaskView }) {
         <div className="spacer" />
         <div className="chips">
           {totals.missing > 0 && (
-            <span className="chip warn">{totals.missing} worktree(s) missing</span>
+            <span className="chip warn">
+              {totals.missing} worktree{totals.missing === 1 ? "" : "s"} missing
+            </span>
           )}
           {totals.ahead > 0 && <span className="chip">↑{totals.ahead}</span>}
           {totals.behind > 0 && <span className="chip warn">↓{totals.behind}</span>}
           {totals.conflicted > 0 && (
             <button
               className="chip del"
-              title="Resolve with an agent, or abandon the merge"
+              title="Resolve with an agent, or abandon the update"
               onClick={() => setUpdating(true)}
             >
-              {totals.conflicted} conflicts
+              {totals.conflicted} conflict{totals.conflicted === 1 ? "" : "s"}
             </button>
           )}
           <button
             className="btn btn-sm"
-            title="Fetch each repo's base branch and merge it into this task's branch"
+            title="Fetch each repo's base branch and merge or rebase this task's branch onto it"
             onClick={() => setUpdating(true)}
           >
             Update from base
@@ -659,7 +664,7 @@ export default function App() {
             <Sidebar />
             <div className="main">
               {task ? (
-                <TaskMain task={task} />
+                <TaskMain key={task.id} task={task} />
               ) : (
                 // With nothing selected, show what every agent is doing rather
                 // than an empty panel — the sidebar covers the task list, this

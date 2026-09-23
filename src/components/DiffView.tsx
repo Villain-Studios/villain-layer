@@ -486,7 +486,7 @@ export function DiffView({ task }: { task: TaskView }) {
         const n = drafts.length;
         await api.sendReview(pane.id, commentsFor(pane.checkout_id));
         setDrafts([]);
-        toast("success", `Sent ${n} note(s) to ${pane.title}.`);
+        toast("success", `Sent ${n} note${n === 1 ? "" : "s"} to ${pane.title}.`);
       } catch (e) {
         fail(e);
       }
@@ -516,7 +516,7 @@ export function DiffView({ task }: { task: TaskView }) {
       setStarting(false);
       await refreshPanes();
       setTab("terminals");
-      toast("success", `Started ${pane.title} with ${n} note(s).`);
+      toast("success", `Started ${pane.title} with ${n} note${n === 1 ? "" : "s"}.`);
     } catch (e) {
       fail(e);
     } finally {

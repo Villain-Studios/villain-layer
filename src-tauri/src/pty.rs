@@ -284,6 +284,8 @@ struct PaneMeta {
     /// A notice the agent's own report showed to be over while its words are
     /// still on screen. Not raised again until they have scrolled away.
     cleared_notice: Option<String>,
+    /// When the notice now showing was raised.
+    notice_at: DateTime<Utc>,
 }
 
 impl PaneMeta {
@@ -292,12 +294,19 @@ impl PaneMeta {
     }
 
     fn state(&self, watched: bool, now: DateTime<Utc>) -> (Activity, DateTime<Utc>) {
+        // Times that hold still. A shell's last output, or the last output
+        // under a notice, moved with every read: the pane list never matched
+        // the one before while a dev server printed, and every poll redrew
+        // the app.
         let info = &self.info;
-        if info.kind != PaneKind::Agent || !info.running {
+        if info.kind == PaneKind::Shell {
+            return (Activity::Idle, info.started_at);
+        }
+        if !info.running {
             return (Activity::Idle, self.last_work);
         }
         if info.notice.is_some() {
-            return (Activity::Asking, info.last_output_at);
+            return (Activity::Asking, self.notice_at);
         }
         let (state, since) = match self.reported {
             Some(reported) => reported,
@@ -803,6 +812,7 @@ impl PtyManager {
                 seen_at: now,
                 title: String::new(),
                 cleared_notice: None,
+                notice_at: now,
             }),
             pid,
             master: Mutex::new(pair.master),
@@ -886,6 +896,7 @@ impl PtyManager {
                                     && meta.info.notice.as_deref() != Some("usage_limit")
                                 {
                                     meta.info.notice = found.map(str::to_string);
+                                    meta.notice_at = now;
                                     if found.is_some() {
                                         let _ = app.emit(
                                             "pty:notice",
@@ -1302,6 +1313,7 @@ mod tests {
             seen_at: now - chrono::TimeDelta::seconds(3600),
             title: String::new(),
             cleared_notice: None,
+            notice_at: now,
         }
     }
 

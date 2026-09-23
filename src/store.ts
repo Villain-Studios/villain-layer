@@ -125,22 +125,36 @@ let reviewsInflight: Promise<void> | null = null;
 let tasksInflight: Promise<void> | null = null;
 let panesInflight: Promise<void> | null = null;
 
+interface Slot {
+  get: () => Promise<void> | null;
+  set: (p: Promise<void> | null) => void;
+  /** The one refresh queued behind the call in flight, shared by everyone who asked meanwhile. */
+  next?: Promise<void> | null;
+}
+
 /**
  * Run `work` once, sharing it with polls that overlap and queueing behind it
  * for anything that is not a poll.
+ *
+ * Everything that queues while a call is out shares one refresh after it:
+ * each hook post announces itself, and five of them during one call became
+ * five calls in a row, each waiting for the last.
  */
-async function coalesce(
-  slot: { get: () => Promise<void> | null; set: (p: Promise<void> | null) => void },
-  poll: boolean,
-  work: () => Promise<void>,
-): Promise<void> {
+async function coalesce(slot: Slot, poll: boolean, work: () => Promise<void>): Promise<void> {
   const current = slot.get();
   if (current) {
     if (poll) return current;
     // Wait the in-flight one out, then ask again: what it returns was asked
     // for before whatever just changed.
-    await current.catch(() => {});
-    if (slot.get()) return coalesce(slot, poll, work);
+    if (!slot.next) {
+      slot.next = current
+        .catch(() => {})
+        .then(() => {
+          slot.next = null;
+          return coalesce(slot, false, work);
+        });
+    }
+    return slot.next;
   }
   const run = work();
   slot.set(run);
@@ -151,8 +165,17 @@ async function coalesce(
   }
 }
 
-const tasksSlot = { get: () => tasksInflight, set: (p: Promise<void> | null) => { tasksInflight = p; } };
-const panesSlot = { get: () => panesInflight, set: (p: Promise<void> | null) => { panesInflight = p; } };
+const tasksSlot: Slot = { get: () => tasksInflight, set: (p) => { tasksInflight = p; } };
+const panesSlot: Slot = { get: () => panesInflight, set: (p) => { panesInflight = p; } };
+const reviewsSlot: Slot = { get: () => reviewsInflight, set: (p) => { reviewsInflight = p; } };
+
+/**
+ * When each task's PR rows were last fetched. A sweep walks every task and
+ * can take a minute on a slow link; landing after a panel fetched its own
+ * rows — the PR just opened — it put back the world from before, and the
+ * panel offered to open the PR again.
+ */
+const prsFetchedAt = new Map<string, number>();
 
 /** Skip a React storm when a poll returns the same world we already have. */
 function samePanes(a: PaneInfo[], b: PaneInfo[]): boolean {
@@ -176,39 +199,14 @@ function samePanes(a: PaneInfo[], b: PaneInfo[]): boolean {
   return true;
 }
 
+/**
+ * Whole, not field by field. A hand-picked list missed the base: changed in
+ * the PR panel, Update from base went on saying "← origin/main" while the
+ * backend merged the new one. A few dozen tasks stringify in well under a
+ * millisecond, and nothing in them changes on its own between polls.
+ */
 function sameTasks(a: TaskView[], b: TaskView[]): boolean {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) {
-    const x = a[i];
-    const y = b[i];
-    if (
-      x.id !== y.id ||
-      x.name !== y.name ||
-      x.branch !== y.branch ||
-      x.pane_count !== y.pane_count ||
-      x.checkouts.length !== y.checkouts.length
-    ) {
-      return false;
-    }
-    for (let j = 0; j < x.checkouts.length; j++) {
-      const cx = x.checkouts[j];
-      const cy = y.checkouts[j];
-      if (
-        cx.id !== cy.id ||
-        cx.changed !== cy.changed ||
-        cx.exists !== cy.exists ||
-        cx.status?.staged !== cy.status?.staged ||
-        cx.status?.unstaged !== cy.status?.unstaged ||
-        cx.status?.untracked !== cy.status?.untracked ||
-        cx.status?.ahead !== cy.status?.ahead ||
-        cx.status?.behind !== cy.status?.behind ||
-        cx.status?.conflicted !== cy.status?.conflicted
-      ) {
-        return false;
-      }
-    }
-  }
-  return true;
+  return a.length === b.length && JSON.stringify(a) === JSON.stringify(b);
 }
 
 /**
@@ -362,13 +360,16 @@ export const useStore = create<State>((set, get) => {
   refreshPrs: async () => {
     if (sweeping || !get().settings?.github_connected) return;
     sweeping = true;
+    const began = Date.now();
     try {
       const all = await api.githubAllPrs();
       // Merged, not replaced: a task the sweep could not read is left out of
       // its result, and dropping it here would blank a panel that had just
-      // fetched those rows for itself.
+      // fetched those rows for itself. Nor over rows fetched after it began.
+      const fresh = all.filter((t) => (prsFetchedAt.get(t.task_id) ?? 0) < began);
+      for (const t of fresh) prsFetchedAt.set(t.task_id, began);
       set((s) => ({
-        prs: { ...s.prs, ...Object.fromEntries(all.map((t) => [t.task_id, t.rows])) },
+        prs: { ...s.prs, ...Object.fromEntries(fresh.map((t) => [t.task_id, t.rows])) },
       }));
     } catch {
       // Left as it was: stale rows beat empty ones.
@@ -377,9 +378,13 @@ export const useStore = create<State>((set, get) => {
     }
   },
 
-  setTaskPrs: (taskId, rows) => set((s) => ({ prs: { ...s.prs, [taskId]: rows } })),
+  setTaskPrs: (taskId, rows) => {
+    prsFetchedAt.set(taskId, Date.now());
+    set((s) => ({ prs: { ...s.prs, [taskId]: rows } }));
+  },
 
   refreshSettings: async () => {
+    const before = get().settings;
     const settings = await api.getSettings();
     set({ settings });
     // Only until the first list lands: someone with nothing assigned has an
@@ -392,8 +397,14 @@ export const useStore = create<State>((set, get) => {
     if (!settings.jira_connected && (get().issues.length > 0 || get().issuesLoaded)) {
       set({ issues: [], issueTypes: [], issuesTruncated: false, issuesLoaded: false });
     }
+    // Only when GitHub itself changed. Every slider moved and every update
+    // from base refreshed settings, and each ran a search — which GitHub
+    // allows thirty of a minute.
+    const githubChanged =
+      before?.github_connected !== settings.github_connected ||
+      JSON.stringify(before?.github) !== JSON.stringify(settings.github);
     if (settings.github_connected) {
-      void get().refreshReviewQueue({ quiet: true });
+      if (githubChanged || get().reviewQueue === null) void get().refreshReviewQueue({ quiet: true });
     } else if (get().reviewQueue || get().reviewQueueError) {
       set({ reviewQueue: null, reviewQueueError: null });
     }
@@ -401,7 +412,7 @@ export const useStore = create<State>((set, get) => {
 
   refreshReviewQueue: (opts) =>
     coalesce(
-      { get: () => reviewsInflight, set: (p) => { reviewsInflight = p; } },
+      reviewsSlot,
       opts?.quiet ?? false,
       async () => {
         if (!get().settings?.github_connected) return;
@@ -514,24 +525,33 @@ export function paneState(pane: PaneInfo): { label: string; dot: string } {
   switch (pane.activity) {
     case "working": return { label: "working", dot: "live" };
     case "asking": return { label: "needs you — asking permission", dot: "idle" };
-    case "done": return { label: "finished — your turn", dot: "idle" };
+    // A chat that has answered is waiting as a chat does, not for you.
+    case "done":
+      return pane.task_id === CHAT_TASK_ID
+        ? { label: "your turn", dot: "" }
+        : { label: "finished — your turn", dot: "idle" };
     default: return { label: "idle", dot: "" };
   }
 }
 
 /**
- * An agent in a task that needs you — what the dock icon counts.
+ * An agent that needs you — what the dock icon counts.
  *
- * The same rule as the backend's: asking, or finished and not yet seen. The
- * standing chat is left out; sitting idle is what it is for.
+ * The same rule as the backend's: asking, or finished and not yet seen. A
+ * chat that has finished is not news — sitting at its prompt is what it is
+ * for — but one asking permission is as stuck as any other.
  */
 export function needsYou(pane: PaneInfo): boolean {
   return (
     pane.kind === "agent" &&
     pane.running &&
-    pane.task_id !== CHAT_TASK_ID &&
-    (pane.activity === "asking" || pane.activity === "done")
+    (pane.activity === "asking" || (pane.activity === "done" && pane.task_id !== CHAT_TASK_ID))
   );
+}
+
+/** A running agent — what every "N running" in the app counts. */
+export function isRunningAgent(pane: PaneInfo): boolean {
+  return pane.kind === "agent" && pane.running;
 }
 
 /**

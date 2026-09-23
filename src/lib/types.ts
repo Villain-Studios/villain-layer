@@ -437,7 +437,7 @@ export interface Settings {
  * What a click on a banner opens, handed back in `system-notify-click`. The
  * backend's agent watch sends `task:<id>` and `work` itself.
  */
-export type NotifyTarget = "reviews" | "tickets" | "work" | `task:${string}`;
+export type NotifyTarget = "reviews" | "tickets" | "work" | "chat" | `task:${string}`;
 
 /** Queued before the UI was listening — drained once on boot. */
 export interface AppNotice {

@@ -76,15 +76,19 @@ export function CreateTaskDialog({
 
   // Asked for when the dialog is open and a project is named, and again when
   // that changes. Quiet on failure: the field still takes a typed key.
+  // After typing stops: a key typed a letter at a time asked Jira for a
+  // project's epics once per letter.
   useEffect(() => {
     if (!withJira || !jiraProject.trim()) { setProjectEpics([]); return; }
     let stop = false;
     setEpicsLoading(true);
-    api.jiraEpics(jiraProject.trim())
-      .then((list) => { if (!stop) setProjectEpics(list); })
-      .catch(() => { if (!stop) setProjectEpics([]); })
-      .finally(() => { if (!stop) setEpicsLoading(false); });
-    return () => { stop = true; };
+    const t = window.setTimeout(() => {
+      api.jiraEpics(jiraProject.trim())
+        .then((list) => { if (!stop) setProjectEpics(list); })
+        .catch(() => { if (!stop) setProjectEpics([]); })
+        .finally(() => { if (!stop) setEpicsLoading(false); });
+    }, 300);
+    return () => { stop = true; window.clearTimeout(t); };
   }, [withJira, jiraProject]);
 
   // Seeded when the dialog opens, and only then: refilling whenever the field
@@ -95,9 +99,13 @@ export function CreateTaskDialog({
   }, []);
 
   useEffect(() => {
+    // A suggestion, so it gives way to what was picked while it was out.
     api.suggestRepos({})
-      .then((s) => { setPicked(s.project_ids); setReason(s.reason); })
-      .catch(() => setPicked([]));
+      .then((s) => {
+        setPicked((p) => (p.length > 0 ? p : s.project_ids));
+        setReason(s.reason);
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {

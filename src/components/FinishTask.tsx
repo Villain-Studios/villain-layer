@@ -39,7 +39,10 @@ export function FinishTask({ task, onClose }: { task: TaskView; onClose: () => v
         // the same place on some board.
         const to = all.filter((t) => t.to_category === "done");
         setDone(to);
-        setTransition(to[0]?.id ?? "");
+        // Picked for you only when there is one. Won't Do, Duplicate and
+        // Cancelled are done too, and first in the list closed a merged
+        // ticket as Won't Do.
+        setTransition(to.length === 1 ? to[0].id : "");
       })
       .catch((e) => {
         if (stop) return;
@@ -149,7 +152,9 @@ export function FinishTask({ task, onClose }: { task: TaskView; onClose: () => v
               ? `Could not ask Jira where ${key} can go: ${ticketError}`
               : done && done.length === 0
                 ? `Jira offers no move from here to a done status, so ${key} stays as it is.`
-                : "Moved only once the worktrees are gone."
+                : done && done.length > 1 && !transition
+                  ? `Jira has ${done.length} ways to close ${key} — pick the one that says it landed.`
+                  : "Moved only once the worktrees are gone."
           }
         >
           {done === null ? (

@@ -2,7 +2,7 @@ import { Fragment, useState, type ReactNode } from "react";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { api, errMessage } from "../../lib/api";
 import { copyText } from "../../lib/clipboard";
-import { needsYou, taskReview, taskTotals, useStore, type TaskReview } from "../../store";
+import { isRunningAgent, needsYou, taskReview, taskTotals, useStore, type TaskReview } from "../../store";
 import type { TaskView } from "../../lib/types";
 import { BusyOverlay, Confirm, ContextMenu, Field, Modal, Spinner, type MenuItem } from "../ui";
 import { RepoPicker } from "../RepoPicker";
@@ -265,7 +265,7 @@ export function Sidebar() {
     projects.filter((p) => !task.checkouts.some((c) => c.project_id === p.id));
 
   // The same panes AgentsView counts, so the row and the view it opens agree.
-  const fleet = panes.filter((p) => p.kind === "agent" && p.running);
+  const fleet = panes.filter(isRunningAgent);
   // What the dock icon counts, said where the count can be explained.
   const fleetWaiting = panes.filter(needsYou).length;
 
@@ -353,7 +353,10 @@ export function Sidebar() {
 
         {ordered.map((task, i) => {
           const mine = panes.filter((p) => p.task_id === task.id && p.running);
-          const live = mine.length;
+          // Agents, as "All agents" counts them, so the rows add up to it.
+          const live = mine.filter(isRunningAgent).length;
+          // Out of budget is red wherever a pane's own dot is.
+          const stuck = mine.some((p) => p.notice === "usage_limit");
           // Surface "waiting on you" here too, not just in the overview.
           const waiting = mine.some(needsYou);
           // Green for work actually going on. A running agent sitting at its
@@ -414,7 +417,7 @@ export function Sidebar() {
                   ) : (
                   <span
                     className={`dot ${
-                      totals.missing ? "gone" : waiting ? "idle" : busy ? "live" : ""
+                      totals.missing || stuck ? "gone" : waiting ? "idle" : busy ? "live" : ""
                     }`}
                     title={waiting ? "An agent here needs you: it is asking, or it finished" : undefined}
                   />

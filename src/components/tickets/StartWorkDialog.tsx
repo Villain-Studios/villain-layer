@@ -55,10 +55,20 @@ export function StartWorkDialog({
     setSuffix("");
     setBase("");
     setBaseOptions([]);
-    api.jiraTransitions(issue.key).then(setTransitions).catch(() => setTransitions([]));
+    setPicked([]);
+    let stop = false;
+    api.jiraTransitions(issue.key)
+      .then((t) => { if (!stop) setTransitions(t); })
+      .catch(() => { if (!stop) setTransitions([]); });
+    // A suggestion, so it gives way to what was picked while it was out.
     api.suggestRepos({ issueKey: issue.key, epicKey: issue.epic_key })
-      .then((s) => { setPicked(s.project_ids); setReason(s.reason); })
-      .catch(() => { setPicked([]); setReason(null); });
+      .then((s) => {
+        if (stop) return;
+        setPicked((p) => (p.length > 0 ? p : s.project_ids));
+        setReason(s.reason);
+      })
+      .catch(() => { if (!stop) setReason(null); });
+    return () => { stop = true; };
   }, [issue]);
 
   // Prefill from the repos' defaults when they agree; load the union of their

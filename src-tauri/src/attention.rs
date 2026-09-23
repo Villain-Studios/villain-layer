@@ -26,10 +26,14 @@ const REPEAT_AFTER: Duration = Duration::from_secs(120);
 
 /// Why this pane is waiting on you, if it is.
 ///
-/// Only agents in tasks: a shell sits quietly by nature, and a chat agent is
-/// idle most of the time because that is what a standing chat is for.
+/// Only agents: a shell sits quietly by nature. A chat that has finished is
+/// not news either — sitting at its prompt is what a standing chat is for —
+/// but one asking permission, or stopped at a limit, is as stuck as any.
 pub(crate) fn waiting(info: &PaneInfo) -> Option<&'static str> {
-    if info.kind != PaneKind::Agent || !info.running || info.task_id == CHAT_TASK_ID {
+    if info.kind != PaneKind::Agent || !info.running {
+        return None;
+    }
+    if info.task_id == CHAT_TASK_ID && info.activity == Activity::Done {
         return None;
     }
     match info.notice.as_deref() {
@@ -163,17 +167,24 @@ pub fn spawn(app: AppHandle) {
 
 fn banners(state: &AppState, news: &[News]) -> Vec<(String, String, String)> {
     let name = |task_id: &str| {
+        if task_id == CHAT_TASK_ID {
+            return "Chat".to_string();
+        }
         state
             .config
             .task(task_id)
             .map(|t| t.name)
             .unwrap_or_else(|_| "a task".into())
     };
+    // A chat has no task to open; its banner opens the chats.
+    let open = |task_id: &str| {
+        if task_id == CHAT_TASK_ID { "chat".to_string() } else { format!("task:{task_id}") }
+    };
     if news.len() > BATCH {
         let tasks: HashSet<&str> = news.iter().map(|n| n.task_id.as_str()).collect();
         // One task: open it. Several: the Work overview lists every agent.
         let target = match tasks.iter().next() {
-            Some(only) if tasks.len() == 1 => format!("task:{only}"),
+            Some(only) if tasks.len() == 1 => open(only),
             _ => "work".to_string(),
         };
         return vec![(
@@ -187,7 +198,7 @@ fn banners(state: &AppState, news: &[News]) -> Vec<(String, String, String)> {
             (
                 name(&n.task_id),
                 format!("{} {}", n.title, n.what),
-                format!("task:{}", n.task_id),
+                open(&n.task_id),
             )
         })
         .collect()
@@ -230,7 +241,9 @@ mod tests {
         assert!(waiting(&shell).is_none());
         let mut chat = pane("c", Activity::Done);
         chat.task_id = CHAT_TASK_ID.into();
-        assert!(waiting(&chat).is_none());
+        assert!(waiting(&chat).is_none(), "a chat at its prompt is where it should be");
+        chat.activity = Activity::Asking;
+        assert!(waiting(&chat).is_some(), "but one asking permission is stuck");
         let mut exited = pane("x", Activity::Done);
         exited.running = false;
         assert!(waiting(&exited).is_none());

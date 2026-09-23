@@ -36,8 +36,26 @@ export function Terminals({ task }: { task: TaskView }) {
   const [handoffLoading, setHandoffLoading] = useState(false);
   const [handoffBusy, setHandoffBusy] = useState(false);
   const [stopOld, setStopOld] = useState(true);
-  /** The pane whose ✕ was pressed, still waiting on its grace period. */
-  const [closingId, setClosingId] = useState<string | null>(null);
+  /** Panes whose ✕ was pressed, still waiting on their grace period. */
+  const [closing, setClosing] = useState<Set<string>>(new Set());
+  /**
+   * A start in flight. Spawning takes long enough to click twice, and each
+   * click started another agent in the same worktree on the same prompt.
+   * A ref as well as state: two clicks in one frame both saw the state false.
+   */
+  const [spawning, setSpawning] = useState(false);
+  const spawnRef = useRef(false);
+  async function once(start: () => Promise<void>) {
+    if (spawnRef.current) return;
+    spawnRef.current = true;
+    setSpawning(true);
+    try {
+      await start();
+    } finally {
+      spawnRef.current = false;
+      setSpawning(false);
+    }
+  }
   const [resumable, setResumable] = useState<Resumable[]>([]);
   const [addMenu, setAddMenu] = useState<{ x: number; y: number } | null>(null);
   const addRef = useRef<HTMLButtonElement>(null);
@@ -164,7 +182,7 @@ export function Terminals({ task }: { task: TaskView }) {
     },
   ];
 
-  async function launchAgent(agentId: string) {
+  const launchAgent = (agentId: string) => once(async () => {
     try {
       const pane = await api.spawnAgent(task.id, agentId, scope, prompt.trim() || null);
       setLaunching(null);
@@ -174,9 +192,9 @@ export function Terminals({ task }: { task: TaskView }) {
     } catch (e) {
       fail(e);
     }
-  }
+  });
 
-  async function resume(agentId: string) {
+  const resume = (agentId: string) => once(async () => {
     try {
       const pane = await api.spawnAgent(task.id, agentId, scope, null, true);
       await refreshPanes();
@@ -184,9 +202,9 @@ export function Terminals({ task }: { task: TaskView }) {
     } catch (e) {
       fail(e);
     }
-  }
+  });
 
-  async function launchShell() {
+  const launchShell = () => once(async () => {
     try {
       const pane = await api.spawnShell(task.id, scope);
       await refreshPanes();
@@ -194,7 +212,7 @@ export function Terminals({ task }: { task: TaskView }) {
     } catch (e) {
       fail(e);
     }
-  }
+  });
 
   /// No CLI can resume another's session, so what moves is the work: the
   /// ticket, the diff, and the outgoing agent's terminal tail.
@@ -252,14 +270,19 @@ export function Terminals({ task }: { task: TaskView }) {
   /// stays put for what feels like a hung click. Marking it spends that time
   /// visibly, and stops a second ✕ landing on a pane already on its way out.
   async function closePane(pane: PaneInfo) {
-    setClosingId(pane.id);
+    if (closing.has(pane.id)) return;
+    setClosing((c) => new Set(c).add(pane.id));
     try {
       await api.closePane(pane.id);
       await refreshPanes();
     } catch (e) {
       fail(e);
     } finally {
-      setClosingId(null);
+      setClosing((c) => {
+        const next = new Set(c);
+        next.delete(pane.id);
+        return next;
+      });
     }
   }
 
@@ -285,7 +308,7 @@ export function Terminals({ task }: { task: TaskView }) {
             {!p.running && p.exit_code !== null && (
               <span style={{ color: "var(--dimmer)" }}>({p.exit_code})</span>
             )}
-            {p.kind === "agent" && installed.length > 0 && closingId !== p.id && (
+            {p.kind === "agent" && installed.length > 0 && !closing.has(p.id) && (
               <span
                 className="x"
                 title="Hand off to another agent"
@@ -294,7 +317,7 @@ export function Terminals({ task }: { task: TaskView }) {
                 ⇄
               </span>
             )}
-            {closingId === p.id ? (
+            {closing.has(p.id) ? (
               <Spinner />
             ) : (
               <span className="x" onClick={(e) => { e.stopPropagation(); void closePane(p); }}>
@@ -527,21 +550,22 @@ export function Terminals({ task }: { task: TaskView }) {
       {launching && (
         <Modal
           title={`Start ${agents.find((a) => a.id === launching)?.name ?? launching}`}
-          onClose={() => { setLaunching(null); setPrompt(""); fetchedPrompt.current = ""; }}
+          onClose={() => { if (spawning) return; setLaunching(null); setPrompt(""); fetchedPrompt.current = ""; }}
           footer={
             <>
               <button
                 className="btn"
+                disabled={spawning}
                 onClick={() => { setLaunching(null); setPrompt(""); fetchedPrompt.current = ""; }}
               >
                 Cancel
               </button>
               <button
                 className="btn btn-primary"
-                disabled={promptLoading}
+                disabled={promptLoading || spawning}
                 onClick={() => void launchAgent(launching)}
               >
-                Launch
+                {spawning ? "Starting…" : "Launch"}
               </button>
             </>
           }

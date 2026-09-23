@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api";
 import { read, write } from "../lib/persist";
-import { CHAT_TASK_ID, useStore } from "../store";
+import { CHAT_TASK_ID, paneState, useStore } from "../store";
 import { TerminalPane } from "./Terminal";
 import { ContextMenu, Confirm } from "./ui";
 import type { MenuItem } from "./ui";
@@ -71,13 +71,20 @@ export function ChatView() {
     return () => window.removeEventListener("keydown", onKey, true);
   }, [panes, active]);
 
+  // One start at a time: a second click while the first was spawning
+  // opened a second chat.
+  const starting = useRef(false);
   async function start(agentId: string) {
+    if (starting.current) return;
+    starting.current = true;
     try {
       const pane = await api.spawnChat(agentId);
       await refreshPanes();
       setActive(pane.id);
     } catch (e) {
       fail(e);
+    } finally {
+      starting.current = false;
     }
   }
 
@@ -125,7 +132,7 @@ export function ChatView() {
               className={`chat-item${p.id === active ? " active" : ""}`}
               onClick={() => setActive(p.id)}
             >
-              <span className={`dot ${p.running ? "live" : "gone"}`} />
+              <span className={`dot ${paneState(p).dot}`} title={paneState(p).label} />
               <span className="chat-item-text">
                 <span className="chat-item-title">{p.title}</span>
                 <span className="chat-item-sub">

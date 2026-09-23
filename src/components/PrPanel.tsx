@@ -227,7 +227,10 @@ export function PrPanel({
     if (base.trim() === row.base || !base.trim()) return;
     try {
       await api.setCheckoutBase(row.checkout_id, base);
-      await load();
+      // The task list carries the base too, and Update from base reads it
+      // from there: left alone it said "← origin/main" while the backend
+      // merged the new one.
+      await Promise.all([load(), useStore.getState().refreshTasks().catch(() => {})]);
     } catch (e) {
       fail(e);
     }
@@ -509,7 +512,7 @@ export function PrPanel({
               {(pr.mergeable_state === "dirty" || pr.mergeable_state === "behind") && (
                 <button
                   className={`chip ${pr.mergeable_state === "dirty" ? "del" : "warn"}`}
-                  title={`Merge ${pr.base} into this branch`}
+                  title={`Bring ${pr.base} into this branch — merge or rebase`}
                   onClick={(e) => { e.stopPropagation(); onUpdateFromBase(); }}
                 >
                   {pr.mergeable_state === "dirty" ? `conflicts with ${pr.base}` : `behind ${pr.base}`}

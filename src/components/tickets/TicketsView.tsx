@@ -95,8 +95,12 @@ export function TicketsView() {
       setIncludeDone(true);
       setKinds([]);
       setSearching(true);
+      // Counted like any other search, so a newer one is not overwritten by
+      // this landing late, nor has its spinner cleared by it.
+      const asked = ++searchSeq.current;
       void api.jiraBrowse(key, "anyone", true, [])
         .then((page) => {
+          if (asked !== searchSeq.current) return;
           setFound(page);
           window.setTimeout(() => {
             document
@@ -105,10 +109,11 @@ export function TicketsView() {
           }, 80);
         })
         .catch((e) => {
+          if (asked !== searchSeq.current) return;
           setFound({ issues: [], more: false });
           fail(e);
         })
-        .finally(() => setSearching(false));
+        .finally(() => { if (asked === searchSeq.current) setSearching(false); });
       const clear = window.setTimeout(() => clearFocusIssue(), 2200);
       return () => window.clearTimeout(clear);
     }

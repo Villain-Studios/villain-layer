@@ -354,6 +354,11 @@ Each of these is recorded at the code it shaped. Leave those comments alone.
   terminal and failed on every fetch here. `explain` in `git.rs` says so
   and what to do. A best-effort fetch that fails says nothing, so it went
   unseen until Sync showed a row per repo.
+- **A terminal drops a long typed line.** macOS keeps about 1 KB of
+  input for a program that is not reading in raw mode, and threw away
+  the start of a 1,090-byte conflict hand-off every time. `submit`
+  refuses more than `MAX_TYPED`; `commands::hand_over` leaves longer
+  text in a file and types where it is (PANE-11).
 - **A panic that crosses into AppKit aborts** with no location. The panic
   hook in `lib.rs` writes `~/Library/Logs/villain-layer/panic.log` first,
   and must not panic itself.

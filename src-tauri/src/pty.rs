@@ -509,6 +509,23 @@ pub struct Catchup {
     pub seen: bool,
 }
 
+/// The most that is typed into a pane in one go. A terminal's input queue
+/// on macOS holds about 1 KB, and a line longer than that, typed while the
+/// program is not reading in raw mode, is thrown away: a 1,090-byte hand-off
+/// of rebase conflicts reached Claude Code as its last 68 bytes, the same 68
+/// every time. Longer text goes in a file the agent is told to read.
+pub const MAX_TYPED: usize = 512;
+
+fn too_long_to_type(text: &str) -> Result<()> {
+    if text.len() > MAX_TYPED {
+        return Err(Error::Pty(format!(
+            "{} bytes is too long to type into a terminal, which drops the start of anything much over 1 KB. Leave it in a file and type where it is.",
+            text.len()
+        )));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct SpawnOptions {
     pub task_id: String,
@@ -691,6 +708,9 @@ impl PtyManager {
     }
 
     pub fn spawn<R: Runtime>(&self, app: &AppHandle<R>, opts: SpawnOptions) -> Result<PaneInfo> {
+        if let Some(input) = &opts.initial_input {
+            too_long_to_type(input)?;
+        }
         // Checked before anything is allocated, so refusing costs nothing.
         let slot = {
             let panes = self.panes.lock();
@@ -990,13 +1010,15 @@ impl PtyManager {
         Ok(changed)
     }
 
-    /// Type `text` into a pane and press Enter.
+    /// Type `text` into a pane and press Enter. At most `MAX_TYPED` bytes:
+    /// longer is refused rather than typed and cut (`commands::hand_over`).
     ///
     /// Agent TUIs (Claude Code in particular) often leave the line sitting in
     /// the prompt when the characters and Enter arrive in one burst — the text
     /// shows up, but nothing is submitted until someone presses Enter again.
     /// A short gap between the two is enough for the TUI to accept the submit.
     pub fn submit(&self, id: &str, text: &str) -> Result<()> {
+        too_long_to_type(text)?;
         let pane = self.get(id)?;
         pane.meta.lock().sent("\r");
         let keys = pane.input.clone();
@@ -1682,6 +1704,35 @@ mod tests {
             "closing a shell took {:?}",
             started.elapsed()
         );
+    }
+
+    /// A 1,090-byte hand-off reached Claude Code as its last 68 bytes: the
+    /// terminal dropped the rest. Too long is refused now, never typed.
+    #[test]
+    fn a_message_too_long_to_type_is_refused_rather_than_cut() {
+        assert!(too_long_to_type(&"x".repeat(MAX_TYPED)).is_ok());
+        assert!(too_long_to_type(&"x".repeat(MAX_TYPED + 1)).is_err());
+        let app = tauri::test::mock_app();
+        let ptys = PtyManager::default();
+        let opts = SpawnOptions {
+            task_id: "t".into(),
+            checkout_id: None,
+            cwd: std::env::temp_dir().to_string_lossy().to_string(),
+            kind: PaneKind::Agent,
+            title: "t".into(),
+            program: "/bin/sh".into(),
+            args: vec!["-c".into(), "sleep 5".into()],
+            agent_id: None,
+            rows: None,
+            cols: None,
+            initial_input: Some("x".repeat(1090)),
+            prompted: false,
+            env: Vec::new(),
+            title_activity: None,
+        };
+        assert!(ptys.spawn(app.handle(), opts).is_err());
+        assert!(ptys.list(None).is_empty(), "nothing was started to type it into");
+        assert!(ptys.submit("any", &"x".repeat(1090)).is_err());
     }
 
     /// An agent that ignores being asked is still stopped, with its

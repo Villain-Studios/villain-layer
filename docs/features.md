@@ -238,6 +238,13 @@ ones that need you first.
   folders only, and nowhere else. It never creates that file, and never
   rewrites one it cannot parse. It keeps the file's permissions and
   symlink, and does not overwrite a change Claude made meanwhile.
+- **PANE-11** Nothing the app types into an agent MUST be longer than 512
+  bytes (`pty::MAX_TYPED`). A longer hand-off (conflicts, review
+  comments, a PR description request, an opening prompt a CLI takes
+  typed) is written whole to a file in the task folder, and only a
+  pointer to it is typed. macOS throws away a typed line much over 1 KB
+  while the program is not reading in raw mode: a rebase hand-off reached
+  Claude Code as its last 68 bytes. Longer is refused, never cut.
 
 Code: `pty.rs`, `agents.rs`, `commands/panes.rs`, `Terminals.tsx`,
 `Terminal.tsx`, `AgentsView.tsx`.
@@ -597,7 +604,7 @@ Known gaps:
 | `~/Library/Application Support/dev.villain.layer/` | `config.json`: repos, tasks, settings, saved panes. At agent launch also `.mcp.json` (0600), `claude-hooks.json`, `copilot-plugin/`, `opencode-plugin.js` |
 | Keychain, service `dev.villain.layer` | one item holding every token |
 | `~/.villain-worktrees/` (settable) | task folders, `_chat/` rooms, and `.repos/`: the app's own copy of each repo (REPO-4) |
-| a task folder | the worktrees, `AGENTS.md` and `CLAUDE.md` (task context), `.mcp.json`, and `.gemini/settings.json`, `PR_DESCRIPTION.md`, `PR_FEEDBACK.md` as they come up |
+| a task folder | the worktrees, `AGENTS.md` and `CLAUDE.md` (task context), `.mcp.json`, and `.gemini/settings.json`, `PR_DESCRIPTION.md`, `PR_FEEDBACK.md`, and hand-offs too long to type (`CONFLICTS.md`, `REVIEW_COMMENTS.md`, `PR_DRAFT_REQUEST.md`, `FIRST_PROMPT.md`, PANE-11) as they come up |
 | `~/.claude.json` | trust entries for the app's own folders only (PANE-10) |
 | `~/Library/Logs/villain-layer/panic.log` | a crash's location and backtrace |
 

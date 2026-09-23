@@ -860,7 +860,7 @@ pub fn request_pr_description(
         path.display(),
     );
 
-    state.ptys.submit(&pane_id, &prompt)?;
+    super::hand_over(&state, &task, &pane_id, "PR_DRAFT_REQUEST.md", &prompt)?;
     Ok(path.to_string_lossy().to_string())
 }
 

@@ -826,8 +826,10 @@ pub fn send_pr_feedback(
     let prompt = match agent_file_dir(&state, &task) {
         Some(dir) => {
             let path = dir.join(FEEDBACK_FILE);
-            std::fs::write(&path, &md)?;
-            format!("{head} It is all in:\n{}\n\nRead that file. {ask}", path.display())
+            // What to do goes in the file with the points: typed, the two
+            // together were long enough to lose their start (`pty::MAX_TYPED`).
+            std::fs::write(&path, format!("{head}\n\n{ask}\n\n{md}"))?;
+            format!("{head} It is all in {}. Read that file, then work through every point.", path.display())
         }
         // A task from the one-repo layout has no folder outside its worktree,
         // and a file in the worktree is one the agent might commit.
@@ -835,7 +837,7 @@ pub fn send_pr_feedback(
     };
 
     if let Some(id) = &pane_id {
-        state.ptys.submit(id, &prompt)?;
+        super::hand_over(&state, &task, id, FEEDBACK_FILE, &prompt)?;
     }
     Ok(prompt)
 }

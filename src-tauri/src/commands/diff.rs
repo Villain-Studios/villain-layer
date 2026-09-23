@@ -207,7 +207,8 @@ pub fn send_review(
         }
     }
 
-    state.ptys.submit(&pane_id, &prompt)?;
+    let task = state.config.task(&state.ptys.info(&pane_id)?.task_id)?;
+    super::hand_over(&state, &task, &pane_id, "REVIEW_COMMENTS.md", &prompt)?;
     Ok(prompt)
 }
 
@@ -599,7 +600,7 @@ pub async fn send_merge_conflicts(
         }
         let prompt = conflict_prompt(&task.branch, &repos);
         if let Some(id) = &pane_id {
-            state.ptys.submit(id, &prompt)?;
+            super::hand_over(state, &task, id, "CONFLICTS.md", &prompt)?;
         }
         Ok(prompt)
     })

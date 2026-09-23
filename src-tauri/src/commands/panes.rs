@@ -260,6 +260,9 @@ pub(crate) fn start_agent(
     } else {
         agents::launch_args(def, prompt.as_deref())
     };
+    let initial_input = initial_input
+        .map(|text| typeable(agent_file_dir(state, &task).as_deref(), FIRST_PROMPT, &text))
+        .transpose()?;
 
     // The task folder keeps a `.mcp.json` of its own too, so running a CLI
     // there by hand gets the same tools the app's agents do.
@@ -369,7 +372,38 @@ const GENERATED_FILES: &[&str] = &[
     "PR_DESCRIPTION.md",
     super::github::FEEDBACK_FILE,
     ".gemini/settings.json",
+    "CONFLICTS.md",
+    "REVIEW_COMMENTS.md",
+    "PR_DRAFT_REQUEST.md",
+    FIRST_PROMPT,
 ];
+
+/// An opening prompt too long to type, for a CLI that takes it typed.
+const FIRST_PROMPT: &str = "FIRST_PROMPT.md";
+
+/// What to type into an agent to give it `text`: the text itself when it
+/// fits (`pty::MAX_TYPED`), or else a pointer to `file` in `dir`, where the
+/// whole of it is written first. The way PR feedback always went (PR-6).
+pub(crate) fn typeable(dir: Option<&Path>, file: &str, text: &str) -> Result<String> {
+    if text.len() <= crate::pty::MAX_TYPED {
+        return Ok(text.to_string());
+    }
+    let dir = dir.ok_or_else(|| {
+        Error::Other("this is too long to type into a terminal, and this task has no folder of its own to leave it in".into())
+    })?;
+    let path = dir.join(file);
+    std::fs::write(&path, text)?;
+    Ok(format!(
+        "Villain Layer has left you a message too long to type. Read {} in full, then do what it says.",
+        path.display()
+    ))
+}
+
+/// Type `text` into a running agent in `task`, through `typeable`.
+pub(crate) fn hand_over(state: &AppState, task: &Task, pane_id: &str, file: &str, text: &str) -> Result<()> {
+    let typed = typeable(agent_file_dir(state, task).as_deref(), file, text)?;
+    state.ptys.submit(pane_id, &typed)
+}
 
 /// Left in a task folder by others, and going with it all the same: Claude
 /// Code's record of what was allowed there (left, it was the one file
@@ -609,6 +643,7 @@ pub(crate) fn open_chat(
     } else {
         agents::launch_args(def, prompt.as_deref())
     };
+    let initial_input = initial_input.map(|text| typeable(Some(&dir), FIRST_PROMPT, &text)).transpose()?;
 
     pretrust_own_dir(state, &agent_id, &dir.to_string_lossy());
     // The chat's folder is the app's own, so it can hold what a CLI needs.
@@ -925,3 +960,23 @@ pub async fn kill_pane(app: AppHandle, pane_id: String) -> Result<()> {
     super::blocking(app, move |state| state.ptys.kill(&pane_id)).await
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_long_hand_off_is_left_in_a_file_and_only_a_pointer_is_typed() {
+        let dir = std::env::temp_dir().join(format!("vl-handover-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(typeable(Some(&dir), "CONFLICTS.md", "short").unwrap(), "short");
+
+        let long = "Resolve each conflict. ".repeat(60);
+        let typed = typeable(Some(&dir), "CONFLICTS.md", &long).unwrap();
+        assert!(typed.len() <= crate::pty::MAX_TYPED);
+        assert!(typed.contains(&dir.join("CONFLICTS.md").display().to_string()));
+        assert_eq!(std::fs::read_to_string(dir.join("CONFLICTS.md")).unwrap(), long, "all of it, from the start");
+        assert!(typeable(None, "CONFLICTS.md", &long).is_err(), "nowhere to leave it: refused, not cut");
+        assert!(is_generated("CONFLICTS.md"), "deleting the task takes it too (DISK-2)");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}

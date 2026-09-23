@@ -39,6 +39,11 @@ tauri-plugin-clipboard-manager = "2"
 tauri-plugin-notification = "2"
 notify-rust = "4"
 
+[dev-dependencies]
+# A mock runtime, so the PTY layer can be driven through real processes in
+# tests without a window.
+tauri = { version = "2", features = ["test"] }
+
 [profile.release]
 codegen-units = 1
 lto = true

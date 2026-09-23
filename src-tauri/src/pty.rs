@@ -13,7 +13,7 @@ use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Runtime};
 
 use crate::error::{Error, Result};
 use crate::shellenv;
@@ -364,7 +364,7 @@ struct ExitEvent<'a> {
 }
 
 impl PtyManager {
-    fn emit_output(app: &AppHandle, id: &str, bytes: &[u8], end: u64) {
+    fn emit_output<R: Runtime>(app: &AppHandle<R>, id: &str, bytes: &[u8], end: u64) {
         let data = base64::engine::general_purpose::STANDARD.encode(bytes);
         let _ = app.emit("pty:output", OutputEvent { pane_id: id, data, end });
     }
@@ -374,7 +374,7 @@ impl PtyManager {
     /// The reader keeps appending to the output; this just starts the timer
     /// that will ship it. Doing that on a short sleep means a burst of TUI
     /// redraws becomes one event instead of one per read.
-    fn schedule_flush(app: &AppHandle, pane: &Arc<Pane>, id: &str) {
+    fn schedule_flush<R: Runtime>(app: &AppHandle<R>, pane: &Arc<Pane>, id: &str) {
         if !pane.watched.load(Ordering::Acquire) {
             return;
         }
@@ -426,7 +426,7 @@ impl PtyManager {
         });
     }
 
-    fn flush_pending(app: &AppHandle, pane: &Pane, id: &str) {
+    fn flush_pending<R: Runtime>(app: &AppHandle<R>, pane: &Pane, id: &str) {
         if !pane.watched.load(Ordering::Acquire) {
             return;
         }
@@ -436,7 +436,7 @@ impl PtyManager {
         }
     }
 
-    pub fn spawn(&self, app: &AppHandle, opts: SpawnOptions) -> Result<PaneInfo> {
+    pub fn spawn<R: Runtime>(&self, app: &AppHandle<R>, opts: SpawnOptions) -> Result<PaneInfo> {
         // Checked before anything is allocated, so refusing costs nothing.
         let live = self.panes.lock().len();
         if live >= MAX_PANES {
@@ -950,6 +950,79 @@ mod tests {
         assert_eq!(out.take_unsent(), None);
         out.push(b"de");
         assert_eq!(out.take_unsent(), Some((b"de".to_vec(), 5)));
+    }
+
+    /// The whole path through real processes: a pane is fed from its first
+    /// byte, a terminal that comes back is sent only what it missed, keys
+    /// arrive in order through the writer thread, and a shell stops on its
+    /// hangup rather than sitting out the grace period.
+    #[test]
+    fn a_pane_catches_up_by_position_and_a_shell_stops_promptly() {
+        let app = tauri::test::mock_app();
+        let ptys = PtyManager::default();
+        let dir = std::env::temp_dir();
+        let spawn = |program: &str, args: &[&str]| {
+            ptys.spawn(
+                app.handle(),
+                SpawnOptions {
+                    task_id: "t".into(),
+                    checkout_id: None,
+                    cwd: dir.to_string_lossy().to_string(),
+                    kind: PaneKind::Shell,
+                    title: "t".into(),
+                    program: program.into(),
+                    args: args.iter().map(|a| a.to_string()).collect(),
+                    agent_id: None,
+                    rows: None,
+                    cols: None,
+                    initial_input: None,
+                },
+            )
+            .unwrap()
+        };
+        let text = |c: &Catchup| {
+            String::from_utf8_lossy(
+                &base64::engine::general_purpose::STANDARD.decode(&c.data).unwrap(),
+            )
+            .to_string()
+        };
+        let wait_for = |id: &str, since: Option<u64>, want: &str| -> Catchup {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                let c = ptys.attach(id, since).unwrap();
+                if text(&c).contains(want) || Instant::now() > deadline {
+                    return c;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        };
+
+        let pane = spawn("/bin/sh", &["-c", "printf 'ready\\n'; read a; read b; printf \"got $a $b\\n\"; sleep 5"]);
+        let first = wait_for(&pane.id, None, "ready");
+        assert!(text(&first).contains("ready"));
+        assert!(!first.reset, "a terminal that has drawn nothing has nothing to clear");
+
+        // Two writes, in order, through the queue.
+        ptys.write(&pane.id, "one\r").unwrap();
+        ptys.write(&pane.id, "two\r").unwrap();
+        let rest = wait_for(&pane.id, Some(first.end), "got one two");
+        assert!(text(&rest).contains("got one two"), "{:?}", text(&rest));
+        assert!(!text(&rest).contains("ready"), "sent again what the terminal already had");
+        assert!(!rest.reset);
+        assert!(rest.end > first.end);
+        ptys.close(&pane.id).unwrap();
+
+        // An interactive shell ignores SIGTERM; closing one used to take the
+        // whole five-second grace and end in SIGKILL.
+        let shell = spawn("/bin/sh", &["-i"]);
+        std::thread::sleep(Duration::from_millis(300));
+        let started = Instant::now();
+        ptys.close(&shell.id).unwrap();
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "closing a shell took {:?}",
+            started.elapsed()
+        );
     }
 
     #[test]

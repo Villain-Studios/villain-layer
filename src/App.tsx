@@ -418,8 +418,16 @@ function Watchers() {
 
   useEffect(() => {
     const p = listen<string>("system-notify-click", (e) => {
-      const view = e.payload;
-      if (view === "reviews" || view === "tickets") useStore.getState().setView(view);
+      const target = e.payload;
+      const s = useStore.getState();
+      if (target === "reviews" || target === "tickets") s.setView(target);
+      // Nothing selected is the overview of every agent.
+      else if (target === "work") s.select(null);
+      else if (target.startsWith("task:")) {
+        const id = target.slice("task:".length);
+        // Deleted while the banner sat there: the overview, not a blank task.
+        s.select(s.tasks.some((t) => t.id === id) ? id : null);
+      }
       const win = getCurrentWindow();
       void win.unminimize().catch(() => {});
       void win.show().catch(() => {});

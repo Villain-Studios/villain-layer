@@ -12,6 +12,7 @@ import type {
   JiraIssueType,
   JiraPage,
   JiraTransition,
+  NotifyTarget,
   PaneInfo,
   Project,
   RepoBranchFacts,
@@ -218,8 +219,8 @@ export const api = {
   takeNotices: () => invoke<AppNotice[]>("take_notices"),
   setWorktreeRoot: (path: string | null) => invoke<void>("set_worktree_root", { path }),
   setUiPrefs: (ui: UiPrefs) => invoke<void>("set_ui_prefs", { ui }),
-  systemNotify: (title: string, body: string, view: "reviews" | "tickets") =>
-    invoke<void>("system_notify", { title, body, view }),
+  systemNotify: (title: string, body: string, target: NotifyTarget) =>
+    invoke<void>("system_notify", { title, body, target }),
   disconnect: (which: "jira" | "github" | "slack") => invoke<void>("disconnect", { which }),
   cursorIdeInstalled: () => invoke<boolean>("cursor_ide_installed"),
   openInCursor: (path: string) => invoke<void>("open_in_cursor", { path }),

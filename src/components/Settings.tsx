@@ -286,6 +286,12 @@ export function Settings() {
                 checked={settings.ui.system_notifications}
                 onChange={(v) => void saveUi({ system_notifications: v })}
               />
+              <Switch
+                label="Agents waiting on you"
+                detail="A banner when an agent goes quiet, asks to trust its folder, runs out of budget or exits — and the number waiting on the dock icon."
+                checked={settings.ui.notify_waiting_agents}
+                onChange={(v) => void saveUi({ notify_waiting_agents: v })}
+              />
             </div>
           </Field>
 

@@ -1,4 +1,5 @@
 mod agents;
+mod attention;
 mod commands;
 mod config;
 mod error;
@@ -138,6 +139,8 @@ pub fn run() {
             std::thread::spawn(|| {
                 shellenv::user_env();
             });
+
+            attention::spawn(handle.clone());
 
             // Put back the panes that were open last time. Off the startup
             // path too: each agent spawn waits on the login shell's PATH.

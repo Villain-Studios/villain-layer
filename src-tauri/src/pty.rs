@@ -201,6 +201,8 @@ pub struct PaneInfo {
 
 struct PaneMeta {
     info: PaneInfo,
+    /// Asked to stop — Stop, a handoff, quitting — so its exit is not news.
+    stopping: bool,
 }
 
 /// What a pane has printed, and how much of it the webview has been sent.
@@ -582,7 +584,7 @@ impl PtyManager {
 
         let pid = child.process_id();
         let pane = Arc::new(Pane {
-            meta: Mutex::new(PaneMeta { info: info.clone() }),
+            meta: Mutex::new(PaneMeta { info: info.clone(), stopping: false }),
             pid,
             master: Mutex::new(pair.master),
             input,
@@ -791,6 +793,7 @@ impl PtyManager {
     /// an agent cannot catch, so it dies without writing its transcript — and
     /// that transcript is the only thing that makes a session resumable later.
     fn request_stop(pane: &Pane) {
+        pane.meta.lock().stopping = true;
         if let Some(pid) = pane.pid {
             // An interactive shell ignores SIGTERM, so a shell pane sat out
             // the whole grace period and was then killed outright — five
@@ -883,6 +886,19 @@ impl PtyManager {
             .collect();
         out.sort_by_key(|i| i.started_at);
         out
+    }
+
+    /// Every pane, and whether it was asked to stop, for the watch that says
+    /// when an agent needs you.
+    pub fn attention(&self) -> Vec<(PaneInfo, bool)> {
+        self.panes
+            .lock()
+            .values()
+            .map(|p| {
+                let meta = p.meta.lock();
+                (meta.info.clone(), meta.stopping)
+            })
+            .collect()
     }
 
     /// Kill every pane belonging to a task, used when it is deleted.

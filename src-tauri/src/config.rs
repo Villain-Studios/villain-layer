@@ -192,6 +192,11 @@ pub struct UiPrefs {
     /// queue that was already waiting.
     #[serde(default = "yes")]
     pub system_notifications: bool,
+    /// A banner when an agent stops to wait on you — gone quiet, asking to
+    /// trust its folder, out of budget, or exited — while the window is in the
+    /// background, and the count of those waiting on the dock icon.
+    #[serde(default = "yes")]
+    pub notify_waiting_agents: bool,
     /// Let agents read the output of terminals in this app.
     ///
     /// Off by default, and deliberately: a shell's scrollback holds whatever
@@ -210,6 +215,7 @@ impl Default for UiPrefs {
             trust_agent_dirs: true,
             sync_jira_status: true,
             system_notifications: true,
+            notify_waiting_agents: true,
             agents_read_panes: false,
         }
     }

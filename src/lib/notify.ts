@@ -3,7 +3,7 @@ import {
   requestPermission,
 } from "@tauri-apps/plugin-notification";
 import { api } from "./api";
-import type { ReviewQueue, ReviewRequest } from "./types";
+import type { NotifyTarget, ReviewQueue, ReviewRequest } from "./types";
 
 /** Past this, one banner rather than a stack of them. */
 export const NOTIFY_BATCH = 3;
@@ -89,8 +89,8 @@ export function prepareNotifications(): Promise<boolean> {
 export async function systemBanner(
   title: string,
   body: string,
-  view: "reviews" | "tickets",
+  target: NotifyTarget,
 ): Promise<void> {
   if (!(await allowed())) return;
-  await api.systemNotify(title, body, view);
+  await api.systemNotify(title, body, target);
 }

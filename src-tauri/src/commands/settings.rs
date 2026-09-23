@@ -64,18 +64,25 @@ pub fn set_ui_prefs(state: State<AppState>, ui: UiPrefs) -> Result<()> {
         trust_agent_dirs: ui.trust_agent_dirs,
         sync_jira_status: ui.sync_jira_status,
         system_notifications: ui.system_notifications,
+        notify_waiting_agents: ui.notify_waiting_agents,
     };
     state.config.update(|c| c.ui = ui)
 }
 
-/// A banner, and which view a click on it should open.
+/// A banner, and what a click on it should open.
 ///
+/// `target` is handed back untouched in `system-notify-click`: a view name
+/// (`reviews`, `tickets`) or `task:<id>`.
+#[tauri::command]
+pub fn system_notify(app: AppHandle, title: String, body: String, target: String) -> Result<()> {
+    banner(&app, title, body, target)
+}
+
 /// The notification plugin's desktop backend shows the banner and drops the
 /// click — `show` never waits for it — so a click could focus the app and
 /// still leave you on whichever view you had left. This shows it itself and
 /// emits `system-notify-click` only for the activation, not a dismissal.
-#[tauri::command]
-pub fn system_notify(app: AppHandle, title: String, body: String, view: String) -> Result<()> {
+pub(crate) fn banner(app: &AppHandle, title: String, body: String, target: String) -> Result<()> {
     // A dev build has no bundle id macOS will attribute a notification to.
     // Borrowing Terminal's is what the plugin does, and without it a `tauri
     // dev` banner is delivered to nobody.
@@ -91,7 +98,8 @@ pub fn system_notify(app: AppHandle, title: String, body: String, view: String) 
     }
 
     // `wait_for_action` blocks until the banner is clicked or dismissed, and
-    // this command runs on the thread that owns the window.
+    // this can be called on the thread that owns the window.
+    let app = app.clone();
     std::thread::Builder::new()
         .name("system-notify".into())
         .spawn(move || {
@@ -102,7 +110,7 @@ pub fn system_notify(app: AppHandle, title: String, body: String, view: String) 
             };
             handle.wait_for_action(move |action| {
                 if action == "default" {
-                    let _ = app.emit("system-notify-click", view);
+                    let _ = app.emit("system-notify-click", target);
                 }
             });
         })

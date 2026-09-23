@@ -320,6 +320,8 @@ export interface UiPrefs {
   sync_jira_status: boolean;
   /** A banner for a new review or an assigned ticket, while the window is in the background. */
   system_notifications: boolean;
+  /** A banner when an agent stops to wait on you while the window is away, and the dock count. */
+  notify_waiting_agents: boolean;
   agents_read_panes: boolean;
 }
 
@@ -334,6 +336,12 @@ export interface Settings {
   github_connected: boolean;
   slack_connected: boolean;
 }
+
+/**
+ * What a click on a banner opens, handed back in `system-notify-click`. The
+ * backend's agent watch sends `task:<id>` and `work` itself.
+ */
+export type NotifyTarget = "reviews" | "tickets" | "work" | `task:${string}`;
 
 /** Queued before the UI was listening — drained once on boot. */
 export interface AppNotice {

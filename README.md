@@ -102,7 +102,13 @@ Work flows Tickets → Work: an issue becomes a task.
 
 A task whose agent has printed nothing for 45 seconds is marked *idle — may need
 you*, in the sidebar and in the overview. That is usually a permission prompt
-waiting for an answer.
+waiting for an answer, or a turn that has finished.
+
+The same goes on the dock icon as a count, and while the window is in the
+background an agent that starts waiting — or exits without being asked to —
+gets a banner; clicking it opens its task. The backend watches for this rather
+than the webview, whose polls stop while the window is away and whose timers
+macOS may suspend. Settings → Appearance → Notifications turns it off.
 
 ## The loop
 

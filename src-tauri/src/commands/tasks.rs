@@ -495,6 +495,7 @@ pub(crate) fn new_task(state: &AppState, req: NewTask) -> Result<Task> {
         issue_key: req.issue_key.clone(),
         issue_url: req.issue_url,
         created_at: Utc::now(),
+        ticket_stage: None,
     };
     state.config.update(|c| c.tasks.push(task.clone()))?;
 

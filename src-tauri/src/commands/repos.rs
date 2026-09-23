@@ -358,6 +358,7 @@ pub(super) mod tests {
             issue_key: None,
             issue_url: None,
             created_at: chrono::Utc::now(),
+            ticket_stage: None,
         });
         cfg.checkouts.push(Checkout {
             id: format!("{name}-api"),

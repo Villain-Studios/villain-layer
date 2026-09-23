@@ -106,6 +106,7 @@ mod jira;
 mod github;
 mod slack;
 mod settings;
+mod ticket_flow;
 
 pub use projects::*;
 pub use repos::*;
@@ -117,6 +118,7 @@ pub use jira::*;
 pub use github::*;
 pub use slack::*;
 pub use settings::*;
+pub use ticket_flow::*;
 
 #[cfg(test)]
 mod tests {
@@ -451,6 +453,7 @@ mod tests {
             issue_key: None,
             issue_url: None,
             created_at: chrono::Utc::now(),
+            ticket_stage: None,
         });
         cfg.checkouts.push(Checkout {
             id: "c1".into(),

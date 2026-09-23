@@ -62,6 +62,10 @@ pub struct Task {
     #[serde(default)]
     pub issue_url: Option<String>,
     pub created_at: DateTime<Utc>,
+    /// The last stage its ticket was moved for, "review" or "merged" (TKT-8),
+    /// so each is done once and a ticket moved by hand afterwards stays put.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ticket_stage: Option<String>,
 }
 
 /// One repository's worktree within a task.
@@ -115,6 +119,27 @@ pub struct JiraConfig {
     /// JQL used for the task list; falls back to a sensible default.
     #[serde(default)]
     pub jql: Option<String>,
+    /// Where tickets go as the work moves, per Jira project (TKT-8). Chosen
+    /// in Settings: "Review" and "In Progress" share a status category, and
+    /// a status's name is not the app's to assume.
+    #[serde(default)]
+    pub flow: HashMap<String, TicketFlow>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TicketFlow {
+    /// Where a ticket goes when its task's pull request is ready for review.
+    #[serde(default)]
+    pub review: Option<FlowStatus>,
+    /// Where it goes once every pull request of its task has merged.
+    #[serde(default)]
+    pub merged: Option<FlowStatus>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FlowStatus {
+    pub id: String,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -326,6 +351,7 @@ impl AppConfig {
                 issue_key: w.issue_key,
                 issue_url: w.issue_url,
                 created_at: w.created_at,
+                ticket_stage: None,
             });
             self.checkouts.push(Checkout {
                 id: uuid::Uuid::new_v4().to_string(),

@@ -6,6 +6,7 @@ import { api } from "../lib/api";
 import { useStore } from "../store";
 import type { SlackConfig, UiPrefs } from "../lib/types";
 import { Field, Modal, Switch } from "./ui";
+import { TicketFlowSettings } from "./TicketFlow";
 
 type Section = "appearance" | "jira" | "github" | "slack" | "general";
 
@@ -419,6 +420,7 @@ export function Settings() {
           >
             {busy ? "Verifying…" : settings?.jira_connected ? "Save & reconnect" : "Connect"}
           </button>
+          {settings?.jira_connected && <TicketFlowSettings />}
         </>
       )}
 

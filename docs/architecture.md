@@ -260,7 +260,10 @@ push.
   blank token field may reuse the saved one (same origin only).
 - **Jira** is REST v3 with Basic auth. JQL strings go through `jql_string`,
   path segments through `segment()`. Search pages by `nextPageToken`, and
-  `createmeta` pages too. Names are never assumed (TKT-2).
+  `createmeta` pages too. Names are never assumed (TKT-2). Where a ticket
+  goes as its PRs move (TKT-8) is a status id chosen per project, since the
+  categories cannot tell Review from In Progress; `commands/ticket_flow.rs`
+  runs it inside the PR sweep and reports each move back with the rows.
 - **GitHub** is REST, plus GraphQL for review threads. Refs go through
   `path_segment`. `head` goes in the query, not the path, since `#` and `+`
   in branch names cut a path short. Listing is `state=all` wherever history

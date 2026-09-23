@@ -9,7 +9,7 @@
  *
  * URL parameters set the scene before the app boots:
  *
- *   ?scenario=busy|empty|unlinked   which world (default busy)
+ *   ?scenario=busy|empty|unlinked|tickets   which world (default busy)
  *   &view=work|tickets|reviews|chat|repos
  *   &task=t-login          the selected task (none: the All agents overview)
  *   &tab=terminals|diff|pr
@@ -26,7 +26,7 @@
  */
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
-import type { Catchup, Cleaned, PaneInfo, Project, RepoUpdate, Synced } from "../lib/types";
+import type { Catchup, Cleaned, FlowStatus, PaneInfo, Project, RepoUpdate, Synced } from "../lib/types";
 import { ago, SCENARIOS } from "./world";
 
 type Args = Record<string, unknown>;
@@ -68,7 +68,9 @@ function newPane(args: Args, kind: PaneInfo["kind"], task: string): PaneInfo {
 
 const answer: Record<string, Answer> = {
   // What the app asks for on every launch.
-  get_settings: () => world.settings,
+  // A copy, as the real IPC's JSON always is: handing back the object a
+  // setter just changed looked like no change to the store, and nothing redrew.
+  get_settings: () => structuredClone(world.settings),
   take_notices: () => [],
   cursor_ide_installed: () => false,
   list_projects: () => world.projects,
@@ -119,6 +121,31 @@ const answer: Record<string, Answer> = {
   jira_issue_types: () => world.issueTypes,
   jira_epics: () => [],
   jira_transitions: () => world.transitions,
+  jira_transition: (a) => {
+    const t = world.transitions.find((x) => x.id === a.transitionId);
+    const i = world.issues.find((x) => x.key === a.key);
+    if (t && i) Object.assign(i, { status: t.to_status, status_id: t.to_id, status_category: t.to_category });
+    return null;
+  },
+  jira_project_statuses: () => [
+    { id: "1", name: "To Do", category: "new" },
+    { id: "3", name: "In Progress", category: "indeterminate" },
+    { id: "10322", name: "Review", category: "indeterminate" },
+    { id: "10323", name: "Testing", category: "indeterminate" },
+    { id: "10002", name: "Done", category: "done" },
+    { id: "10016", name: "Cancelled", category: "done" },
+  ],
+  set_ticket_flow: (a) => {
+    const jira = world.settings.jira;
+    if (!jira) throw "Jira is not configured";
+    const flow = (jira.flow[a.projectKey as string] ??= { review: null, merged: null });
+    flow[a.stage as "review" | "merged"] = (a.status as FlowStatus | null) ?? null;
+    return null;
+  },
+  delete_task: (a) => {
+    world.tasks = world.tasks.filter((t) => t.id !== a.id);
+    return [];
+  },
   jira_create_fields: () => world.requiredFields,
   jira_browse: () => ({ issues: world.issues, more: false }),
   suggest_repos: () => ({ project_ids: [], reason: null }),

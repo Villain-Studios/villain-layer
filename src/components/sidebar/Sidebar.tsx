@@ -3,11 +3,12 @@ import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { api, errMessage } from "../../lib/api";
 import { copyText } from "../../lib/clipboard";
 import { isRunningAgent, needsYou, taskReview, taskTotals, useStore, type TaskReview } from "../../store";
-import type { TaskView } from "../../lib/types";
+import type { JiraTransition, TaskView } from "../../lib/types";
 import { BusyOverlay, Confirm, ContextMenu, Field, Modal, Spinner, type MenuItem } from "../ui";
 import { RepoPicker } from "../RepoPicker";
 import { CreateTaskDialog } from "./CreateTaskDialog";
 import { FinishTask } from "../FinishTask";
+import { DeleteTask } from "./DeleteTask";
 
 /** What a task out for review is waiting on, in a word. */
 const REVIEW_WORD: Partial<Record<TaskReview, { text: string; color: string }>> = {
@@ -31,6 +32,7 @@ export function Sidebar() {
   const showIssue = useStore((s) => s.showIssue);
   const refreshTasks = useStore((s) => s.refreshTasks);
   const refreshPanes = useStore((s) => s.refreshPanes);
+  const refreshIssues = useStore((s) => s.refreshIssues);
   const toast = useStore((s) => s.toast);
   const fail = useStore((s) => s.fail);
   const cursorIde = useStore((s) => s.cursorIde);
@@ -50,36 +52,13 @@ export function Sidebar() {
     run: () => void | Promise<unknown>;
   } | null>(null);
   const [deleting, setDeleting] = useState<{ id: string; name: string } | null>(null);
+  /** The task whose delete dialog is open. */
+  const [asking, setAsking] = useState<TaskView | null>(null);
   const [finishing, setFinishing] = useState<TaskView | null>(null);
 
   function askDeleteTask(task: TaskView) {
     if (deleting) return;
-    // Staged counts too: git refuses those as surely as unstaged ones, and
-    // deleting without force then stopped and failed on a staged-only repo.
-    const { dirty: unstaged, staged } = taskTotals(task);
-    const dirty = unstaged + staged;
-    const repos = task.checkouts.length;
-    setConfirming({
-      title: "Delete task",
-      label: "Delete task",
-      body: (
-        <>
-          Delete <b>{task.name}</b> and remove {repos} worktree
-          {repos === 1 ? "" : "s"} from disk?
-          <div className="muted" style={{ marginTop: 8 }}>
-            Branch <code>{task.branch}</code> is left alone, in the repositories and on
-            any remote.
-          </div>
-          {dirty > 0 && (
-            <div className="confirm-detail">
-              {dirty} uncommitted change{dirty === 1 ? "" : "s"} will be lost. This cannot
-              be undone.
-            </div>
-          )}
-        </>
-      ),
-      run: () => void runDelete(task, dirty > 0),
-    });
+    setAsking(task);
   }
 
   /// Add every repo picked, reporting per repo rather than stopping at the
@@ -117,7 +96,7 @@ export function Sidebar() {
 
   /// git refuses to remove a worktree with uncommitted or untracked files. Say
   /// so and offer to force, rather than leaving an orphan nobody can see.
-  async function runDelete(task: TaskView, force: boolean) {
+  async function runDelete(task: TaskView, force: boolean, ticket: JiraTransition | null = null) {
     setConfirming(null);
     setDeleting({ id: task.id, name: task.name });
     try {
@@ -128,7 +107,19 @@ export function Sidebar() {
 
       if (stuck.length === 0) {
         if (selected === task.id) select(null);
-        toast("success", `Deleted ${task.name}`);
+        // Only once the task is gone: a ticket closed for a task that was
+        // then kept would be the board saying something untrue.
+        let moved = "";
+        if (ticket && task.issue_key) {
+          try {
+            await api.jiraTransition(task.issue_key, ticket.id);
+            moved = ` · ${task.issue_key} moved to ${ticket.to_status}`;
+            void refreshIssues({ quiet: true });
+          } catch (e) {
+            toast("error", `${task.issue_key} could not be moved: ${errMessage(e)}`);
+          }
+        }
+        toast("success", `Deleted ${task.name}${moved}`);
         return;
       }
       setConfirming({
@@ -150,7 +141,7 @@ export function Sidebar() {
             </div>
           </>
         ),
-        run: () => void runDelete(task, true),
+        run: () => void runDelete(task, true, ticket),
       });
     } catch (e) {
       fail(e);
@@ -516,6 +507,16 @@ export function Sidebar() {
         />
       )}
 
+      {asking && (
+        <DeleteTask
+          task={asking}
+          onCancel={() => setAsking(null)}
+          onDelete={(force, ticket) => {
+            setAsking(null);
+            void runDelete(asking, force, ticket);
+          }}
+        />
+      )}
       {finishing && <FinishTask task={finishing} onClose={() => setFinishing(null)} />}
 
       {deleting && (

@@ -13,6 +13,7 @@ import type {
   ReviewQueue,
   Settings,
   TaskView,
+  TicketMove,
   UpdateBy,
 } from "./lib/types";
 
@@ -184,6 +185,27 @@ const reviewsSlot: Slot = { get: () => reviewsInflight, set: (p) => { reviewsInf
  * panel offered to open the PR again.
  */
 const prsFetchedAt = new Map<string, number>();
+/** "ACME:review": a project and stage already told to choose a status, this run. */
+const askedFlow = new Set<string>();
+
+/** Say what the PR sweep did about tickets (TKT-8). */
+function reportTickets(moves: TicketMove[], toast: State["toast"]) {
+  for (const m of moves) {
+    if (m.moved_to) toast("success", `${m.key} → ${m.moved_to}`);
+    else if (m.error) toast("error", m.error);
+    else if (m.unchosen) {
+      const project = m.key.split("-")[0];
+      if (askedFlow.has(`${project}:${m.stage}`)) continue;
+      askedFlow.add(`${project}:${m.stage}`);
+      toast(
+        "info",
+        m.stage === "review"
+          ? `${m.key}'s pull request is ready for review. Choose which ${project} status means review in Settings → Jira, and tickets will move there.`
+          : `Every pull request for ${m.key} has merged. Choose where merged ${project} tickets go in Settings → Jira.`,
+      );
+    }
+  }
+}
 
 /** Skip a React storm when a poll returns the same world we already have. */
 function samePanes(a: PaneInfo[], b: PaneInfo[]): boolean {
@@ -385,6 +407,9 @@ export const useStore = create<State>((set, get) => {
       set((s) => ({
         prs: { ...s.prs, ...Object.fromEntries(fresh.map((t) => [t.task_id, t.rows])) },
       }));
+      const moves = all.map((t) => t.ticket).filter((m): m is TicketMove => m !== null);
+      reportTickets(moves, get().toast);
+      if (moves.some((m) => m.moved_to)) void get().refreshIssues({ quiet: true });
     } catch {
       // Left as it was: stale rows beat empty ones.
     } finally {

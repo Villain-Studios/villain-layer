@@ -10,6 +10,7 @@ import type {
   CreateField,
   DiffScope,
   FeedbackItem,
+  FlowStatus,
   Finished,
   FoundRepo,
   JiraIssue,
@@ -18,6 +19,7 @@ import type {
   JiraTransition,
   PaneInfo,
   Project,
+  ProjectStatus,
   RepoBranchFacts,
   RepoCommits,
   RepoFeedback,
@@ -190,6 +192,10 @@ export const api = {
   takePrDescription: (taskId: string) =>
     invoke<string | null>("take_pr_description", { taskId }),
   jiraSyncStatus: (key: string) => invoke<string | null>("jira_sync_status", { key }),
+  jiraProjectStatuses: (projectKey: string) =>
+    invoke<ProjectStatus[]>("jira_project_statuses", { projectKey }),
+  setTicketFlow: (projectKey: string, stage: "review" | "merged", status: FlowStatus | null) =>
+    invoke<void>("set_ticket_flow", { projectKey, stage, status }),
   jiraBrowse: (text: string, whose: string, includeDone: boolean, types: string[]) =>
     invoke<JiraPage>("jira_browse", { text: text || null, whose, includeDone, types }),
   jiraCreateFields: (projectKey: string, issueTypeId: string) =>

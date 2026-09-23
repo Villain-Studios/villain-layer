@@ -87,12 +87,16 @@ const issueTypes: JiraIssueType[] = [
   { id: "5", name: "Sub-task", subtask: true, hierarchy_level: -1, icon: null },
 ];
 
+/** Shaped like a real workflow: Review shares In Progress's category, and two statuses are done. */
+const STATUS_IDS: Record<string, string> = { "To Do": "1", "In Progress": "3", Review: "10322", Done: "10002", Cancelled: "10016" };
+
 function issue(key: string, summary: string, status: string, category: string, epic: string | null): JiraIssue {
   return {
     key,
     summary,
     description: `What ${key} is about, as the ticket says it.`,
     status,
+    status_id: STATUS_IDS[status] ?? "0",
     status_category: category,
     issue_type: "Story",
     priority: "Medium",
@@ -213,6 +217,7 @@ const pr = (number: number, repo: string, merged: boolean) => ({
 const prs: TaskPrs[] = [
   {
     task_id: "t-login",
+    ticket: null,
     rows: [
       {
         checkout_id: "c-login-api", repo: "api", pr: pr(42, "api", false),
@@ -231,6 +236,7 @@ const prs: TaskPrs[] = [
   },
   {
     task_id: "t-audit",
+    ticket: null,
     rows: [
       {
         checkout_id: "c-audit-web", repo: "web", pr: pr(7, "web", true), checks: [], reviews: [],
@@ -285,7 +291,7 @@ function busy(): World {
     agents,
     settings: {
       ...disconnected,
-      jira: { base_url: "https://acme.atlassian.net", email: "you@acme.test", project_key: "ACME", jql: null },
+      jira: { base_url: "https://acme.atlassian.net", email: "you@acme.test", project_key: "ACME", jql: null, flow: {} },
       github: { api_url: "https://api.github.com", web_url: "https://github.com", review_team: null },
       slack: { channel: "#dev", enabled: true, notify_on_done: true, notify_on_prs: true, allow_agent_posts: true },
       jira_connected: true,
@@ -305,8 +311,10 @@ function busy(): World {
     ],
     issueTypes,
     transitions: [
-      { id: "11", name: "Start", to_status: "In Progress", to_category: "indeterminate" },
-      { id: "31", name: "Done", to_status: "Done", to_category: "done" },
+      { id: "11", name: "Start", to_status: "In Progress", to_id: "3", to_category: "indeterminate" },
+      { id: "4", name: "Request Review", to_status: "Review", to_id: "10322", to_category: "indeterminate" },
+      { id: "31", name: "Move to Done", to_status: "Done", to_id: "10002", to_category: "done" },
+      { id: "81", name: "Cancel", to_status: "Cancelled", to_id: "10016", to_category: "done" },
     ],
     requiredFields: [
       { id: "components", name: "Components", required: true, kind: "array", allowed: [{ id: "c1", name: "Backend" }, { id: "c2", name: "Web" }] },
@@ -356,4 +364,14 @@ function unlinked(): World {
   return w;
 }
 
-export const SCENARIOS: Record<string, () => World> = { busy, empty, unlinked };
+/** Busy, with the PR sweep reporting what it did about tickets (TKT-8). */
+function tickets(): World {
+  const w = busy();
+  const [login, audit] = w.prs;
+  login.ticket = { key: "ACME-123", stage: "review", moved_to: "Review", unchosen: false, error: null };
+  const key = w.tasks.find((t) => t.id === audit.task_id)?.issue_key ?? "ACME-150";
+  audit.ticket = { key, stage: "merged", moved_to: null, unchosen: true, error: null };
+  return w;
+}
+
+export const SCENARIOS: Record<string, () => World> = { busy, empty, unlinked, tickets };

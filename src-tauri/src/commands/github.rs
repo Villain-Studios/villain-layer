@@ -190,6 +190,8 @@ pub async fn github_retarget_pr(state: State<'_, AppState>, checkout_id: String)
 pub struct TaskPrs {
     pub task_id: String,
     pub rows: Vec<CheckoutPr>,
+    /// What was done about its ticket in this sweep (TKT-8).
+    pub ticket: Option<super::TicketMove>,
 }
 
 /// PR state for every repository in the task, one row each.
@@ -224,12 +226,17 @@ pub async fn github_all_prs(state: State<'_, AppState>) -> Result<Vec<TaskPrs>> 
     use futures_util::stream::{self, StreamExt};
     let state = &*state;
     let client = &client;
+    // Tickets follow only with Jira connected; the sweep runs without it.
+    let jira = super::jira_client(state).ok().map(|(j, _)| j);
+    let jira = &jira;
     let out = stream::iter(ids)
         .map(|task_id| async move {
-            task_prs(state, client, &task_id)
-                .await
-                .ok()
-                .map(|rows| TaskPrs { task_id, rows })
+            let rows = task_prs(state, client, &task_id).await.ok()?;
+            let ticket = match (jira, state.config.task(&task_id)) {
+                (Some(j), Ok(task)) => super::ticket_flow::follow(state, j, &task, &rows).await,
+                _ => None,
+            };
+            Some(TaskPrs { task_id, rows, ticket })
         })
         .buffered(SWEEP_TASKS)
         .filter_map(|t| async move { t })

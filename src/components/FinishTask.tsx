@@ -3,6 +3,7 @@ import { api, errMessage } from "../lib/api";
 import { taskTotals, useStore } from "../store";
 import type { JiraTransition, TaskView } from "../lib/types";
 import { Field, Modal, Spinner } from "./ui";
+import { flowOf, mergedTransition } from "./TicketFlow";
 
 /**
  * Put away a task whose pull requests have all merged: its terminals, its
@@ -39,10 +40,11 @@ export function FinishTask({ task, onClose }: { task: TaskView; onClose: () => v
         // the same place on some board.
         const to = all.filter((t) => t.to_category === "done");
         setDone(to);
-        // Picked for you only when there is one. Won't Do, Duplicate and
-        // Cancelled are done too, and first in the list closed a merged
-        // ticket as Won't Do.
-        setTransition(to.length === 1 ? to[0].id : "");
+        // Picked for you only when it is known: the status chosen for merged
+        // work in its project (TKT-8), or the only done one. Won't Do,
+        // Duplicate and Cancelled are done too, and first in the list closed
+        // a merged ticket as Won't Do.
+        setTransition(mergedTransition(to, flowOf(useStore.getState().settings, key))?.id ?? "");
       })
       .catch((e) => {
         if (stop) return;

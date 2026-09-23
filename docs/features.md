@@ -147,8 +147,10 @@ the repo count, running agents, uncommitted changes and the review verdict.
   to the chosen done-category status. Each step only runs if the one before
   succeeded. Remote branches are never touched.
 - **TASK-9** The finish dialog MUST offer only transitions into the `done`
-  category. It pre-selects one only when there is exactly one; otherwise it
-  defaults to leaving the ticket as it is.
+  category. It pre-selects the one into the project's after-merge status
+  (TKT-8), or else one only when there is exactly one; otherwise it defaults
+  to leaving the ticket as it is. (Done and Cancelled are both done: with no
+  status chosen, a finished ticket was left In Progress.)
 - **TASK-10** Status (ahead, behind, changes, conflicts) comes from
   `git status` per checkout. Only the selected task and tasks with a running
   pane are asked every poll. The rest reuse a cached status for up to 90
@@ -478,8 +480,30 @@ offers Start work.
   epic description into the field, for the user to accept or edit.
 - **TKT-7** Your ticket list is re-read every 3 minutes while the window is
   in front. While it is away, the backend looks for itself (NOTE-3).
+- **TKT-8** A task's ticket MUST follow its pull requests: to the project's
+  review status once one of them is ready for review (not a draft), and to
+  its after-merge status once every one has merged, with nothing left
+  unmerged or uncommitted. Both statuses are chosen per Jira project in
+  Settings, from the project's own statuses: In Progress, Review and
+  Testing all share Jira's "in progress" category, so the app is told,
+  never guessing by name. Until one is chosen the app says so, once per
+  project and stage, and moves nothing. Each stage moves the ticket once per
+  task (`Task.ticket_stage`), so a ticket moved by hand afterwards stays
+  where it was put; a review never takes a ticket out of done. A workflow
+  with no transition to the chosen status is said once, not retried. It
+  runs with the PR sweep (PR-8). Before this, tickets sat In Progress with
+  their pull requests merged weeks before.
+- **TKT-9** Deleting a task MUST show its ticket's status and offer its
+  transitions. It leaves the ticket as it is by default, since a deleted
+  task is as often abandoned as done, and pre-selects the after-merge
+  status when a pull request of the task has merged. The ticket moves only
+  once the task is gone.
+- **TKT-10** The task header MUST show its ticket's status, from your ticket
+  list, so a ticket out of step with the work is seen where the work is.
 
-Code: `commands/jira.rs`, `integrations/jira.rs`, `components/tickets/`.
+Code: `commands/jira.rs`, `commands/ticket_flow.rs`, `integrations/jira.rs`,
+`integrations/jira/flow.rs`, `components/tickets/`, `TicketFlow.tsx`,
+`sidebar/DeleteTask.tsx`.
 
 Known gaps:
 - Jira Cloud only: email and API token, REST v3. No Data Center or Server
@@ -488,6 +512,13 @@ Known gaps:
   when a description is read.
 - Start work moves the ticket without the confirmation the MCP
   `jira_transition` tool asks for. The tool's description does not say so.
+- Tickets follow the work only while the app runs with its window in
+  front, since that is when the PR sweep runs. A PR merged overnight moves
+  its ticket the next morning.
+- The task header shows a ticket's status only when it is in your ticket
+  list (assigned to you, not done).
+- A move that needs two transitions (a workflow with no direct way from
+  In Progress to the after-merge status) is reported, not made.
 
 ## 10. Reviews
 
@@ -593,6 +624,7 @@ Known gaps:
 | Put terminals back when the app reopens | on | PANE-7 |
 | Let agents read terminal output | **off** | MCP `pane_output`, `handoff_prompt` |
 | Move the ticket when work starts | on | TKT-1 |
+| Tickets follow the work (Jira) | not chosen | TKT-8, per Jira project |
 | Trust the folders this app creates | on | PANE-10 |
 | Terminal text | 13px | 9–24px |
 | Task folder location | `~/.villain-worktrees` | where task folders go |

@@ -72,6 +72,8 @@ export interface Task {
   issue_key: string | null;
   issue_url: string | null;
   created_at: string;
+  /** The last stage its ticket was moved for (TKT-8). */
+  ticket_stage?: "review" | "merged" | null;
 }
 
 /** One repository's worktree within a task. */
@@ -226,6 +228,7 @@ export interface JiraIssue {
   summary: string;
   description: string;
   status: string;
+  status_id: string;
   status_category: string;
   issue_type: string;
   priority: string | null;
@@ -277,8 +280,37 @@ export interface JiraTransition {
   id: string;
   name: string;
   to_status: string;
+  to_id: string;
   /** "new", "indeterminate" or "done" — the same on every site, unlike the names. */
   to_category: string;
+}
+
+/** A status a project's tickets can be in. */
+export interface ProjectStatus {
+  id: string;
+  name: string;
+  category: string;
+}
+
+export interface FlowStatus {
+  id: string;
+  name: string;
+}
+
+/** Where a Jira project's tickets go as the work moves (TKT-8). */
+export interface TicketFlow {
+  review: FlowStatus | null;
+  merged: FlowStatus | null;
+}
+
+/** What the PR sweep did about one task's ticket. */
+export interface TicketMove {
+  key: string;
+  stage: "review" | "merged";
+  moved_to: string | null;
+  /** No status is chosen for this stage in the ticket's project yet. */
+  unchosen: boolean;
+  error: string | null;
 }
 
 export interface PullRequest {
@@ -409,6 +441,7 @@ export type FeedbackItem =
 export interface TaskPrs {
   task_id: string;
   rows: CheckoutPr[];
+  ticket: TicketMove | null;
 }
 
 export interface JiraConfig {
@@ -416,6 +449,8 @@ export interface JiraConfig {
   email: string;
   project_key: string | null;
   jql: string | null;
+  /** Keyed by Jira project key. */
+  flow: Record<string, TicketFlow>;
 }
 
 export interface GithubConfig {

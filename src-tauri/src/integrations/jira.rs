@@ -6,6 +6,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::http_client;
+
+mod flow;
+pub use flow::ProjectStatus;
 use crate::config::JiraConfig;
 use crate::error::{Error, Result};
 
@@ -25,6 +28,7 @@ pub struct Issue {
     pub summary: String,
     pub description: String,
     pub status: String,
+    pub status_id: String,
     pub status_category: String,
     pub issue_type: String,
     pub priority: Option<String>,
@@ -58,6 +62,7 @@ pub struct Transition {
     pub id: String,
     pub name: String,
     pub to_status: String,
+    pub to_id: String,
     /// The category the target status sits in: "new", "indeterminate" or
     /// "done". Status *names* differ between sites and workflows; the three
     /// categories are Jira's own and mean the same everywhere, which is what
@@ -291,6 +296,7 @@ impl Jira {
                             .and_then(|s| s.as_str())
                             .unwrap_or_default()
                             .to_string(),
+                        to_id: str_at(t.get("to").unwrap_or(&Value::Null), "id"),
                         to_category: t
                             .pointer("/to/statusCategory/key")
                             .and_then(|s| s.as_str())
@@ -520,6 +526,7 @@ impl Jira {
                 .and_then(|s| s.as_str())
                 .unwrap_or_default()
                 .to_string(),
+            status_id: str_at(f.get("status").unwrap_or(&Value::Null), "id"),
             status_category: f
                 .pointer("/status/statusCategory/key")
                 .and_then(|s| s.as_str())

@@ -71,15 +71,20 @@ pub async fn jira_connect(
     project_key: Option<String>,
     jql: Option<String>,
 ) -> Result<String> {
+    let before = state.config.read().jira;
+    let base_url = base_url.trim_end_matches('/').to_string();
     let mut cfg = JiraConfig {
-        base_url: base_url.trim_end_matches('/').to_string(),
+        // Where tickets go (TKT-8) is kept for the same site: changing the
+        // project key or the JQL reconnects, and cost the choices made.
+        flow: before.as_ref().filter(|b| b.base_url == base_url).map(|b| b.flow.clone()).unwrap_or_default(),
+        base_url,
         email,
         project_key,
         jql,
         epic_field: None,
     };
     // Changing the project key or JQL should not need the token typed again.
-    let was = state.config.read().jira.as_ref().map(|j| j.base_url.clone());
+    let was = before.as_ref().map(|j| j.base_url.clone());
     let token = stored_or(secrets::JIRA, &token, "Jira", was.as_deref(), &cfg.base_url)?;
     // Verify before persisting, so a typo never looks like a working setup.
     let client = Jira::new(&cfg, &token);

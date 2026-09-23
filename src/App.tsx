@@ -514,6 +514,8 @@ function TaskMain({ task }: { task: TaskView }) {
   const setTab = useStore((s) => s.setTab);
   const cursorIde = useStore((s) => s.cursorIde);
   const fail = useStore((s) => s.fail);
+  // Where the board has it, from your ticket list: in step with the work or not.
+  const ticket = useStore((s) => s.issues.find((i) => i.key === task.issue_key));
   // The Terminals badge counts what is open now. The task's own count comes
   // from the task poll, which can be a minute behind a pane just opened.
   const paneCount = useStore((s) => s.panes.filter((p) => p.task_id === task.id).length);
@@ -586,8 +588,12 @@ function TaskMain({ task }: { task: TaskView }) {
             </button>
           )}
           {task.issue_url && (
-            <button className="btn btn-sm" onClick={() => void openUrl(task.issue_url!)}>
-              {task.issue_key} ↗
+            <button
+              className="btn btn-sm"
+              title={ticket ? `${task.issue_key} is ${ticket.status} in Jira` : undefined}
+              onClick={() => void openUrl(task.issue_url!)}
+            >
+              {task.issue_key}{ticket && <span className="muted"> · {ticket.status}</span>} ↗
             </button>
           )}
         </div>

@@ -192,6 +192,10 @@ export function Settings() {
 
   /** A slider: shown at once, saved once it stops moving. */
   function slideUi(patch: Partial<UiPrefs>) {
+    // Counts as a newer change, so a save already on its way does not clear
+    // the draft when it lands — that threw away a value still waiting on its
+    // timer, and the thumb jumped back.
+    uiSaves.current += 1;
     uiDraftRef.current = { ...uiDraftRef.current, ...patch };
     setUiDraft(uiDraftRef.current);
     window.clearTimeout(uiSaveTimer.current);

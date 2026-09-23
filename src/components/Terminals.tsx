@@ -423,8 +423,8 @@ export function Terminals({ task }: { task: TaskView }) {
             <div className="row">
               {installed.length === 0 && (
                 <span>
-                  No agent CLIs found on your PATH. Install Claude Code, Codex or
-                  Gemini CLI and reopen the app.
+                  No agent CLIs found on your PATH. Install Claude Code, GitHub
+                  Copilot CLI, OpenCode or Gemini CLI and reopen the app.
                 </span>
               )}
               {installed.map((a) => (

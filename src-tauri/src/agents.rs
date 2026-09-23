@@ -41,17 +41,19 @@ pub struct AgentDef {
 /// How an agent CLI tells the app whether it is working, asking or done.
 ///
 /// Each is one the CLI offers for a single launch, without the app touching
-/// the user's own configuration. A CLI that offers none is judged by its
-/// output, which is a guess.
+/// the user's own configuration. A CLI that cannot say is not in the
+/// catalogue: from its output alone its state is a guess, and a wrong one —
+/// "working" on an agent two days idle — is worse than none.
 ///
-/// Not every CLI is here that could be. Cursor's CLI reads hooks only from
-/// fixed files in the home folder and the repository, and has no event for
-/// asking; Codex, Aider and Amp were not installed to check against, and a
-/// wrong flag stops a CLI from starting at all.
+/// Taken out for that reason, and to put back once they report: Cursor's CLI
+/// reads hooks only from fixed files in the home folder and the repository,
+/// and has no event for asking. Codex (hooks, enabled per launch with `-c`),
+/// Aider (`--notifications-command`, which says only "stopped") and Amp (a
+/// plugin, no asking) were not installed to check against, and a wrong flag
+/// stops a CLI from starting at all. Their launch details are in the history
+/// of this file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Reports {
-    /// Nothing: judged by output.
-    Output,
     /// Hooks in a settings file given with `--settings`.
     ClaudeHooks,
     /// The same hooks and payloads, in a plugin given with `--plugin-dir`.
@@ -282,7 +284,7 @@ pub fn prepare_reporting(
     };
     let json = |v: serde_json::Value| serde_json::to_vec_pretty(&v).unwrap_or_default();
     Ok(match reports {
-        Reports::Output | Reports::GeminiTitle => Reporting::default(),
+        Reports::GeminiTitle => Reporting::default(),
         Reports::ClaudeHooks => {
             let path = write("claude-hooks.json", &json(claude_hook_settings()))?;
             Reporting {
@@ -358,7 +360,7 @@ pub fn hook_activity(
             "done" => Some(Activity::Done),
             _ => None,
         },
-        Reports::Output | Reports::GeminiTitle => None,
+        Reports::GeminiTitle => None,
     }
 }
 
@@ -452,17 +454,6 @@ pub const AGENTS: &[AgentDef] = &[
         }),
     },
     AgentDef {
-        id: "codex",
-        name: "Codex",
-        program: "codex",
-        base_args: &[],
-        prompt: PromptMode::Positional,
-        mcp_config_flag: None,
-        reports: Reports::Output,
-        resume_args: None,
-        session_store: None,
-    },
-    AgentDef {
         id: "gemini",
         name: "Gemini CLI",
         program: "gemini",
@@ -474,17 +465,6 @@ pub const AGENTS: &[AgentDef] = &[
         session_store: None,
     },
     AgentDef {
-        id: "cursor",
-        name: "Cursor CLI",
-        program: "cursor-agent",
-        base_args: &[],
-        prompt: PromptMode::Positional,
-        mcp_config_flag: None,
-        reports: Reports::Output,
-        resume_args: None,
-        session_store: None,
-    },
-    AgentDef {
         id: "opencode",
         name: "OpenCode",
         program: "opencode",
@@ -492,28 +472,6 @@ pub const AGENTS: &[AgentDef] = &[
         prompt: PromptMode::Typed,
         mcp_config_flag: None,
         reports: Reports::OpencodePlugin,
-        resume_args: None,
-        session_store: None,
-    },
-    AgentDef {
-        id: "amp",
-        name: "Amp",
-        program: "amp",
-        base_args: &[],
-        prompt: PromptMode::Typed,
-        mcp_config_flag: None,
-        reports: Reports::Output,
-        resume_args: None,
-        session_store: None,
-    },
-    AgentDef {
-        id: "aider",
-        name: "Aider",
-        program: "aider",
-        base_args: &[],
-        prompt: PromptMode::Typed,
-        mcp_config_flag: None,
-        reports: Reports::Output,
         resume_args: None,
         session_store: None,
     },
@@ -748,7 +706,7 @@ mod tests {
 
     #[test]
     fn no_other_cli_keeps_its_state_in_that_file() {
-        assert!(!pretrust("codex", Path::new("/work")));
+        assert!(!pretrust("gemini", Path::new("/work")));
         assert!(!pretrust("gemini", Path::new("/work")));
     }
 

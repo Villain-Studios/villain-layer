@@ -168,7 +168,7 @@ fn cursor_app() -> Option<PathBuf> {
 }
 
 /// True when the Cursor IDE is on this machine (the app, or its `cursor` CLI).
-/// Distinct from the `cursor-agent` agent CLI listed under agents.
+/// The editor, opened on a task's folder — not an agent CLI.
 ///
 /// Off the command thread for the login-shell PATH, as `list_agents` is: this
 /// is the first thing the boot refresh asks for, so it was the one most likely

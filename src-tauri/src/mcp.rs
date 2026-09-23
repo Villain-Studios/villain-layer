@@ -1014,7 +1014,7 @@ mod tests {
         let ptys = crate::pty::PtyManager::default();
         let claude = agent(&ptys, "claude", "sleep 5", false);
         let opencode = agent(&ptys, "opencode", "sleep 5", false);
-        let aider = agent(&ptys, "aider", "sleep 5", false);
+        let gemini = agent(&ptys, "gemini", "sleep 5", false);
         let activity = |id: &str| ptys.info(id).unwrap().activity;
 
         // Just started, it already reads as working from its own output: said
@@ -1030,10 +1030,10 @@ mod tests {
         assert!(!take_hook(&ptys, &opencode, &json!({"hook_event_name": "Stop"})));
         assert!(take_hook(&ptys, &opencode, &json!({"state": "asking"})));
         assert_eq!(activity(&opencode), Activity::Asking);
-        // Nor from one that does not report, or a pane that is not there.
-        assert!(!take_hook(&ptys, &aider, &json!({"hook_event_name": "Stop"})));
+        // Nor from one that reports through its title, or a pane not there.
+        assert!(!take_hook(&ptys, &gemini, &json!({"hook_event_name": "Stop"})));
         assert!(!take_hook(&ptys, "no-such-pane", &json!({"hook_event_name": "Stop"})));
-        for id in [claude, opencode, aider] {
+        for id in [claude, opencode, gemini] {
             let _ = ptys.close(&id);
         }
     }

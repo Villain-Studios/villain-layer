@@ -121,12 +121,14 @@ key on a pane that is asking counts as answering it, since nothing reports the
 moment a permission is given; Esc or ^C on a working one ends the turn, which
 Claude Code's hooks do not report either.
 
-The rest are judged by output, ignoring what arrives just after the app sent
-them something (a key's echo, the repaint after a resize or a focus change),
-with 45 seconds of real silence read as finished. Cursor's CLI takes hooks only
-from fixed files in the home folder and the repository and has none for
-asking; Codex, Aider and Amp can report too, but were not installed to check
-against.
+Only CLIs that can say for themselves are offered. Cursor's CLI takes hooks
+only from fixed files in the home folder and the repository and has none for
+asking, so it is left out for now; Codex, Aider and Amp can report, but are
+left out until they have been checked against an installed copy. If a CLI's
+reports stop arriving — hooks switched off in its own settings, say — its
+state falls back to its output, ignoring what arrives just after the app sent
+it something (a key's echo, the repaint after a resize or a focus change),
+with 45 seconds of real silence read as finished.
 
 Finished stops counting once the pane has been on screen. What needs you is
 counted on the Work tab, on *All agents*, and on the dock icon — the same
@@ -228,7 +230,7 @@ A standing agent with no worktree, for the work that happens before a task
 exists: asking a question, drafting a ticket, pulling context together. It runs
 in a scratch folder under the worktree root, so it can keep notes between
 sessions, and it starts with your own CLI configuration — so whatever MCP servers
-you have set up for Claude Code or Codex are available here too. If your agent
+you have set up for your agent CLI are available here too. If your agent
 can reach Jira and Slack, you can ask it to read a thread and file a ticket
 without leaving the app.
 
@@ -239,7 +241,7 @@ tool integrations to maintain.
 ## When an agent runs out, or the app restarts
 
 **Handing off.** No agent CLI can resume another's session — Claude Code,
-Codex, OpenCode and Cursor each keep their own transcript format, and
+Copilot, OpenCode and Gemini each keep their own transcript format, and
 translating between them would break on every release. So the ⇄ on an agent
 pane moves the *work* rather than the conversation: the ticket, the commits and
 diff so far, and the tail of the outgoing agent's terminal, stripped of ANSI and
@@ -446,8 +448,8 @@ how it takes an opening prompt:
 - `PromptMode::Flag("-i")` — `agent -i "do the thing"`
 - `PromptMode::Typed` — no prompt argument; it gets typed into the TUI after start-up
 
-and `reports`, which is how it says whether it is working, asking or done —
-`Reports::Output` if it has no way to, and it is judged by its output.
+and `reports`, which is how it says whether it is working, asking or done. A
+CLI with no way to say is not added: its state would only be a guess.
 
 Agents not found on your PATH are shown greyed out in Settings → General.
 

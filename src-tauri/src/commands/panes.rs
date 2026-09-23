@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::agents;
 use crate::config::{SavedPane, Task};
@@ -607,9 +607,14 @@ pub(crate) fn open_chat(
     Ok(pane)
 }
 
+/// The count of agents that need you, the dots and the dock follow a key
+/// that answers a question at once, not at the next poll.
 #[tauri::command]
-pub fn pty_write(state: State<AppState>, pane_id: String, data: String) -> Result<()> {
-    state.ptys.write(&pane_id, &data)
+pub fn pty_write(app: AppHandle, state: State<AppState>, pane_id: String, data: String) -> Result<()> {
+    if state.ptys.write(&pane_id, &data)? {
+        let _ = app.emit("pty:activity", &pane_id);
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -624,8 +629,13 @@ pub fn pty_attach(
     state: State<AppState>,
     pane_id: String,
     since: Option<u64>,
+    app: AppHandle,
 ) -> Result<crate::pty::Catchup> {
-    state.ptys.attach(&pane_id, since)
+    let catchup = state.ptys.attach(&pane_id, since)?;
+    if catchup.seen {
+        let _ = app.emit("pty:activity", &pane_id);
+    }
+    Ok(catchup)
 }
 
 /// A terminal has gone off screen, or the window into the background. The

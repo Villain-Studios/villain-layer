@@ -281,6 +281,9 @@ struct PaneMeta {
     seen_at: DateTime<Utc>,
     /// The window title last read, for a CLI that reports through it.
     title: String,
+    /// A notice the agent's own report showed to be over while its words are
+    /// still on screen. Not raised again until they have scrolled away.
+    cleared_notice: Option<String>,
 }
 
 impl PaneMeta {
@@ -318,6 +321,11 @@ impl PaneMeta {
     /// Take the agent's word for what it is doing. Finished before it was
     /// ever given anything — a CLI's title saying "ready" as it starts — is
     /// only idle.
+    ///
+    /// A report also ends a notice it contradicts. Both are read off the
+    /// screen, and stay on it: `gh` printing "API rate limit exceeded" held an
+    /// agent at "out of budget" for as long as the words were in the tail, and
+    /// an answered trust question lingered the same way.
     fn take_report(&mut self, activity: Activity) {
         let activity = if activity == Activity::Done && !self.prompted {
             Activity::Idle
@@ -325,6 +333,14 @@ impl PaneMeta {
             activity
         };
         self.reported = Some((activity, Utc::now()));
+        let over = match self.info.notice.as_deref() {
+            Some("usage_limit") => activity == Activity::Working,
+            Some("trust_prompt") => activity != Activity::Idle,
+            _ => false,
+        };
+        if over {
+            self.cleared_notice = self.info.notice.take();
+        }
     }
 
     /// Keys from the person at the terminal, which say something the agent's
@@ -334,8 +350,10 @@ impl PaneMeta {
         let interrupt = matches!(data, "\u{1b}" | "\u{3}");
         match self.reported {
             // Claude Code runs no hook when a turn is interrupted, so a turn
-            // stopped with Esc or ^C would read as working for good.
-            Some((Activity::Working, _)) if interrupt => {
+            // stopped with Esc or ^C would read as working for good. Esc at a
+            // permission question refuses it and ends the turn the same way,
+            // and read as asking for good.
+            Some((Activity::Working | Activity::Asking, _)) if interrupt => {
                 self.reported = Some((Activity::Idle, Utc::now()));
             }
             // Answered. Nothing reports the moment a permission is given — the
@@ -476,6 +494,10 @@ pub struct Catchup {
     /// The point asked from is no longer held, so `data` is the whole
     /// scrollback and has to be drawn on a clean terminal.
     pub reset: bool,
+    /// Coming on screen changed what the pane reads as: a finished agent,
+    /// now seen, is no longer news.
+    #[serde(skip)]
+    pub seen: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -780,6 +802,7 @@ impl PtyManager {
                 prompted: opts.prompted || opts.initial_input.is_some(),
                 seen_at: now,
                 title: String::new(),
+                cleared_notice: None,
             }),
             pid,
             master: Mutex::new(pair.master),
@@ -806,6 +829,10 @@ impl PtyManager {
             let id = id.clone();
             let mut reader = reader;
             let title_activity = opts.title_activity;
+            // Only an agent can be out of budget or asking to be trusted. A
+            // shell running `gh` read "rate limit exceeded" as the first, and
+            // offered to hand the shell off.
+            let scan = opts.kind == PaneKind::Agent;
             std::thread::spawn(move || {
                 let mut buf = [0u8; 8192];
                 let mut scratch = Vec::with_capacity(NOTICE_TAIL);
@@ -827,7 +854,7 @@ impl PtyManager {
                                 out.push(&buf[..n]);
                                 let tail = &out.scrollback
                                     [out.scrollback.len().saturating_sub(NOTICE_TAIL)..];
-                                let found = notice_in(tail, &mut scratch);
+                                let found = if scan { notice_in(tail, &mut scratch) } else { None };
                                 let title = title_activity.and_then(|_| {
                                     last_title(&out.scrollback[out.scrollback.len().saturating_sub(TITLE_TAIL)..])
                                 });
@@ -849,6 +876,10 @@ impl PtyManager {
                                         meta.title = title;
                                     }
                                 }
+                                if found.is_none() {
+                                    meta.cleared_notice = None;
+                                }
+                                let found = found.filter(|f| meta.cleared_notice.as_deref() != Some(*f));
                                 // A trust prompt clears once answered, so
                                 // let it come and go; a usage limit sticks.
                                 if meta.info.notice.as_deref() != found
@@ -860,6 +891,10 @@ impl PtyManager {
                                             "pty:notice",
                                             NoticeEvent { pane_id: &id, notice: found },
                                         );
+                                    } else {
+                                        // Answered: the count and the dot
+                                        // say so now, not at the next poll.
+                                        let _ = app.emit("pty:activity", &id);
                                     }
                                 }
                             }
@@ -926,13 +961,22 @@ impl PtyManager {
             .ok_or_else(|| Error::NotFound(format!("pane {id}")))
     }
 
-    pub fn write(&self, id: &str, data: &str) -> Result<()> {
+    /// True when the keys changed what the pane reads as — a question
+    /// answered, a turn interrupted — which nothing else would announce.
+    pub fn write(&self, id: &str, data: &str) -> Result<bool> {
         let pane = self.get(id)?;
         *pane.typed.lock() = Some(Instant::now());
-        pane.meta.lock().typed(data);
+        let changed = {
+            let watched = pane.watched.load(Ordering::Acquire);
+            let mut meta = pane.meta.lock();
+            let before = meta.activity(watched, Utc::now());
+            meta.typed(data);
+            meta.activity(watched, Utc::now()) != before
+        };
         pane.input
             .send(data.as_bytes().to_vec())
-            .map_err(|_| Error::Pty("the terminal has closed".into()))
+            .map_err(|_| Error::Pty("the terminal has closed".into()))?;
+        Ok(changed)
     }
 
     /// Type `text` into a pane and press Enter.
@@ -979,13 +1023,19 @@ impl PtyManager {
     pub fn attach(&self, id: &str, since: Option<u64>) -> Result<Catchup> {
         let pane = self.get(id)?;
         let mut out = pane.output.lock();
-        pane.watched.store(true, Ordering::Release);
-        pane.meta.lock().seen_at = Utc::now();
+        let was_watched = pane.watched.swap(true, Ordering::AcqRel);
+        let seen = {
+            let mut meta = pane.meta.lock();
+            let before = meta.activity(was_watched, Utc::now());
+            meta.seen_at = Utc::now();
+            meta.activity(true, Utc::now()) != before
+        };
         let (bytes, reset) = out.since(since);
         let catchup = Catchup {
             data: base64::engine::general_purpose::STANDARD.encode(bytes),
             end: out.total,
             reset,
+            seen,
         };
         out.sent = out.total;
         Ok(catchup)
@@ -1015,18 +1065,25 @@ impl PtyManager {
 
     /// What the agent says it is doing, from its own hooks. True when that
     /// changed what the pane reads as.
-    pub fn report(&self, id: &str, activity: Activity) -> Result<bool> {
+    ///
+    /// `decide` is handed what the agent said before and says what this
+    /// report makes it, under one lock: hooks post side by side, and asked and
+    /// told separately a session's start judged against nothing could land
+    /// after its first prompt and put it back to idle.
+    pub fn report_with(
+        &self,
+        id: &str,
+        decide: impl FnOnce(Option<Activity>) -> Option<Activity>,
+    ) -> Result<bool> {
         let pane = self.get(id)?;
         let watched = pane.watched.load(Ordering::Acquire);
         let mut meta = pane.meta.lock();
-        let before = meta.activity(watched, Utc::now());
+        let Some(activity) = decide(meta.reported.map(|(a, _)| a)) else {
+            return Ok(false);
+        };
+        let before = (meta.activity(watched, Utc::now()), meta.info.notice.clone());
         meta.take_report(activity);
-        Ok(meta.activity(watched, Utc::now()) != before)
-    }
-
-    /// What the agent last reported, if it reports at all.
-    pub fn reported(&self, id: &str) -> Option<Activity> {
-        self.get(id).ok()?.meta.lock().reported.map(|(a, _)| a)
+        Ok((meta.activity(watched, Utc::now()), meta.info.notice.clone()) != before)
     }
 
     /// Ask the process group to stop, and only insist if it will not.
@@ -1242,6 +1299,7 @@ mod tests {
             prompted,
             seen_at: now - chrono::TimeDelta::seconds(3600),
             title: String::new(),
+            cleared_notice: None,
         }
     }
 
@@ -1329,6 +1387,32 @@ mod tests {
         // Typing at an idle prompt changes nothing until the agent says so.
         m.typed("fix the tests");
         assert_eq!(m.reported.map(|r| r.0), Some(Activity::Idle));
+    }
+
+    #[test]
+    fn escape_at_a_question_refuses_it() {
+        let mut m = meta(true, 0);
+        m.reported = Some((Activity::Asking, Utc::now()));
+        m.typed("\u{1b}");
+        assert_eq!(m.reported.map(|r| r.0), Some(Activity::Idle));
+    }
+
+    #[test]
+    fn a_report_ends_the_notice_it_contradicts_until_the_words_go() {
+        let mut m = meta(true, 0);
+        m.info.notice = Some("usage_limit".into());
+        // Finishing says nothing about the budget; working again does.
+        m.take_report(Activity::Done);
+        assert_eq!(m.info.notice.as_deref(), Some("usage_limit"));
+        m.take_report(Activity::Working);
+        assert_eq!(m.info.notice, None);
+        assert_eq!(m.cleared_notice.as_deref(), Some("usage_limit"));
+
+        m.info.notice = Some("trust_prompt".into());
+        m.take_report(Activity::Idle);
+        assert_eq!(m.info.notice.as_deref(), Some("trust_prompt"), "a session starting is not an answer");
+        m.take_report(Activity::Asking);
+        assert_eq!(m.info.notice, None);
     }
 
     #[test]

@@ -98,42 +98,75 @@ pub fn pretrust(agent_id: &str, dir: &Path) -> bool {
 }
 
 /// The part of [`pretrust`] that does not depend on where home is.
+///
+/// Claude Code rewrites this file all the time, and so could the app from
+/// several threads at once — a restore, a spawn, an MCP start_work. One
+/// shared temporary name let one writer's rename publish another's half
+/// written file, and anything Claude wrote between the read and the rename
+/// was lost. So: one writer at a time in this process, a temporary name of
+/// its own, and a look just before the rename that nothing changed since the
+/// read. The file keeps its permissions, and a symlink stays a symlink.
 fn trust_in(config: &Path, dir: &Path) -> bool {
-    let Ok(text) = std::fs::read_to_string(config) else {
+    static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let target = std::fs::canonicalize(config).unwrap_or_else(|_| config.to_path_buf());
+    let Some(name) = target.file_name().map(|n| n.to_string_lossy().to_string()) else {
         return false;
     };
-    let Ok(mut root) = serde_json::from_str::<serde_json::Value>(&text) else {
-        return false;
-    };
+    for _ in 0..3 {
+        let Ok(text) = std::fs::read_to_string(&target) else {
+            return false;
+        };
+        let Some(out) = with_trust(&text, dir) else {
+            return false;
+        };
+        // Same directory, so the rename is atomic on the same filesystem.
+        let tmp = target.with_file_name(format!(".{name}.villain-{}.tmp", uuid::Uuid::new_v4()));
+        if std::fs::write(&tmp, out).is_err() {
+            let _ = std::fs::remove_file(&tmp);
+            return false;
+        }
+        if let Ok(meta) = std::fs::metadata(&target) {
+            let _ = std::fs::set_permissions(&tmp, meta.permissions());
+        }
+        if std::fs::read_to_string(&target).ok().as_deref() != Some(text.as_str()) {
+            let _ = std::fs::remove_file(&tmp);
+            continue;
+        }
+        if std::fs::rename(&tmp, &target).is_err() {
+            let _ = std::fs::remove_file(&tmp);
+            return false;
+        }
+        return true;
+    }
+    false
+}
+
+/// `text` with `dir` trusted and the app's server approved, or None when it
+/// already is — or is not a config this should touch.
+fn with_trust(text: &str, dir: &Path) -> Option<String> {
+    let mut root = serde_json::from_str::<serde_json::Value>(text).ok()?;
     if !root.is_object() {
-        return false;
+        return None;
     }
 
     let key = dir.to_string_lossy().to_string();
-    let projects = root
-        .as_object_mut()
-        .and_then(|o| {
-            o.entry("projects")
-                .or_insert_with(|| serde_json::json!({}))
-                .as_object_mut()
-        });
-    let Some(projects) = projects else {
-        return false;
-    };
-
+    let projects = root.as_object_mut().and_then(|o| {
+        o.entry("projects")
+            .or_insert_with(|| serde_json::json!({}))
+            .as_object_mut()
+    })?;
     let entry = projects
         .entry(key)
-        .or_insert_with(|| serde_json::json!({}));
-    let Some(entry) = entry.as_object_mut() else {
-        return false;
-    };
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()?;
     let trusted = entry.get("hasTrustDialogAccepted") == Some(&serde_json::Value::Bool(true));
     let approved = entry
         .get("enabledMcpjsonServers")
         .and_then(|v| v.as_array())
         .is_some_and(|a| a.iter().any(|n| n.as_str() == Some(crate::mcp::SERVER_NAME)));
     if trusted && approved {
-        return false;
+        return None;
     }
     entry.insert("hasTrustDialogAccepted".into(), serde_json::Value::Bool(true));
     if !approved {
@@ -148,19 +181,7 @@ fn trust_in(config: &Path, dir: &Path) -> bool {
 
     // Pretty, because that is how Claude Code writes it: a compact rewrite
     // would flatten a 2,500-line file the user may well read themselves.
-    let Ok(out) = serde_json::to_string_pretty(&root) else {
-        return false;
-    };
-    // Same directory, so the rename is atomic on the same filesystem.
-    let tmp = config.with_extension("json.villain-tmp");
-    if std::fs::write(&tmp, out).is_err() {
-        return false;
-    }
-    if std::fs::rename(&tmp, config).is_err() {
-        let _ = std::fs::remove_file(&tmp);
-        return false;
-    }
-    true
+    serde_json::to_string_pretty(&root).ok()
 }
 
 /// The shell command every hook runs: post the event it was handed to the
@@ -319,7 +340,7 @@ pub fn prepare_launch(
     match integration {
         Integration::Claude => {
             let path = dir.join("claude-hooks.json");
-            std::fs::write(&path, json(claude_hook_settings()))?;
+            replace_file(&path, &json(claude_hook_settings()), None)?;
             launch.args = vec!["--settings".into(), path.to_string_lossy().into()];
             if let Some(mcp) = mcp {
                 // Always the flag, even where a `.mcp.json` sits in the
@@ -335,8 +356,8 @@ pub fn prepare_launch(
             // somewhere else.
             let plugin = dir.join("copilot-plugin");
             std::fs::create_dir_all(&plugin)?;
-            std::fs::write(plugin.join("plugin.json"), json(serde_json::json!({ "name": crate::mcp::SERVER_NAME })))?;
-            std::fs::write(plugin.join("hooks.json"), json(copilot_hooks()))?;
+            replace_file(&plugin.join("plugin.json"), &json(serde_json::json!({ "name": crate::mcp::SERVER_NAME })), None)?;
+            replace_file(&plugin.join("hooks.json"), &json(copilot_hooks()), None)?;
             launch.args = vec!["--plugin-dir".into(), plugin.to_string_lossy().into()];
             if let Some(mcp) = mcp {
                 // It reads a workspace `.mcp.json` only at a repository's
@@ -347,7 +368,7 @@ pub fn prepare_launch(
         }
         Integration::Opencode => {
             let path = dir.join("opencode-plugin.js");
-            std::fs::write(&path, OPENCODE_PLUGIN)?;
+            replace_file(&path, OPENCODE_PLUGIN.as_bytes(), None)?;
             let spec = format!("file://{}", path.to_string_lossy());
             launch.env = vec![(
                 "OPENCODE_CONFIG_CONTENT".into(),
@@ -386,7 +407,40 @@ fn gemini_project_server(folder: &Path, url: &str) -> std::io::Result<()> {
         );
     }
     std::fs::create_dir_all(folder.join(".gemini"))?;
-    std::fs::write(&path, serde_json::to_vec_pretty(&root).unwrap_or_default())
+    replace_file(&path, &serde_json::to_vec_pretty(&root).unwrap_or_default(), None)
+}
+
+/// Put `bytes` at `path` whole, or leave it be if it already holds them.
+///
+/// These files are shared by every pane, and were truncated and rewritten on
+/// every launch: a Claude still starting beside the restore of eleven more
+/// could read an empty `--settings` — no hooks, so a state read from output,
+/// which for Claude is "working" forever. A reader now sees the old file or
+/// the new one. `mode` is the new file's from the moment it exists.
+pub(crate) fn replace_file(path: &Path, bytes: &[u8], mode: Option<u32>) -> std::io::Result<()> {
+    if std::fs::read(path).is_ok_and(|now| now == bytes) {
+        return Ok(());
+    }
+    let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let tmp = path.with_file_name(format!(".{name}.{}.tmp", uuid::Uuid::new_v4()));
+    let written = (|| {
+        use std::io::Write;
+        let mut open = std::fs::OpenOptions::new();
+        open.write(true).create_new(true);
+        #[cfg(unix)]
+        if let Some(mode) = mode {
+            use std::os::unix::fs::OpenOptionsExt;
+            open.mode(mode);
+        }
+        #[cfg(not(unix))]
+        let _ = mode;
+        open.open(&tmp)?.write_all(bytes)?;
+        std::fs::rename(&tmp, path)
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    written
 }
 
 /// The user's `OPENCODE_CONFIG_CONTENT` with the plugin, and the app's server
@@ -469,6 +523,10 @@ pub fn claude_hook_activity(
     match event {
         // Started or resumed: sitting at its prompt with nothing new to show.
         "SessionStart" => current.is_none().then_some(Activity::Idle),
+        // A tool finishing beside a question still open — parallel tools, a
+        // subagent — is not the question answered. The key that answers it
+        // is: `typed` turns asking into working.
+        "PostToolUse" | "PostToolUseFailure" if current == Some(Activity::Asking) => None,
         "UserPromptSubmit" | "PostToolUse" | "PostToolUseFailure" => Some(Activity::Working),
         "Stop" => Some(Activity::Done),
         "Notification" => {
@@ -770,6 +828,27 @@ mod tests {
     }
 
     #[test]
+    fn a_linked_private_config_stays_linked_and_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = sandbox("link");
+        let real = dir.join("dotfiles-claude.json");
+        std::fs::write(&real, r#"{"projects":{}}"#).unwrap();
+        std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let config = dir.join(".claude.json");
+        std::os::unix::fs::symlink(&real, &config).unwrap();
+
+        assert!(trust_in(&config, Path::new("/work")));
+        assert!(std::fs::symlink_metadata(&config).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::metadata(&real).unwrap().permissions().mode() & 0o777, 0o600);
+        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&real).unwrap()).unwrap();
+        assert_eq!(v["projects"]["/work"]["hasTrustDialogAccepted"], true);
+        // Nothing of the app's is left beside it.
+        let left: Vec<_> = std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).collect();
+        assert_eq!(left.len(), 2, "{left:?}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn only_the_apps_own_server_is_approved_beside_what_was() {
         let dir = sandbox("approve");
         let config = dir.join(".claude.json");
@@ -828,6 +907,9 @@ mod tests {
         let idle = j!({"hook_event_name": "Notification", "notification_type": "idle_prompt", "message": "Claude is waiting for your input"});
         assert_eq!(ev(idle.clone(), Some(Activity::Working)), Some(Activity::Done));
         assert_eq!(ev(idle, Some(Activity::Idle)), None);
+        // Another tool finishing while a question is open does not answer it.
+        assert_eq!(ev(j!({"hook_event_name": "PostToolUse"}), Some(Activity::Asking)), None);
+        assert_eq!(ev(j!({"hook_event_name": "PostToolUse"}), Some(Activity::Working)), Some(Activity::Working));
         assert_eq!(ev(j!({"hook_event_name": "SubagentStop"}), None), None);
         assert_eq!(ev(j!({}), None), None);
     }

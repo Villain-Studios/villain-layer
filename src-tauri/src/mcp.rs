@@ -169,9 +169,8 @@ pub(crate) fn take_hook(ptys: &crate::pty::PtyManager, pane: &str, payload: &Val
     else {
         return false;
     };
-    let now = ptys.reported(pane);
-    crate::agents::hook_activity(def.integration, payload, now)
-        .is_some_and(|activity| matches!(ptys.report(pane, activity), Ok(true)))
+    ptys.report_with(pane, |now| crate::agents::hook_activity(def.integration, payload, now))
+        .unwrap_or(false)
 }
 
 fn bearer_ok(headers: &HeaderMap, token: &str) -> bool {
@@ -887,20 +886,7 @@ pub fn write_config(dir: &std::path::Path) -> Result<()> {
     let path = dir.join(".mcp.json");
     // Created 0600 rather than chmodded after: written with the default mode
     // first, the token was readable by anyone on the machine until the chmod.
-    #[cfg(unix)]
-    {
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&path)?;
-        file.write_all(&serde_json::to_vec_pretty(&config)?)?;
-    }
-    #[cfg(not(unix))]
-    std::fs::write(&path, serde_json::to_vec_pretty(&config)?)?;
+    crate::agents::replace_file(&path, &serde_json::to_vec_pretty(&config)?, Some(0o600))?;
     // `mode` applies only when the file is created; one left from an older
     // run keeps whatever it had until this.
     lock_config_perms(&path)?;

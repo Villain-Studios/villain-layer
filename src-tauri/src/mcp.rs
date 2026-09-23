@@ -144,15 +144,30 @@ async fn hook(
     if !bearer_ok(&headers, &ctx.token) {
         return StatusCode::UNAUTHORIZED;
     }
-    let state = ctx.app.state::<AppState>();
-    let now = state.ptys.reported(&pane);
-    if let Some(activity) = crate::agents::claude_hook_activity(&body.0, now) {
-        if let Ok(true) = state.ptys.report(&pane, activity) {
-            use tauri::Emitter;
-            let _ = ctx.app.emit("pty:activity", &pane);
-        }
+    if take_hook(&ctx.app.state::<AppState>().ptys, &pane, &body.0) {
+        use tauri::Emitter;
+        let _ = ctx.app.emit("pty:activity", &pane);
     }
     StatusCode::NO_CONTENT
+}
+
+/// Read one hook post into its pane. True when the pane now reads
+/// differently.
+///
+/// Each CLI posts in its own shape; which one this is follows from what the
+/// pane is running, not from anything in the post.
+pub(crate) fn take_hook(ptys: &crate::pty::PtyManager, pane: &str, payload: &Value) -> bool {
+    let Some(def) = ptys
+        .info(pane)
+        .ok()
+        .and_then(|p| p.agent_id)
+        .and_then(|id| crate::agents::find(&id))
+    else {
+        return false;
+    };
+    let now = ptys.reported(pane);
+    crate::agents::hook_activity(def.reports, payload, now)
+        .is_some_and(|activity| matches!(ptys.report(pane, activity), Ok(true)))
 }
 
 fn bearer_ok(headers: &HeaderMap, token: &str) -> bool {
@@ -965,5 +980,79 @@ mod tests {
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         let _ = std::fs::remove_file(&path);
         assert_eq!(mode, 0o600);
+    }
+
+    fn agent(ptys: &crate::pty::PtyManager, agent_id: &str, script: &str, title: bool) -> String {
+        use crate::pty::{PaneKind, SpawnOptions};
+        let app = tauri::test::mock_app();
+        ptys.spawn(
+            app.handle(),
+            SpawnOptions {
+                task_id: "t".into(),
+                checkout_id: None,
+                cwd: std::env::temp_dir().to_string_lossy().to_string(),
+                kind: PaneKind::Agent,
+                title: agent_id.into(),
+                program: "/bin/sh".into(),
+                args: vec!["-c".into(), script.into()],
+                agent_id: Some(agent_id.into()),
+                rows: None,
+                cols: None,
+                initial_input: None,
+                prompted: true,
+                env: Vec::new(),
+                title_activity: title.then_some(crate::agents::gemini_title_activity as fn(&str) -> _),
+            },
+        )
+        .unwrap()
+        .id
+    }
+
+    #[test]
+    fn a_hook_post_moves_its_pane_by_what_that_pane_runs() {
+        use crate::pty::Activity;
+        let ptys = crate::pty::PtyManager::default();
+        let claude = agent(&ptys, "claude", "sleep 5", false);
+        let opencode = agent(&ptys, "opencode", "sleep 5", false);
+        let aider = agent(&ptys, "aider", "sleep 5", false);
+        let activity = |id: &str| ptys.info(id).unwrap().activity;
+
+        // Just started, it already reads as working from its own output: said
+        // again by a hook, nothing changes and nothing needs redrawing.
+        assert!(!take_hook(&ptys, &claude, &json!({"hook_event_name": "UserPromptSubmit"})));
+        assert_eq!(activity(&claude), Activity::Working);
+        assert!(take_hook(&ptys, &claude, &json!({"hook_event_name": "Notification", "notification_type": "permission_prompt"})));
+        assert_eq!(activity(&claude), Activity::Asking);
+        assert!(take_hook(&ptys, &claude, &json!({"hook_event_name": "Stop"})));
+        assert_eq!(activity(&claude), Activity::Done);
+
+        // The same post means nothing from a CLI that posts in another shape.
+        assert!(!take_hook(&ptys, &opencode, &json!({"hook_event_name": "Stop"})));
+        assert!(take_hook(&ptys, &opencode, &json!({"state": "asking"})));
+        assert_eq!(activity(&opencode), Activity::Asking);
+        // Nor from one that does not report, or a pane that is not there.
+        assert!(!take_hook(&ptys, &aider, &json!({"hook_event_name": "Stop"})));
+        assert!(!take_hook(&ptys, "no-such-pane", &json!({"hook_event_name": "Stop"})));
+        for id in [claude, opencode, aider] {
+            let _ = ptys.close(&id);
+        }
+    }
+
+    #[test]
+    fn a_title_the_agent_sets_is_read_as_it_is_printed() {
+        use crate::pty::Activity;
+        let ptys = crate::pty::PtyManager::default();
+        let id = agent(
+            &ptys,
+            "gemini",
+            r"printf '\033]0;\342\234\213  Action Required (x)\007'; sleep 5",
+            true,
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while ptys.info(&id).unwrap().activity != Activity::Asking {
+            assert!(std::time::Instant::now() < deadline, "the title was never read");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let _ = ptys.close(&id);
     }
 }

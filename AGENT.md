@@ -104,10 +104,11 @@ live process kills it and takes its agents with it, and the same is true of
   config key it does not know but refuses an option it does not.
 - **An agent's output does not say whether it is working.** Claude Code
   repaints its prompt every few seconds while it sits idle, so "printed
-  recently" read a two-day-idle agent as working. Claude Code is started with
-  hooks (`agents::claude_hook_settings`, via `--settings`) that post to
-  `/hook/<pane>` on the app's server, and `pty::PaneMeta::state` believes
-  those over output. Output only decides for CLIs with no hooks, and not in
+  recently" read a two-day-idle agent as working. Each CLI that can say for
+  itself has a `Reports` in `agents.rs` — hooks, a plugin, or its window
+  title — set up per launch by `agents::prepare_reporting`, and posts land on
+  `/hook/<pane>` on the app's server. `pty::PaneMeta::state` believes those
+  over output; output only decides for CLIs that report nothing, and not in
   the moment after the app sent the pane something.
 - **A rebased branch is pushed with a lease, never `--force`.** The commit the
   remote branch was at is recorded on the checkout (`push_lease`) when it

@@ -102,13 +102,31 @@ Work flows Tickets → Work: an issue becomes a task.
 
 Every agent reads as *working*, *needs you* (asking permission, or finished and
 not yet looked at), or *idle* (finished and seen, or never given anything).
-Claude Code says which itself: it is started with hooks that post each prompt
-taken, tool run, permission asked and turn finished to the app's own server.
-Its output cannot be used for this — it repaints its prompt every few seconds
-while doing nothing, so an agent idle for two days read as working. Agents
-without hooks are judged by output, ignoring what arrives just after the app
-sent them something (a key's echo, the repaint after a resize or a focus
-change), and 45 seconds of real silence reads as finished.
+Output cannot tell these apart — Claude Code repaints its prompt every few
+seconds while doing nothing, so an agent idle for two days read as working — so
+where a CLI will say for itself, it is asked to, for that launch only and
+without touching the user's own configuration:
+
+| CLI | How it reports | Added to the launch |
+|---|---|---|
+| Claude Code | hooks: prompt, tool run, permission, turn finished | `--settings <app dir>/claude-hooks.json` |
+| GitHub Copilot CLI | the same hooks, as a plugin | `--plugin-dir <app dir>/copilot-plugin` |
+| OpenCode | a plugin forwarding its event bus | `OPENCODE_CONFIG_CONTENT` with the plugin added to the user's own |
+| Gemini CLI | its window title (`◇ Ready`, `✋ Action Required`, `✦ …`) | nothing |
+
+The hooks post to `/hook/<pane>` on the app's server, finding it from
+`VILLAIN_HOOK_URL`, `VILLAIN_HOOK_TOKEN` and `VILLAIN_PANE` in the pane's
+environment — so the same CLI started anywhere else posts nothing. Pressing a
+key on a pane that is asking counts as answering it, since nothing reports the
+moment a permission is given; Esc or ^C on a working one ends the turn, which
+Claude Code's hooks do not report either.
+
+The rest are judged by output, ignoring what arrives just after the app sent
+them something (a key's echo, the repaint after a resize or a focus change),
+with 45 seconds of real silence read as finished. Cursor's CLI takes hooks only
+from fixed files in the home folder and the repository and has none for
+asking; Codex, Aider and Amp can report too, but were not installed to check
+against.
 
 Finished stops counting once the pane has been on screen. What needs you is
 counted on the Work tab, on *All agents*, and on the dock icon — the same
@@ -427,6 +445,9 @@ how it takes an opening prompt:
 - `PromptMode::Positional` — `agent "do the thing"`
 - `PromptMode::Flag("-i")` — `agent -i "do the thing"`
 - `PromptMode::Typed` — no prompt argument; it gets typed into the TUI after start-up
+
+and `reports`, which is how it says whether it is working, asking or done —
+`Reports::Output` if it has no way to, and it is judged by its output.
 
 Agents not found on your PATH are shown greyed out in Settings → General.
 

@@ -89,6 +89,33 @@ const LIMIT_MARKERS: &[&str] = &[
     "upgrade to continue",
 ];
 
+/// How far back to look for the window title a CLI last set.
+const TITLE_TAIL: usize = 2048;
+
+/// The last whole window title set in `tail` (OSC 0 or 2), if any.
+///
+/// Read from the tail rather than the chunk just read: a title can straddle
+/// two reads, and then neither chunk holds all of it.
+fn last_title(tail: &[u8]) -> Option<String> {
+    let mut found = None;
+    let mut at = 0;
+    while let Some(off) = tail[at..].windows(2).position(|w| w == b"\x1b]") {
+        let start = at + off + 2;
+        let body = &tail[start..];
+        let Some(rest) = body.strip_prefix(b"0;").or_else(|| body.strip_prefix(b"2;")) else {
+            at = start;
+            continue;
+        };
+        // Ended by BEL or by ST; one with no end yet is still arriving.
+        let Some(end) = rest.iter().position(|&b| b == 0x07 || b == 0x1b) else {
+            break;
+        };
+        found = Some(String::from_utf8_lossy(&rest[..end]).to_string());
+        at = start + 2 + end;
+    }
+    found
+}
+
 /// Drop ANSI escapes so terminal output can be read as text.
 pub fn strip_ansi(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
@@ -252,6 +279,8 @@ struct PaneMeta {
     prompted: bool,
     /// When the pane was last on screen.
     seen_at: DateTime<Utc>,
+    /// The window title last read, for a CLI that reports through it.
+    title: String,
 }
 
 impl PaneMeta {
@@ -284,6 +313,40 @@ impl PaneMeta {
         let mut info = self.info.clone();
         (info.activity, info.activity_since) = self.state(watched, Utc::now());
         info
+    }
+
+    /// Take the agent's word for what it is doing. Finished before it was
+    /// ever given anything — a CLI's title saying "ready" as it starts — is
+    /// only idle.
+    fn take_report(&mut self, activity: Activity) {
+        let activity = if activity == Activity::Done && !self.prompted {
+            Activity::Idle
+        } else {
+            activity
+        };
+        self.reported = Some((activity, Utc::now()));
+    }
+
+    /// Keys from the person at the terminal, which say something the agent's
+    /// own reports leave out.
+    fn typed(&mut self, data: &str) {
+        self.sent(data);
+        let interrupt = matches!(data, "\u{1b}" | "\u{3}");
+        match self.reported {
+            // Claude Code runs no hook when a turn is interrupted, so a turn
+            // stopped with Esc or ^C would read as working for good.
+            Some((Activity::Working, _)) if interrupt => {
+                self.reported = Some((Activity::Idle, Utc::now()));
+            }
+            // Answered. Nothing reports the moment a permission is given — the
+            // next hook is the tool finishing — so a long command, once
+            // allowed, read as still asking until it was done. Escape
+            // sequences are the terminal talking (focus, a mouse), not a reply.
+            Some((Activity::Asking, _)) if !interrupt && !data.starts_with('\u{1b}') => {
+                self.reported = Some((Activity::Working, Utc::now()));
+            }
+            _ => {}
+        }
     }
 
     fn sent(&mut self, data: &str) {
@@ -442,6 +505,9 @@ pub struct SpawnOptions {
     /// id is always there too, as `VILLAIN_PANE`.
     #[serde(default)]
     pub env: Vec<(String, String)>,
+    /// For a CLI that keeps its window title on its state: what a title says.
+    #[serde(skip)]
+    pub title_activity: Option<fn(&str) -> Option<Activity>>,
 }
 
 /// The most panes that may exist at once.
@@ -695,6 +761,7 @@ impl PtyManager {
                 last_input: Instant::now(),
                 prompted: opts.prompted || opts.initial_input.is_some(),
                 seen_at: now,
+                title: String::new(),
             }),
             pid,
             master: Mutex::new(pair.master),
@@ -720,6 +787,7 @@ impl PtyManager {
             let pane = pane.clone();
             let id = id.clone();
             let mut reader = reader;
+            let title_activity = opts.title_activity;
             std::thread::spawn(move || {
                 let mut buf = [0u8; 8192];
                 let mut scratch = Vec::with_capacity(NOTICE_TAIL);
@@ -733,12 +801,19 @@ impl PtyManager {
                             // the last read before a quiet spell, and the
                             // trust question is exactly the output that is
                             // followed by one.
-                            let found = {
+                            // Both read under the output lock, and before the
+                            // meta one: `attach` takes them in that order, and
+                            // the other way round the two could each hold one.
+                            let (found, title) = {
                                 let mut out = pane.output.lock();
                                 out.push(&buf[..n]);
                                 let tail = &out.scrollback
                                     [out.scrollback.len().saturating_sub(NOTICE_TAIL)..];
-                                notice_in(tail, &mut scratch)
+                                let found = notice_in(tail, &mut scratch);
+                                let title = title_activity.and_then(|_| {
+                                    last_title(&out.scrollback[out.scrollback.len().saturating_sub(TITLE_TAIL)..])
+                                });
+                                (found, title)
                             };
                             {
                                 let mut meta = pane.meta.lock();
@@ -746,6 +821,15 @@ impl PtyManager {
                                 meta.info.last_output_at = now;
                                 if meta.last_input.elapsed() > ANSWER_WINDOW {
                                     meta.last_work = now;
+                                }
+                                if let (Some(read), Some(title)) = (title_activity, title) {
+                                    if title != meta.title {
+                                        if let Some(activity) = read(&title) {
+                                            meta.take_report(activity);
+                                            let _ = app.emit("pty:activity", &id);
+                                        }
+                                        meta.title = title;
+                                    }
                                 }
                                 // A trust prompt clears once answered, so
                                 // let it come and go; a usage limit sticks.
@@ -827,17 +911,7 @@ impl PtyManager {
     pub fn write(&self, id: &str, data: &str) -> Result<()> {
         let pane = self.get(id)?;
         *pane.typed.lock() = Some(Instant::now());
-        {
-            let mut meta = pane.meta.lock();
-            meta.sent(data);
-            // Claude Code runs no hook when a turn is interrupted, so a turn
-            // stopped with Esc or ^C would read as working for good.
-            if matches!(data, "\u{1b}" | "\u{3}")
-                && matches!(meta.reported, Some((Activity::Working, _)))
-            {
-                meta.reported = Some((Activity::Idle, Utc::now()));
-            }
-        }
+        pane.meta.lock().typed(data);
         pane.input
             .send(data.as_bytes().to_vec())
             .map_err(|_| Error::Pty("the terminal has closed".into()))
@@ -928,7 +1002,7 @@ impl PtyManager {
         let watched = pane.watched.load(Ordering::Acquire);
         let mut meta = pane.meta.lock();
         let before = meta.activity(watched, Utc::now());
-        meta.reported = Some((activity, Utc::now()));
+        meta.take_report(activity);
         Ok(meta.activity(watched, Utc::now()) != before)
     }
 
@@ -1131,6 +1205,7 @@ mod tests {
             last_input: Instant::now(),
             prompted,
             seen_at: now - chrono::TimeDelta::seconds(3600),
+            title: String::new(),
         }
     }
 
@@ -1175,6 +1250,49 @@ mod tests {
         let mut m = meta(true, 600);
         m.info.running = false;
         assert_eq!(m.activity(false, now), Activity::Idle);
+    }
+
+    #[test]
+    fn the_last_whole_title_is_the_one_read() {
+        let t = |b: &[u8]| last_title(b);
+        assert_eq!(t(b"\x1b]0;\xe2\x97\x87  Ready (api)\x07drawn"), Some("◇  Ready (api)".into()));
+        // Two in one read: the later wins. ST ends one as well as BEL does.
+        assert_eq!(
+            t(b"\x1b]2;one\x07text\x1b]0;two\x1b\\more"),
+            Some("two".into())
+        );
+        // Still arriving: the whole one before it stands.
+        assert_eq!(t(b"\x1b]0;done\x07\x1b]0;half"), Some("done".into()));
+        // Other OSC sequences are not titles.
+        assert_eq!(t(b"\x1b]10;?\x1b\\\x1b]9;hello\x07"), None);
+        assert_eq!(t(b"plain"), None);
+    }
+
+    #[test]
+    fn a_ready_title_before_any_prompt_is_idle_not_done() {
+        let mut m = meta(false, 0);
+        m.take_report(Activity::Done);
+        assert_eq!(m.reported.map(|r| r.0), Some(Activity::Idle));
+        m.prompted = true;
+        m.take_report(Activity::Done);
+        assert_eq!(m.reported.map(|r| r.0), Some(Activity::Done));
+    }
+
+    #[test]
+    fn answering_is_working_and_an_interrupt_is_not() {
+        let now = Utc::now();
+        let mut m = meta(true, 0);
+        m.reported = Some((Activity::Asking, now));
+        // The terminal reporting focus is not an answer.
+        m.typed("\u{1b}[I");
+        assert_eq!(m.reported.map(|r| r.0), Some(Activity::Asking));
+        m.typed("1");
+        assert_eq!(m.reported.map(|r| r.0), Some(Activity::Working));
+        m.typed("\u{1b}");
+        assert_eq!(m.reported.map(|r| r.0), Some(Activity::Idle));
+        // Typing at an idle prompt changes nothing until the agent says so.
+        m.typed("fix the tests");
+        assert_eq!(m.reported.map(|r| r.0), Some(Activity::Idle));
     }
 
     #[test]
@@ -1323,6 +1441,7 @@ mod tests {
                         initial_input: None,
                         prompted: false,
                         env: Vec::new(),
+                        title_activity: None,
                     },
                 )
                 .unwrap();
@@ -1381,6 +1500,7 @@ mod tests {
                     initial_input: None,
                     prompted: false,
                     env: Vec::new(),
+                    title_activity: None,
                 },
             )
             .unwrap()
@@ -1458,6 +1578,7 @@ mod tests {
                             initial_input: None,
                             prompted: false,
                             env: Vec::new(),
+                            title_activity: None,
                         },
                     );
                     if spawned.is_ok() {

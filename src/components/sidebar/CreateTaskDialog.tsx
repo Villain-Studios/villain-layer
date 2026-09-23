@@ -8,6 +8,7 @@ import { read, write } from "../../lib/persist";
 import { IssueTypeIcon, typeMap } from "../IssueType";
 import { creatableTypes, preferredCreatable } from "../task-forms/creatable";
 import { OptimizeDescription } from "../tickets/OptimizeDescription";
+import { RequiredFieldPickers, useRequiredFields } from "../tickets/RequiredFields";
 
 export function CreateTaskDialog({
   projects,
@@ -66,6 +67,17 @@ export function CreateTaskDialog({
   const epicLabel = jiraParent
     ? epicOptions.find((o) => o.startsWith(`${jiraParent} `)) ?? jiraParent
     : "";
+
+  // What this project insists on. Without it, a project that requires a
+  // component refused every ticket filed from here with a bare 400, though
+  // File issue handled the same project.
+  const typeId = creatable.find((t) => t.name === jiraType)?.id;
+  const rf = useRequiredFields(
+    withJira ? jiraProject.trim() : "",
+    typeId,
+    ["summary", "description", "issuetype", "project", "reporter", ...(jiraParent ? ["parent"] : [])],
+  );
+  const descriptionMissing = rf.descriptionRequired && !jiraDesc.trim();
 
   // Default to whatever the site calls a plain issue, without assuming it is
   // named "Task" — it often is not.
@@ -159,6 +171,7 @@ export function CreateTaskDialog({
             project_ids: picked,
             branch_suffix: branch.trim() || null,
             base: baseBranch,
+            fields: rf.fields(),
           })
         : await api.createTask({
             name: name.trim(),
@@ -196,7 +209,14 @@ export function CreateTaskDialog({
             className="btn btn-primary"
             disabled={
               busy || !name.trim() || picked.length === 0 ||
-              (withJira && (!jiraType || !jiraProject.trim()))
+              (withJira && (!jiraType || !jiraProject.trim() || rf.missing.length > 0 || descriptionMissing))
+            }
+            title={
+              withJira && rf.missing.length > 0
+                ? `This project requires ${rf.missing.map((f) => f.name).join(", ")}`
+                : withJira && descriptionMissing
+                  ? "This project requires a description"
+                  : undefined
             }
             onClick={() => void createTask()}
           >
@@ -282,7 +302,16 @@ export function CreateTaskDialog({
             />
           </Field>
 
-          <Field label="Description" hint="Optional. Becomes the ticket body and the agent's briefing.">
+          <RequiredFieldPickers rf={rf} />
+
+          <Field
+            label="Description"
+            hint={
+              rf.descriptionRequired
+                ? "Required by this project. Becomes the ticket body and the agent's briefing."
+                : "Optional. Becomes the ticket body and the agent's briefing."
+            }
+          >
             <textarea
               rows={4}
               value={jiraDesc}

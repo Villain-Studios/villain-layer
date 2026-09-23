@@ -64,8 +64,10 @@ export const api = {
   }) => invoke<Task>("create_task", { req }),
   deleteTask: (id: string, force = false) =>
     invoke<RepoResult[]>("delete_task", { id, force }),
-  /** Worktrees, then local branches, then the ticket — each only if the last went. */
-  /** `landed`: each checkout's merged PR head. A branch it does not contain is kept. */
+  /**
+   * Worktrees, then local branches, then the ticket. `landed` is each
+   * checkout's merged PR head; a branch it does not contain is kept.
+   */
   finishTask: (taskId: string, transitionId: string | null, landed: Record<string, string>) =>
     invoke<Finished>("finish_task", { taskId, transitionId, landed }),
   addCheckout: (taskId: string, projectId: string) =>
@@ -198,6 +200,8 @@ export const api = {
     project_ids: string[];
     branch_suffix: string | null;
     base?: string | null;
+    /** What the project requires beyond the above, shaped as Jira wants it. */
+    fields?: Record<string, unknown> | null;
   }) => invoke<Started>("jira_create_task", { req }),
   jiraStartWork: (
     key: string, projectIds: string[],

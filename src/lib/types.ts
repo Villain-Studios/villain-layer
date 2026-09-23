@@ -75,9 +75,10 @@ export interface PaneInfo {
   /** Something is waiting on you: "usage_limit" or "trust_prompt". */
   notice: string | null;
   /**
-   * What the agent is doing: from its own hooks where it reports itself
-   * (Claude Code), otherwise guessed from output. "done" is finished and not
-   * yet looked at; once seen it is "idle".
+   * What the agent is doing: from its own reports — hooks, a plugin or its
+   * window title, for every CLI offered — and guessed from output only when
+   * those stop arriving. "done" is finished and not yet looked at; once seen
+   * it is "idle".
    */
   activity: "working" | "asking" | "done" | "idle";
   /** Since when. Not `last_output_at`: an idle Claude Code repaints every few seconds. */

@@ -59,6 +59,9 @@ live process kills it and takes its agents with it, and the same is true of
 | `src-tauri/src/pty.rs` | panes, the PTY, output throttling, limit detection |
 | `src-tauri/src/git.rs` | the only place that shells out to `git` |
 | `src-tauri/src/agents.rs` | the agent CLI catalogue — add one here |
+| `src-tauri/src/mcp.rs` | the app's own MCP server, and `/hook` for agents' reports |
+| `src-tauri/src/attention.rs` | agents that need you: the dock count and their banners |
+| `src-tauri/src/news.rs` | new review requests and tickets, for banners |
 | `src-tauri/src/integrations/` | Jira, GitHub, Slack clients |
 | `src/store.ts` | all frontend state; also the derived helpers |
 | `src/components/ui.tsx` | `Modal`, `Field`, `Combo`, `Confirm`, `ContextMenu` |
@@ -99,17 +102,27 @@ live process kills it and takes its agents with it, and the same is true of
   reached (a merge abandoned half way) is passed over.
 - **The user's git config applies to every git the app runs.** `merge.ff =
   only` made every update from base fail with "Not possible to fast-forward"
-  until the merge said `--ff` itself. Anything the app relies on git doing,
-  it spells out — `-c` for what has no flag, since an older git ignores a
-  config key it does not know but refuses an option it does not.
+  until the merge said `--ff` itself. `status.showUntrackedFiles = no` made a
+  worktree holding only new files read as clean — to our status and to git's
+  own check in `worktree remove` — and it was removed with them. A global
+  `diff.external` answered the Diff view with no hunks. Anything the app
+  relies on git doing, it spells out — `-c` for what has no flag, since an
+  older git ignores a config key it does not know but refuses an option it
+  does not.
 - **An agent's output does not say whether it is working.** Claude Code
   repaints its prompt every few seconds while it sits idle, so "printed
   recently" read a two-day-idle agent as working. Each CLI that can say for
   itself has an `Integration` in `agents.rs` — hooks, a plugin, or its window
   title — set up per launch by `agents::prepare_launch`, and posts land on
-  `/hook/<pane>` on the app's server. `pty::PaneMeta::state` believes those
-  over output; output only decides for CLIs that report nothing, and not in
-  the moment after the app sent the pane something.
+  `/hook/<pane>` on the app's server, with a token only `/hook` accepts: the
+  shell puts it on curl's command line, where `ps` shows it.
+  `pty::PaneMeta::state` believes those over output; output only decides for
+  CLIs that report nothing, and not in the moment after the app sent the
+  pane something.
+- **portable-pty's `ChildKiller::kill` is a SIGHUP to the leader.** Not
+  SIGKILL: an agent ignoring SIGTERM ignored it too, and ran on after its
+  pane was taken off the list. `PtyManager::force_kill` is the one that
+  insists.
 - **A rebased branch is pushed with a lease, never `--force`.** The commit the
   remote branch was at is recorded on the checkout (`push_lease`) when it
   rebases and cleared by the next push. Any new push site goes through

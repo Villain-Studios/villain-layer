@@ -195,6 +195,9 @@ mod tests {
             derive_branch(None, None, None, "fix checkout rounding"),
             "villain/fix-checkout-rounding",
         );
+        // Nothing to slug still gives a branch git will make.
+        let b = derive_branch(None, None, None, "Корзина");
+        assert!(b.starts_with("villain/task-") && b.len() > "villain/task-".len(), "{b}");
     }
 
     #[test]

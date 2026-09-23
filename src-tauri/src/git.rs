@@ -186,6 +186,15 @@ pub fn add_worktree(
     branch: &str,
     base: &str,
 ) -> Result<String> {
+    // Both names reach git where it still reads options: `fetch origin
+    // <base>` took `--upload-pack=<command>` as one and ran the command. The
+    // base can come from an agent through the MCP server, so this is the
+    // door, not a typo check.
+    for (what, name) in [("branch", branch), ("base", base)] {
+        if name.trim().is_empty() || name.starts_with('-') {
+            return Err(Error::Git(format!("{name:?} is not a usable {what} name")));
+        }
+    }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -207,6 +216,11 @@ pub fn add_worktree(
             .map(|s| s.trim().to_string())
             .unwrap_or_default())
     }
+}
+
+/// Delete a local branch, for undoing one this app just created.
+pub fn delete_branch(repo: &Path, branch: &str) -> Result<()> {
+    run(repo, &["branch", "-D", "--", branch]).map(|_| ())
 }
 
 pub fn remove_worktree(repo: &Path, path: &str, force: bool) -> Result<()> {

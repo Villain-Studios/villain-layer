@@ -308,7 +308,14 @@ pub(crate) fn derive_branch(
             Some(suffix) => format!("{key}-{suffix}"),
             None => key.to_string(),
         },
-        None => format!("villain/{}", slugify(name)),
+        // A name with nothing ASCII in it — "Корзина" — slugifies to nothing,
+        // and `villain/` is not a branch git will make.
+        None => match slugify(name) {
+            slug if slug.is_empty() => {
+                format!("villain/task-{}", &uuid::Uuid::new_v4().simple().to_string()[..8])
+            }
+            slug => format!("villain/{slug}"),
+        },
     }
 }
 
@@ -455,13 +462,27 @@ pub(crate) fn new_task(state: &AppState, req: NewTask) -> Result<Task> {
     let mut taken = Vec::new();
     let mut created = Vec::new();
     for project in &projects {
+        // Asked first so that unwinding knows which branches are ours to take
+        // back. Left behind, a retry with a different base found the branch
+        // already there, checked it out as it was, and measured it against
+        // the new base — the old base's commits then showed up in the diff.
+        let repo = PathBuf::from(&project.path);
+        let fresh_branch = !git::branch_exists(&repo, &task.branch);
         match create_checkout(state, &task, project, &mut taken, base) {
-            Ok(c) => created.push(c),
+            Ok(c) => created.push((c, fresh_branch)),
             Err(e) => {
-                // Leave nothing half-built: unwind the worktrees we just made.
-                for c in &created {
+                // Leave nothing half-built: unwind the worktrees we just made,
+                // and the branches with them.
+                if fresh_branch && git::branch_exists(&repo, &task.branch) {
+                    let _ = git::delete_branch(&repo, &task.branch);
+                }
+                for (c, fresh) in &created {
                     if let Ok(p) = state.config.project(&c.project_id) {
-                        let _ = git::remove_worktree(&PathBuf::from(&p.path), &c.path, true);
+                        let repo = PathBuf::from(&p.path);
+                        let _ = git::remove_worktree(&repo, &c.path, true);
+                        if *fresh {
+                            let _ = git::delete_branch(&repo, &task.branch);
+                        }
                     }
                 }
                 let task_id = task.id.clone();

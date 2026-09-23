@@ -13,7 +13,21 @@ use std::sync::OnceLock;
 
 use crate::error::Result;
 
+/// The release build's identifier, and the service its tokens were saved under.
 const SERVICE: &str = "dev.villain.layer";
+static SERVICE_NAME: OnceLock<String> = OnceLock::new();
+
+/// Keep tokens under this build's own identifier. The dev build has its own
+/// config for the same reason: sharing one keychain item with the installed
+/// app, each wrote back the whole bundle it had cached, and whichever wrote
+/// last erased a token the other had just saved.
+pub fn use_service(identifier: &str) {
+    let _ = SERVICE_NAME.set(identifier.to_string());
+}
+
+fn service() -> &'static str {
+    SERVICE_NAME.get().map(String::as_str).unwrap_or(SERVICE)
+}
 /// The single item holding every token, as a JSON object.
 const BUNDLE: &str = "tokens";
 
@@ -33,7 +47,7 @@ fn cache() -> &'static Mutex<Option<Bundle>> {
 }
 
 fn entry(account: &str) -> Result<keyring::Entry> {
-    Ok(keyring::Entry::new(SERVICE, account)?)
+    Ok(keyring::Entry::new(service(), account)?)
 }
 
 fn read_item(account: &str) -> Result<Option<String>> {

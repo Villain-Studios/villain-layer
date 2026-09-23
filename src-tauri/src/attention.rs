@@ -132,7 +132,7 @@ impl Watch {
 }
 
 /// Watch the panes for as long as the app runs.
-pub fn spawn(app: AppHandle) {
+pub fn spawn(app: AppHandle) -> std::io::Result<()> {
     std::thread::Builder::new()
         .name("attention".into())
         .spawn(move || {
@@ -162,7 +162,7 @@ pub fn spawn(app: AppHandle) {
                 }
             }
         })
-        .expect("spawn the attention watch");
+        .map(|_| ())
 }
 
 fn banners(state: &AppState, news: &[News]) -> Vec<(String, String, String)> {

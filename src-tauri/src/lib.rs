@@ -97,6 +97,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let handle = app.handle();
+            secrets::use_service(&app.config().identifier);
             let state = AppState {
                 config: ConfigStore::load(handle)?,
                 ptys: PtyManager::default(),
@@ -142,7 +143,7 @@ pub fn run() {
                 shellenv::user_env();
             });
 
-            attention::spawn(handle.clone());
+            attention::spawn(handle.clone())?;
             news::spawn(handle.clone());
 
             // Put back the panes that were open last time. Off the startup
@@ -229,6 +230,7 @@ pub fn run() {
             commands::open_in_cursor,
         ])
         .build(tauri::generate_context!())
+        // guard: allow panic — startup, before any agent exists; without a window there is nothing to run.
         .expect("error while building villain-layer")
         .run(|app, event| {
             // Quitting used to take the agents down with SIGHUP, so they never

@@ -18,8 +18,16 @@ use tauri::{AppHandle, Emitter};
 use crate::error::{Error, Result};
 use crate::shellenv;
 
-/// Roughly one screenful of history per pane, replayed when React remounts it.
+/// Roughly one screenful of history per pane, replayed when a terminal is
+/// first drawn or has fallen too far behind to catch up.
 const SCROLLBACK_LIMIT: usize = 256 * 1024;
+
+/// How far past the limit scrollback may run before it is trimmed.
+///
+/// Trimming on every read once full meant moving 256KB to append a few bytes,
+/// hundreds of times a second for an agent that is redrawing. Letting it
+/// overshoot makes the move rare.
+const SCROLLBACK_SLACK: usize = 64 * 1024;
 
 /// How long to hold PTY bytes before shipping them to the webview.
 ///
@@ -28,6 +36,18 @@ const SCROLLBACK_LIMIT: usize = 256 * 1024;
 /// queue until focus returns, which is why the app feels dead for a second
 /// after being idle. One frame of delay is invisible; the catch-up is not.
 const OUTPUT_COALESCE: Duration = Duration::from_millis(33);
+
+/// The wait before the first event after a quiet spell.
+///
+/// That event is usually the echo of a key. Holding it for a whole
+/// `OUTPUT_COALESCE` put 33ms between every keypress and its character, which
+/// is what made typing into a pane feel like typing over a network. A TUI
+/// frame arrives as several back-to-back reads, and this is still long enough
+/// for them to leave together rather than drawing the top half first.
+const OUTPUT_GATHER: Duration = Duration::from_millis(4);
+
+/// How much of the end of the output is searched for trust and limit phrases.
+const NOTICE_TAIL: usize = 4096;
 
 /// Phrases a CLI prints when it is waiting on the user rather than working.
 ///
@@ -97,6 +117,26 @@ pub fn strip_ansi(input: &str) -> String {
     out
 }
 
+/// Which notice, if any, the end of a pane's output is showing.
+///
+/// Runs on every read, so it avoids the obvious version — a lossy UTF-8
+/// decode and a Unicode lowercase of 4KB, two allocations a read. The phrases
+/// are all ASCII, so folding ASCII and blanking everything else keeps every
+/// match and lets `str::contains` do the searching. `scratch` is reused by
+/// the caller between reads.
+fn notice_in(tail: &[u8], scratch: &mut Vec<u8>) -> Option<&'static str> {
+    scratch.clear();
+    scratch.extend(tail.iter().map(|b| if b.is_ascii() { b.to_ascii_lowercase() } else { b' ' }));
+    let text = std::str::from_utf8(scratch).ok()?;
+    if LIMIT_MARKERS.iter().any(|m| text.contains(m)) {
+        Some("usage_limit")
+    } else if TRUST_MARKERS.iter().any(|m| text.contains(m)) {
+        Some("trust_prompt")
+    } else {
+        None
+    }
+}
+
 /// Terminal history as readable text: a TUI redraws constantly, so identical
 /// consecutive lines and blank runs are collapsed before taking the tail.
 pub fn readable_tail(raw: &str, max_lines: usize) -> String {
@@ -152,6 +192,70 @@ struct PaneMeta {
     info: PaneInfo,
 }
 
+/// What a pane has printed, and how much of it the webview has been sent.
+///
+/// Positions are counted from the pane's first byte, so the webview can say
+/// exactly how much it already has. That is what lets a terminal coming back
+/// on screen be sent only what it missed, instead of being wiped and
+/// repainted from the whole scrollback — which is the flash, and the pause,
+/// every time a task or a tab was switched.
+struct Output {
+    /// The most recent output, from `total - scrollback.len()` to `total`.
+    scrollback: Vec<u8>,
+    /// Every byte the process has printed.
+    total: u64,
+    /// Where the webview's feed has got to. Anything after this is waiting
+    /// for the next flush.
+    sent: u64,
+}
+
+impl Output {
+    fn start(&self) -> u64 {
+        self.total - self.scrollback.len() as u64
+    }
+
+    fn push(&mut self, chunk: &[u8]) {
+        self.scrollback.extend_from_slice(chunk);
+        self.total += chunk.len() as u64;
+        if self.scrollback.len() > SCROLLBACK_LIMIT + SCROLLBACK_SLACK {
+            let mut cut = self.scrollback.len() - SCROLLBACK_LIMIT;
+            // Start the kept history at a line, so a replay does not open on
+            // the back half of an escape sequence or of a UTF-8 character.
+            let look = &self.scrollback[cut..(cut + 4096).min(self.scrollback.len())];
+            if let Some(nl) = look.iter().position(|&b| b == b'\n') {
+                cut += nl + 1;
+            }
+            self.scrollback.drain(..cut);
+        }
+    }
+
+    /// Output since `from`, or all of it when `from` is no longer held.
+    fn since(&self, from: Option<u64>) -> (&[u8], bool) {
+        let start = self.start();
+        match from {
+            Some(f) if f >= start && f <= self.total => {
+                (&self.scrollback[(f - start) as usize..], false)
+            }
+            // A terminal that has never been drawn has nothing to clear.
+            // One that is too far behind has to start again.
+            other => (&self.scrollback, other.is_some()),
+        }
+    }
+
+    /// The output the feed has not carried yet, marking it carried.
+    fn take_unsent(&mut self) -> Option<(Vec<u8>, u64)> {
+        if self.sent >= self.total {
+            return None;
+        }
+        // More than the scrollback holds went by between flushes. Send what
+        // is left; the webview sees the gap and asks for a replay.
+        let from = self.sent.max(self.start());
+        let bytes = self.scrollback[(from - self.start()) as usize..].to_vec();
+        self.sent = self.total;
+        Some((bytes, self.total))
+    }
+}
+
 struct Pane {
     meta: Mutex<PaneMeta>,
     /// The child's pid, which is also its process-group id: portable-pty calls
@@ -159,18 +263,42 @@ struct Pane {
     /// reaches anything the agent spawned as well.
     pid: Option<u32>,
     master: Mutex<Box<dyn MasterPty + Send>>,
-    writer: Mutex<Box<dyn Write + Send>>,
+    /// Keystrokes on their way to the process, written by a thread of the
+    /// pane's own.
+    ///
+    /// `pty_write` runs on the main thread, and a PTY's input queue is small:
+    /// a paste into an agent that is busy and not reading filled it, and the
+    /// write then sat on the main thread until the agent read — with the
+    /// window frozen for all of it. A queue keeps the keys in order and the
+    /// wait somewhere nobody is looking.
+    input: std::sync::mpsc::Sender<Vec<u8>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
-    scrollback: Mutex<Vec<u8>>,
-    /// Bytes waiting to cross to the webview, coalesced so a TUI redraw is
-    /// one event instead of dozens.
-    pending: Mutex<Vec<u8>>,
+    output: Mutex<Output>,
     flush_scheduled: AtomicBool,
-    /// Shared with the manager: when false, output stays in scrollback only.
-    ui_awake: Arc<AtomicBool>,
-    /// Last time we scanned scrollback for trust/limit phrases. Throttled while
-    /// the UI sleeps so a background agent is not a constant UTF-8 walk.
-    notice_scan_at: Mutex<Instant>,
+    /// When the last event went out, so a burst is coalesced and a lone key
+    /// is not.
+    last_flush: Mutex<Instant>,
+    /// Whether a terminal is on screen for this pane.
+    ///
+    /// Output for panes nobody can see used to cross the bridge anyway, at
+    /// thirty events a second per busy agent, only to be dropped on the far
+    /// side. Now it waits in scrollback until the pane is shown and asks for
+    /// what it missed. This also covers the window being in the background:
+    /// the webview detaches everything then.
+    watched: AtomicBool,
+}
+
+/// What a terminal needs to be current: the output after the point it asked
+/// from, and whether it has to clear the screen first.
+#[derive(Debug, Clone, Serialize)]
+pub struct Catchup {
+    /// Base64, like the live feed.
+    pub data: String,
+    /// The position `data` runs up to, to ask from next time.
+    pub end: u64,
+    /// The point asked from is no longer held, so `data` is the whole
+    /// scrollback and has to be drawn on a clean terminal.
+    pub reset: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -204,26 +332,18 @@ pub struct SpawnOptions {
 /// instead of the machine.
 pub(crate) const MAX_PANES: usize = 32;
 
+#[derive(Default)]
 pub struct PtyManager {
     panes: Mutex<HashMap<String, Arc<Pane>>>,
-    /// False while the window is in the background. Agents keep running and
-    /// scrollback keeps filling; the webview is not fed until focus returns.
-    ui_awake: Arc<AtomicBool>,
-}
-
-impl Default for PtyManager {
-    fn default() -> Self {
-        Self {
-            panes: Mutex::new(HashMap::new()),
-            ui_awake: Arc::new(AtomicBool::new(true)),
-        }
-    }
 }
 
 #[derive(Serialize, Clone)]
 struct OutputEvent<'a> {
     pane_id: &'a str,
     data: String,
+    /// The position just past `data`, so the webview can tell a repeat from
+    /// a gap.
+    end: u64,
 }
 
 #[derive(Serialize, Clone)]
@@ -239,28 +359,18 @@ struct ExitEvent<'a> {
 }
 
 impl PtyManager {
-    /// Tell the PTY layer whether anyone is looking.
-    ///
-    /// Agents never stop. What stops is shipping their redraws across to a
-    /// webview that is not on screen — those events queue up and make coming
-    /// back feel like a hitch. Scrollback still records everything; the UI
-    /// replays it on focus.
-    pub fn set_ui_awake(&self, awake: bool) {
-        self.ui_awake.store(awake, Ordering::Release);
-        if !awake {
-            for pane in self.panes.lock().values() {
-                pane.pending.lock().clear();
-            }
-        }
+    fn emit_output(app: &AppHandle, id: &str, bytes: &[u8], end: u64) {
+        let data = base64::engine::general_purpose::STANDARD.encode(bytes);
+        let _ = app.emit("pty:output", OutputEvent { pane_id: id, data, end });
     }
 
     /// Queue a UI flush if one is not already waiting.
     ///
-    /// The reader keeps appending under `pending`; this just starts the timer
-    /// that will drain it. Doing the drain on a short sleep means a burst of
-    /// TUI redraws becomes one event instead of one per read.
+    /// The reader keeps appending to the output; this just starts the timer
+    /// that will ship it. Doing that on a short sleep means a burst of TUI
+    /// redraws becomes one event instead of one per read.
     fn schedule_flush(app: &AppHandle, pane: &Arc<Pane>, id: &str) {
-        if !pane.ui_awake.load(Ordering::Acquire) {
+        if !pane.watched.load(Ordering::Acquire) {
             return;
         }
         if pane
@@ -270,26 +380,32 @@ impl PtyManager {
         {
             return;
         }
+        let quiet = pane.last_flush.lock().elapsed();
+        let mut wait = if quiet >= OUTPUT_COALESCE {
+            OUTPUT_GATHER
+        } else {
+            OUTPUT_COALESCE - quiet
+        };
         let app = app.clone();
         let pane = pane.clone();
         let id = id.to_string();
         std::thread::spawn(move || {
             loop {
-                std::thread::sleep(OUTPUT_COALESCE);
-                if !pane.ui_awake.load(Ordering::Acquire) {
-                    pane.pending.lock().clear();
+                std::thread::sleep(wait);
+                wait = OUTPUT_COALESCE;
+                // Hidden since this was scheduled: what is waiting stays in
+                // scrollback, and showing the pane again collects it.
+                if !pane.watched.load(Ordering::Acquire) {
                     pane.flush_scheduled.store(false, Ordering::Release);
                     break;
                 }
-                let batch = {
-                    let mut pending = pane.pending.lock();
-                    std::mem::take(&mut *pending)
-                };
-                if batch.is_empty() {
+                let batch = pane.output.lock().take_unsent();
+                let Some((bytes, end)) = batch else {
                     pane.flush_scheduled.store(false, Ordering::Release);
                     // A write may have landed between the take and the clear.
                     // Re-arm rather than drop those bytes until the next read.
-                    if !pane.pending.lock().is_empty()
+                    let more = { let out = pane.output.lock(); out.sent < out.total };
+                    if more
                         && pane
                             .flush_scheduled
                             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -298,35 +414,21 @@ impl PtyManager {
                         continue;
                     }
                     break;
-                }
-                let data = base64::engine::general_purpose::STANDARD.encode(&batch);
-                let _ = app.emit(
-                    "pty:output",
-                    OutputEvent {
-                        pane_id: &id,
-                        data,
-                    },
-                );
+                };
+                Self::emit_output(&app, &id, &bytes, end);
+                *pane.last_flush.lock() = Instant::now();
             }
         });
     }
 
     fn flush_pending(app: &AppHandle, pane: &Pane, id: &str) {
-        let batch = {
-            let mut pending = pane.pending.lock();
-            std::mem::take(&mut *pending)
-        };
-        if batch.is_empty() {
+        if !pane.watched.load(Ordering::Acquire) {
             return;
         }
-        let data = base64::engine::general_purpose::STANDARD.encode(&batch);
-        let _ = app.emit(
-            "pty:output",
-            OutputEvent {
-                pane_id: id,
-                data,
-            },
-        );
+        let batch = pane.output.lock().take_unsent();
+        if let Some((bytes, end)) = batch {
+            Self::emit_output(app, id, &bytes, end);
+        }
     }
 
     pub fn spawn(&self, app: &AppHandle, opts: SpawnOptions) -> Result<PaneInfo> {
@@ -376,11 +478,21 @@ impl PtyManager {
             .master
             .try_clone_reader()
             .map_err(|e| Error::Pty(format!("clone reader: {e}")))?;
-        let writer = pair
+        let mut writer = pair
             .master
             .take_writer()
             .map_err(|e| Error::Pty(format!("take writer: {e}")))?;
         let killer = child.clone_killer();
+
+        let (input, keys) = std::sync::mpsc::channel::<Vec<u8>>();
+        // Ends when the pane is dropped and the sender with it. A failed write
+        // does not end it: dropping the writer sends the child EOF, which is
+        // not something a write error on one keystroke should decide.
+        std::thread::spawn(move || {
+            for bytes in keys {
+                let _ = writer.write_all(&bytes).and_then(|_| writer.flush());
+            }
+        });
 
         let id = uuid::Uuid::new_v4().to_string();
         let now = Utc::now();
@@ -404,13 +516,14 @@ impl PtyManager {
             meta: Mutex::new(PaneMeta { info: info.clone() }),
             pid,
             master: Mutex::new(pair.master),
-            writer: Mutex::new(writer),
+            input,
             killer: Mutex::new(killer),
-            scrollback: Mutex::new(Vec::new()),
-            pending: Mutex::new(Vec::new()),
+            output: Mutex::new(Output { scrollback: Vec::new(), total: 0, sent: 0 }),
             flush_scheduled: AtomicBool::new(false),
-            ui_awake: self.ui_awake.clone(),
-            notice_scan_at: Mutex::new(Instant::now()),
+            last_flush: Mutex::new(Instant::now()),
+            // Nothing is on screen until the webview attaches, and attaching
+            // collects whatever was printed before it did.
+            watched: AtomicBool::new(false),
         });
 
         self.panes.lock().insert(id.clone(), pane.clone());
@@ -423,74 +536,44 @@ impl PtyManager {
             let mut reader = reader;
             std::thread::spawn(move || {
                 let mut buf = [0u8; 8192];
+                let mut scratch = Vec::with_capacity(NOTICE_TAIL);
                 loop {
                     match reader.read(&mut buf) {
                         Ok(0) | Err(_) => break,
                         Ok(n) => {
-                            let chunk = &buf[..n];
-                            {
-                                let mut sb = pane.scrollback.lock();
-                                sb.extend_from_slice(chunk);
-                                if sb.len() > SCROLLBACK_LIMIT {
-                                    let drop_to = sb.len() - SCROLLBACK_LIMIT;
-                                    sb.drain(..drop_to);
-                                }
-                            }
+                            // Check the tail rather than this chunk: the
+                            // phrase can straddle a read boundary. Every read,
+                            // not a sample of them — a throttled scan skipped
+                            // the last read before a quiet spell, and the
+                            // trust question is exactly the output that is
+                            // followed by one.
+                            let found = {
+                                let mut out = pane.output.lock();
+                                out.push(&buf[..n]);
+                                let tail = &out.scrollback
+                                    [out.scrollback.len().saturating_sub(NOTICE_TAIL)..];
+                                notice_in(tail, &mut scratch)
+                            };
                             {
                                 let mut meta = pane.meta.lock();
                                 meta.info.last_output_at = Utc::now();
-                                // Check the tail rather than this chunk: the
-                                // phrase can straddle a read boundary. While
-                                // the window is asleep this is throttled — a
-                                // TUI redrawing 60 times a second should not
-                                // mean 60 UTF-8 walks of the scrollback.
-                                let awake = pane.ui_awake.load(Ordering::Acquire);
-                                let scan = awake || {
-                                    let mut at = pane.notice_scan_at.lock();
-                                    if at.elapsed() >= Duration::from_millis(750) {
-                                        *at = Instant::now();
-                                        true
-                                    } else {
-                                        false
-                                    }
-                                };
-                                if scan {
-                                    let sb = pane.scrollback.lock();
-                                    let tail = String::from_utf8_lossy(
-                                        &sb[sb.len().saturating_sub(4096)..],
-                                    )
-                                    .to_lowercase();
-
-                                    let found = if LIMIT_MARKERS.iter().any(|m| tail.contains(m)) {
-                                        Some("usage_limit")
-                                    } else if TRUST_MARKERS.iter().any(|m| tail.contains(m)) {
-                                        Some("trust_prompt")
-                                    } else {
-                                        None
-                                    };
-
-                                    // A trust prompt clears once answered, so
-                                    // let it come and go; a usage limit sticks.
-                                    if meta.info.notice.as_deref() != found
-                                        && meta.info.notice.as_deref() != Some("usage_limit")
-                                    {
-                                        meta.info.notice = found.map(str::to_string);
-                                        if found.is_some() {
-                                            let _ = app.emit(
-                                                "pty:notice",
-                                                NoticeEvent { pane_id: &id, notice: found },
-                                            );
-                                        }
+                                // A trust prompt clears once answered, so
+                                // let it come and go; a usage limit sticks.
+                                if meta.info.notice.as_deref() != found
+                                    && meta.info.notice.as_deref() != Some("usage_limit")
+                                {
+                                    meta.info.notice = found.map(str::to_string);
+                                    if found.is_some() {
+                                        let _ = app.emit(
+                                            "pty:notice",
+                                            NoticeEvent { pane_id: &id, notice: found },
+                                        );
                                     }
                                 }
                             }
                             // Scrollback always records. The webview only gets
-                            // a feed while someone is looking — otherwise the
-                            // IPC queue builds up until focus returns.
-                            if pane.ui_awake.load(Ordering::Acquire) {
-                                pane.pending.lock().extend_from_slice(chunk);
-                                Self::schedule_flush(&app, &pane, &id);
-                            }
+                            // a feed while the pane is on screen.
+                            Self::schedule_flush(&app, &pane, &id);
                         }
                     }
                 }
@@ -516,14 +599,13 @@ impl PtyManager {
         }
 
         if let Some(input) = opts.initial_input {
-            let pane = pane.clone();
+            let keys = pane.input.clone();
             std::thread::spawn(move || {
                 // Give the agent's TUI a moment to draw its prompt first.
                 std::thread::sleep(std::time::Duration::from_millis(1200));
-                let mut w = pane.writer.lock();
-                let _ = w.write_all(input.as_bytes());
-                let _ = w.write_all(b"\r");
-                let _ = w.flush();
+                let mut bytes = input.into_bytes();
+                bytes.push(b'\r');
+                let _ = keys.send(bytes);
             });
         }
 
@@ -539,12 +621,10 @@ impl PtyManager {
     }
 
     pub fn write(&self, id: &str, data: &str) -> Result<()> {
-        let pane = self.get(id)?;
-        let mut w = pane.writer.lock();
-        w.write_all(data.as_bytes())
-            .map_err(|e| Error::Pty(format!("write: {e}")))?;
-        w.flush().map_err(|e| Error::Pty(format!("flush: {e}")))?;
-        Ok(())
+        self.get(id)?
+            .input
+            .send(data.as_bytes().to_vec())
+            .map_err(|_| Error::Pty("the terminal has closed".into()))
     }
 
     /// Type `text` into a pane and press Enter.
@@ -554,19 +634,12 @@ impl PtyManager {
     /// shows up, but nothing is submitted until someone presses Enter again.
     /// A short gap between the two is enough for the TUI to accept the submit.
     pub fn submit(&self, id: &str, text: &str) -> Result<()> {
-        let pane = self.get(id)?;
-        let payload = text.to_string();
+        let keys = self.get(id)?.input.clone();
+        let payload = text.as_bytes().to_vec();
         std::thread::spawn(move || {
-            {
-                let mut w = pane.writer.lock();
-                let _ = w.write_all(payload.as_bytes());
-                let _ = w.flush();
-            }
-            std::thread::sleep(std::time::Duration::from_millis(80));
-            {
-                let mut w = pane.writer.lock();
-                let _ = w.write_all(b"\r");
-                let _ = w.flush();
+            if keys.send(payload).is_ok() {
+                std::thread::sleep(std::time::Duration::from_millis(80));
+                let _ = keys.send(b"\r".to_vec());
             }
         });
         Ok(())
@@ -586,16 +659,37 @@ impl PtyManager {
         Ok(())
     }
 
-    pub fn scrollback(&self, id: &str) -> Result<String> {
+    /// A terminal has come on screen: send it what it is missing, and feed it
+    /// from here on.
+    ///
+    /// Marked watched under the same lock that reads the catch-up, so every
+    /// byte is in one or the other — at worst in both, which the webview
+    /// discards by position.
+    pub fn attach(&self, id: &str, since: Option<u64>) -> Result<Catchup> {
         let pane = self.get(id)?;
-        let sb = pane.scrollback.lock();
-        Ok(base64::engine::general_purpose::STANDARD.encode(sb.as_slice()))
+        let mut out = pane.output.lock();
+        pane.watched.store(true, Ordering::Release);
+        let (bytes, reset) = out.since(since);
+        let catchup = Catchup {
+            data: base64::engine::general_purpose::STANDARD.encode(bytes),
+            end: out.total,
+            reset,
+        };
+        out.sent = out.total;
+        Ok(catchup)
+    }
+
+    /// Nobody is looking at this pane any more; keep its output for later.
+    pub fn detach(&self, id: &str) {
+        if let Ok(pane) = self.get(id) {
+            pane.watched.store(false, Ordering::Release);
+        }
     }
 
     /// Scrollback as readable text, for handing work to another agent.
     pub fn transcript(&self, id: &str, max_lines: usize) -> Result<String> {
         let pane = self.get(id)?;
-        let raw = { String::from_utf8_lossy(&pane.scrollback.lock()).to_string() };
+        let raw = { String::from_utf8_lossy(&pane.output.lock().scrollback).to_string() };
         Ok(readable_tail(&raw, max_lines))
     }
 
@@ -772,6 +866,67 @@ mod tests {
         let many: String = (0..50).map(|i| format!("line {i}\n")).collect();
         let tail = readable_tail(&many, 3);
         assert_eq!(tail, "line 47\nline 48\nline 49");
+    }
+
+    #[test]
+    fn a_notice_is_found_through_colour_and_unicode() {
+        let mut scratch = Vec::new();
+        let tui = "\u{1b}[1m╭─ Do you trust the files in this folder? ─╮\u{1b}[0m".as_bytes();
+        assert_eq!(notice_in(tui, &mut scratch), Some("trust_prompt"));
+        // A usage limit outranks a trust question still on screen.
+        let both = b"Do you trust this folder?\n... You've reached your USAGE LIMIT";
+        assert_eq!(notice_in(both, &mut scratch), Some("usage_limit"));
+        // A tail cut through the middle of a character is still searchable.
+        let cut = &"é usage limit".as_bytes()[1..];
+        assert_eq!(notice_in(cut, &mut scratch), Some("usage_limit"));
+        assert_eq!(notice_in(b"added a rate limiter", &mut scratch), None);
+    }
+
+    fn output() -> Output {
+        Output { scrollback: Vec::new(), total: 0, sent: 0 }
+    }
+
+    #[test]
+    fn a_terminal_that_kept_up_is_sent_only_what_it_missed() {
+        let mut out = output();
+        out.push(b"hello ");
+        out.push(b"world");
+        assert_eq!(out.since(Some(6)), (&b"world"[..], false));
+        assert_eq!(out.since(Some(11)), (&b""[..], false));
+        // Never drawn: everything, and nothing to clear.
+        assert_eq!(out.since(None), (&b"hello world"[..], false));
+    }
+
+    #[test]
+    fn trimming_keeps_positions_and_starts_on_a_line() {
+        let mut out = output();
+        let line = [b'x'; 1023].iter().chain(b"\n").copied().collect::<Vec<u8>>();
+        while out.total < (SCROLLBACK_LIMIT + SCROLLBACK_SLACK + 4096) as u64 {
+            out.push(&line);
+        }
+        assert!(out.scrollback.len() <= SCROLLBACK_LIMIT + SCROLLBACK_SLACK);
+        assert_eq!(out.start() + out.scrollback.len() as u64, out.total);
+        // The kept history opens on a fresh line, not halfway through one.
+        assert_eq!(out.scrollback[0], b'x');
+        assert_eq!(out.start() % line.len() as u64, 0);
+
+        // A point that has been trimmed away means starting again.
+        let (all, reset) = out.since(Some(0));
+        assert!(reset);
+        assert_eq!(all.len(), out.scrollback.len());
+        let (tail, reset) = out.since(Some(out.total - 3));
+        assert!(!reset);
+        assert_eq!(tail, b"xx\n");
+    }
+
+    #[test]
+    fn the_feed_carries_each_byte_once() {
+        let mut out = output();
+        out.push(b"abc");
+        assert_eq!(out.take_unsent(), Some((b"abc".to_vec(), 3)));
+        assert_eq!(out.take_unsent(), None);
+        out.push(b"de");
+        assert_eq!(out.take_unsent(), Some((b"de".to_vec(), 5)));
     }
 
     #[test]

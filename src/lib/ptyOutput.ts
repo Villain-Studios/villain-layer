@@ -8,7 +8,8 @@ import { listen } from "@tauri-apps/api/event";
  * One subscription fans out by pane id instead.
  */
 
-type Handler = (data: string) => void;
+/** `data` is base64; `end` is where it finishes in the pane's output. */
+type Handler = (data: string, end: number) => void;
 
 const handlers = new Map<string, Handler>();
 let started = false;
@@ -16,8 +17,8 @@ let started = false;
 function ensureListening() {
   if (started) return;
   started = true;
-  void listen<{ pane_id: string; data: string }>("pty:output", (e) => {
-    handlers.get(e.payload.pane_id)?.(e.payload.data);
+  void listen<{ pane_id: string; data: string; end: number }>("pty:output", (e) => {
+    handlers.get(e.payload.pane_id)?.(e.payload.data, e.payload.end);
   });
 }
 

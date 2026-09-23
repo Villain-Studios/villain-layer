@@ -554,9 +554,22 @@ pub fn pty_resize(state: State<AppState>, pane_id: String, rows: u16, cols: u16)
     state.ptys.resize(&pane_id, rows, cols)
 }
 
+/// A terminal has come on screen: what it missed since `since`, and a live
+/// feed from then on. `since` is null for a terminal that has drawn nothing.
 #[tauri::command]
-pub fn pty_scrollback(state: State<AppState>, pane_id: String) -> Result<String> {
-    state.ptys.scrollback(&pane_id)
+pub fn pty_attach(
+    state: State<AppState>,
+    pane_id: String,
+    since: Option<u64>,
+) -> Result<crate::pty::Catchup> {
+    state.ptys.attach(&pane_id, since)
+}
+
+/// A terminal has gone off screen, or the window into the background. The
+/// agent keeps running; its output waits in scrollback until it is shown.
+#[tauri::command]
+pub fn pty_detach(state: State<AppState>, pane_id: String) {
+    state.ptys.detach(&pane_id);
 }
 
 /// Remember a pane so it can be put back next launch.
@@ -646,16 +659,6 @@ pub async fn close_pane(app: AppHandle, pane_id: String) -> Result<()> {
         state.ptys.close(&pane_id)
     })
     .await
-}
-
-/// Whether the window is in front and worth feeding terminal output.
-///
-/// Agents keep running either way. This only gates shipping their redraws to
-/// the webview — leaving that on while the app sits in the background is how
-/// a long idle ends in a hitch when you come back.
-#[tauri::command]
-pub fn set_ui_awake(state: State<AppState>, awake: bool) {
-    state.ptys.set_ui_awake(awake);
 }
 
 /// Put back what was open when the app last closed.

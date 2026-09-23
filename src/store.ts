@@ -274,12 +274,12 @@ export const useStore = create<State>((set, get) => {
   toggleSettings: (open) => set((s) => ({ settingsOpen: open ?? !s.settingsOpen })),
   showIssue: (key) => set({ view: "tickets", focusIssueKey: key }),
   clearFocusIssue: () => set({ focusIssueKey: null }),
+  // Terminals watch this themselves: one that is no longer shown detaches,
+  // and the backend stops sending its redraws to a webview nobody is
+  // looking at.
   setAppActive: (appActive) => {
     if (get().appActive === appActive) return;
     set({ appActive });
-    // Tell the PTY layer too: otherwise agent redraws keep crossing the IPC
-    // bridge into a webview nobody is looking at.
-    void api.setUiAwake(appActive).catch(() => {});
   },
 
   toast: (kind, text) => {

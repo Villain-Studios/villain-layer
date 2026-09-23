@@ -76,6 +76,16 @@ export interface PaneInfo {
   notice: string | null;
 }
 
+/** What a terminal coming on screen missed. See `pty_attach`. */
+export interface Catchup {
+  /** Base64 output after the point asked from. */
+  data: string;
+  /** Where `data` ends in the pane's output; ask from here next time. */
+  end: number;
+  /** The point asked from is gone: clear the terminal before drawing `data`. */
+  reset: boolean;
+}
+
 export interface AgentStatus {
   id: string;
   name: string;

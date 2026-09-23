@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AddedRepo,
   AgentStatus,
+  Catchup,
   ChangedFile,
   CheckoutPr,
   CreateField,
@@ -85,10 +86,11 @@ export const api = {
   ptyWrite: (paneId: string, data: string) => invoke<void>("pty_write", { paneId, data }),
   ptyResize: (paneId: string, rows: number, cols: number) =>
     invoke<void>("pty_resize", { paneId, rows, cols }),
-  ptyScrollback: (paneId: string) => invoke<string>("pty_scrollback", { paneId }),
+  ptyAttach: (paneId: string, since: number | null) =>
+    invoke<Catchup>("pty_attach", { paneId, since }),
+  ptyDetach: (paneId: string) => invoke<void>("pty_detach", { paneId }),
   closePane: (paneId: string) => invoke<void>("close_pane", { paneId }),
   killPane: (paneId: string) => invoke<void>("kill_pane", { paneId }),
-  setUiAwake: (awake: boolean) => invoke<void>("set_ui_awake", { awake }),
 
   // diff + git
   diffFiles: (

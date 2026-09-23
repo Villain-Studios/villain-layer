@@ -15,8 +15,8 @@ pub use store::{
     take_branch_from_clone,
 };
 pub use upkeep::{
-    branch_tips, delete_branch_at, fast_forward, fetch_store, fetched_at, holds, is_bare,
-    list_worktrees, only_here, origin_url, same_remote, standing, update_style, Forwarded,
+    branch_tips, delete_branch_at, fast_forward, fetch_store, holds, is_bare,
+    list_worktrees, only_here, origin_url, same_remote, standing, synced_at, update_style, Forwarded,
 };
 
 fn command(dir: &Path, args: &[&str]) -> Command {
@@ -61,10 +61,30 @@ fn run(dir: &Path, args: &[&str]) -> Result<String> {
         return Err(Error::Git(if stderr.is_empty() {
             format!("git {} failed", args.join(" "))
         } else {
-            stderr
+            explain(stderr)
         }));
     }
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+/// What to do about a failure its message does not explain.
+///
+/// macOS keeps one app out of another's `~/Library/Containers` unless the
+/// user allowed it. A terminal usually has been allowed; this app has not.
+/// An ssh config whose `IdentityFile` sits in a key agent's container
+/// (Secretive's) worked in a terminal and failed here with "Operation not
+/// permitted", then "Permission denied (publickey)", on every fetch.
+fn explain(stderr: String) -> String {
+    let walled = stderr.contains("Operation not permitted")
+        && (stderr.contains("/Library/Containers/") || stderr.contains("/Library/Group Containers/"));
+    if !walled {
+        return stderr;
+    }
+    format!(
+        "{stderr}\n\nmacOS keeps other apps' folders from Villain Layer, and your SSH setup reads a file \
+         in one. Copy the public key (.pub) it names to ~/.ssh and point IdentityFile at the copy: the \
+         agent still holds the private key."
+    )
 }
 
 /// Why a worktree folder that is still on disk is not one git can use, when
@@ -1127,6 +1147,14 @@ mod tests {
         run(&dir, &["add", "-A"]).unwrap();
         run(&dir, &["commit", "-qm", "init"]).unwrap();
         dir
+    }
+
+    #[test]
+    fn a_key_file_macos_walls_off_says_what_to_do() {
+        let walled = "Load key \"/Users/me/Library/Containers/com.example.Agent/Data/PublicKeys/k.pub\": Operation not permitted\ngit@example.com: Permission denied (publickey).";
+        assert!(explain(walled.into()).contains("point IdentityFile at the copy"));
+        let other = "fatal: repository 'x' not found".to_string();
+        assert_eq!(explain(other.clone()), other, "other failures are left as git said them");
     }
 
     #[test]

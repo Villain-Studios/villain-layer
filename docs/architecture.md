@@ -348,6 +348,12 @@ Each of these is recorded at the code it shaped. Leave those comments alone.
   friends were missing and agent CLIs "not installed". `shellenv.rs` asks
   the login shell once, behind a marker so a chatty `.zshrc` is not read as
   the environment, with a timeout.
+- **macOS walls off other apps' folders**, `~/Library/Containers/…`,
+  from an app the user never allowed in, and everything it spawns. An ssh
+  config reading a key agent's `.pub` from there (Secretive) worked in a
+  terminal and failed on every fetch here. `explain` in `git.rs` says so
+  and what to do. A best-effort fetch that fails says nothing, so it went
+  unseen until Sync showed a row per repo.
 - **A panic that crosses into AppKit aborts** with no location. The panic
   hook in `lib.rs` writes `~/Library/Logs/villain-layer/panic.log` first,
   and must not panic itself.

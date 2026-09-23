@@ -116,9 +116,9 @@ const hourAgo = Math.round(Date.now() / 1000) - 3600;
 
 /** api is behind, web has a commit of its own on main, infra has moved. */
 const health: RepoHealth[] = [
-  { project_id: "p-api", clone: "ok", origin: "git@github.com:acme/api.git", store: `${copies}/api.git`, fetched_at: hourAgo, behind: 3, ahead: 0, found: null, update_guess: "rebase", update_reason: "main is a straight line of commits: branches are rebased onto it" },
-  { project_id: "p-web", clone: "ok", origin: "git@github.com:acme/web.git", store: `${copies}/web.git`, fetched_at: hourAgo, behind: 0, ahead: 1, found: null, update_guess: "merge", update_reason: "pull requests land on main as merge commits" },
-  { project_id: "p-infra", clone: "missing", origin: null, store: null, fetched_at: null, behind: null, ahead: null, found: "/Users/you/code/ops/infra", update_guess: null, update_reason: null },
+  { project_id: "p-api", clone: "ok", origin: "git@github.com:acme/api.git", store: `${copies}/api.git`, synced_at: hourAgo, behind: 3, ahead: 0, found: null, update_guess: "rebase", update_reason: "main is a straight line of commits: branches are rebased onto it" },
+  { project_id: "p-web", clone: "ok", origin: "git@github.com:acme/web.git", store: `${copies}/web.git`, synced_at: hourAgo, behind: 0, ahead: 1, found: null, update_guess: "merge", update_reason: "pull requests land on main as merge commits" },
+  { project_id: "p-infra", clone: "missing", origin: null, store: null, synced_at: null, behind: null, ahead: null, found: "/Users/you/code/ops/infra", update_guess: null, update_reason: null },
 ];
 
 /** One of each thing Clean up finds, in each verdict it can have. */

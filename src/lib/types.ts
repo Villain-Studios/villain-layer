@@ -20,8 +20,8 @@ export interface RepoHealth {
   clone: "ok" | "missing" | "not_repo" | "other";
   origin: string | null;
   store: string | null;
-  /** Seconds since the epoch. */
-  fetched_at: number | null;
+  /** When a Sync last reached origin, in seconds since the epoch. */
+  synced_at: number | null;
   /** The clone's default branch against origin's. */
   behind: number | null;
   ahead: number | null;

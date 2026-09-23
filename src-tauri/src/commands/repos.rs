@@ -60,8 +60,8 @@ pub struct RepoHealth {
     pub origin: Option<String>,
     /// The app's copy, when there is one.
     pub store: Option<String>,
-    /// When the copy last fetched, in seconds since the epoch.
-    pub fetched_at: Option<u64>,
+    /// When a Sync last reached origin, in seconds since the epoch.
+    pub synced_at: Option<u64>,
     /// The clone's default branch against origin's.
     pub behind: Option<usize>,
     pub ahead: Option<usize>,
@@ -112,7 +112,7 @@ fn health(project: &Project, registered: &HashSet<PathBuf>, home: Option<&Path>)
             .and_then(git::origin_url)
             .or_else(|| if state == "ok" { git::origin_url(clone) } else { None }),
         store: store.map(|s| s.to_string_lossy().to_string()),
-        fetched_at: store.and_then(git::fetched_at),
+        synced_at: store.and_then(git::synced_at),
         behind: standing.map(|s| s.behind),
         ahead: standing.map(|s| s.ahead),
         found: match (state, home) {

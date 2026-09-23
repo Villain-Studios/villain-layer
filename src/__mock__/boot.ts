@@ -135,7 +135,7 @@ const answer: Record<string, Answer> = {
         return { project_id: id, repo: p.name, ok: true, detail: `Fetched. The clone is not at ${p.path} any more: Locate it.` };
       }
       const moved = h.ahead ? 0 : h.behind ?? 0;
-      h.fetched_at = Math.round(Date.now() / 1000);
+      h.synced_at = Math.round(Date.now() / 1000);
       if (moved) h.behind = 0;
       const detail = h.ahead
         ? `Fetched. main has ${h.ahead} commit of its own, so it was left alone.`

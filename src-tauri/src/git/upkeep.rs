@@ -92,10 +92,14 @@ pub fn is_bare(repo: &Path) -> bool {
     run(repo, &["rev-parse", "--is-bare-repository"]).is_ok_and(|o| o.trim() == "true")
 }
 
-/// When the app's copy last fetched, in seconds since the epoch. Read from
-/// `FETCH_HEAD`, which every fetch rewrites, so it costs no git process.
-pub fn fetched_at(store: &Path) -> Option<u64> {
-    let modified = std::fs::metadata(store.join("FETCH_HEAD")).ok()?.modified().ok()?;
+/// Written by a Sync whose fetch reached origin, in the copy's own folder.
+const SYNCED: &str = "villain-synced";
+
+/// When a Sync last reached origin, in seconds since the epoch. Not
+/// `FETCH_HEAD`: git rewrites it before it knows the fetch will work, and
+/// every repo that could not reach its host read "fetched 28s ago".
+pub fn synced_at(store: &Path) -> Option<u64> {
+    let modified = std::fs::metadata(store.join(SYNCED)).ok()?.modified().ok()?;
     modified.duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs())
 }
 
@@ -116,7 +120,9 @@ fn count(repo: &Path, args: &[&str]) -> Result<usize> {
 
 /// Fetch origin into the app's copy, and forget the branches origin deleted.
 pub fn fetch_store(store: &Path) -> Result<()> {
-    run(store, &["fetch", "--quiet", "--prune", "--no-recurse-submodules", "origin"]).map(|_| ())
+    run(store, &["fetch", "--quiet", "--prune", "--no-recurse-submodules", "origin"])?;
+    std::fs::write(store.join(SYNCED), "")?;
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -345,6 +351,21 @@ mod tests {
         assert!(same_remote("/Users/me/code/api", "/Users/me/code/api/"));
         assert!(!same_remote(ssh, "git@github.com:Org/web.git"));
         assert!(!same_remote(ssh, "git@gitlab.com:Org/api.git"));
+    }
+
+    #[test]
+    fn only_a_fetch_that_reached_origin_counts_as_synced() {
+        let root = sandbox();
+        let (_clone, _mate, store) = scene(&root);
+        assert_eq!(synced_at(&store), None);
+        let url = origin_url(&store).unwrap();
+        run(&store, &["config", "remote.origin.url", root.join("gone.git").to_str().unwrap()]).unwrap();
+        assert!(fetch_store(&store).is_err());
+        assert_eq!(synced_at(&store), None, "a failed fetch is not a sync");
+        run(&store, &["config", "remote.origin.url", &url]).unwrap();
+        fetch_store(&store).unwrap();
+        assert!(synced_at(&store).is_some());
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]

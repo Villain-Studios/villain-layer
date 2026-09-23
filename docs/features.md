@@ -52,7 +52,8 @@ up** removes what tasks left behind.
   git settings.
 - **REPO-5** Each repo MUST show whether its clone is still where it was
   registered and still the same repository, where it fetches from, whether
-  the app's copy exists and when it last fetched, and how the clone's
+  the app's copy exists and when a Sync last reached origin (not when a
+  fetch last tried: git rewrites `FETCH_HEAD` before it knows), and how the clone's
   default branch stands against origin's (behind, or with commits of its
   own), and how Update from base updates branches there (UPD-7), which can
   be set. A repo with a problem says what the problem is, with its fix beside

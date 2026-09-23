@@ -45,7 +45,7 @@ export function ReposView() {
   // a repo in trouble opens, or the trouble is a count nobody can find.
   const isClosed = (g: (typeof groups)[number]) => shut[g.group] ?? !g.projects.some((p) => trouble(p));
   const anyOpen = groups.some((g) => !isClosed(g));
-  const lastFetch = Math.max(0, ...projects.map((p) => health[p.id]?.fetched_at ?? 0));
+  const lastSync = Math.max(0, ...projects.map((p) => health[p.id]?.synced_at ?? 0));
 
   async function setGroup(projectId: string, group: string) {
     try {
@@ -157,7 +157,7 @@ export function ReposView() {
         <span className="sub">
           {projects.length} in {groups.length} group{groups.length === 1 ? "" : "s"}
           {troubled > 0 && <> · <span className="trouble-text">{troubled} to fix</span></>}
-          {lastFetch > 0 && <> · last fetched {ago(lastFetch * 1000, now)}</>}
+          {lastSync > 0 && <> · last synced {ago(lastSync * 1000, now)}</>}
         </span>
         <div className="spacer" />
         {groups.length > 1 && (
@@ -362,7 +362,7 @@ function UpdateByPicker({ p, h, onChange }: {
   );
 }
 
-/** Whether the app's copy exists, and when it last fetched. */
+/** Whether the app's copy exists, and when a Sync last reached origin. */
 function CopyState({ h, now }: { h: RepoHealth | undefined; now: number }) {
   if (!h) return null;
   if (!h.store) {
@@ -370,7 +370,7 @@ function CopyState({ h, now }: { h: RepoHealth | undefined; now: number }) {
   }
   return (
     <span className="rstore" title={`The app's copy: ${h.store}`}>
-      {h.fetched_at ? `fetched ${ago(h.fetched_at * 1000, now)}` : "never fetched"}
+      {h.synced_at ? `synced ${ago(h.synced_at * 1000, now)}` : "not synced yet"}
     </span>
   );
 }

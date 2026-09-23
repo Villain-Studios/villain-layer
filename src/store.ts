@@ -409,7 +409,11 @@ export const useStore = create<State>((set, get) => {
         const spin = !opts?.quiet || get().reviewQueue === null;
         if (spin) set({ reviewQueueLoading: true });
         try {
-          set({ reviewQueue: await api.githubReviewQueue(), reviewQueueError: null });
+          const queue = await api.githubReviewQueue();
+          // Disconnected while this was out: the list goes with the
+          // connection, or the badge counts reviews from nothing connected.
+          if (!get().settings?.github_connected) return;
+          set({ reviewQueue: queue, reviewQueueError: null });
         } catch (e) {
           // A timer tick stays quiet — the view shows the message — but a
           // Refresh you pressed should also say so up top.
@@ -433,6 +437,8 @@ export const useStore = create<State>((set, get) => {
         // must not stop the issues themselves from showing.
         api.jiraIssueTypes().catch(() => get().issueTypes),
       ]);
+      // As for reviews: an answer from a site disconnected meanwhile is not kept.
+      if (!get().settings?.jira_connected) return;
       set({ issues: page.issues, issuesTruncated: page.more, issueTypes, issuesLoaded: true });
     } catch (e) {
       if (!opts?.quiet) get().fail(e);

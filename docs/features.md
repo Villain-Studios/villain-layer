@@ -39,6 +39,14 @@ what was found. A repo has at most one group; groups are renamed in place.
 - **REPO-3** Removing a repo MUST NOT touch the clone or any worktree on
   disk. It drops the repo's checkouts from tasks. It drops tasks left with
   no repo, and stops their panes.
+- **REPO-4** Every repo MUST get the app's own copy
+  (`<task folder location>/.repos/<name>.git`), made in the background
+  when it is added, or when a task first needs it. Task worktrees are cut
+  from the copy, so nothing done to the user's clone reaches them:
+  re-cloning, moving, deleting, pruning, gc, branch deletion. The copy is
+  hard-linked, so it costs little disk and survives the clone being
+  deleted. It fetches from the clone's `origin` and carries its repo-local
+  git settings.
 
 Code: `commands/projects.rs`, `ReposView.tsx`, `AddRepos.tsx`.
 
@@ -46,6 +54,11 @@ Known gaps:
 - Removing a repo leaves panes running in *surviving* tasks' checkouts of
   it, and does not rewrite those tasks' context files. Removing a checkout
   does both.
+- The copy takes the clone's repo-local settings once, when it is made.
+  Later changes to the clone's `.git/config` do not follow.
+- Removing a repo leaves its copy in `.repos/`. Adding the repo again
+  reuses it.
+- Task branches are not in the user's clone until pushed and fetched.
 
 ## 2. Tasks
 
@@ -60,8 +73,8 @@ the repo count, running agents, uncommitted changes and the review verdict.
   A folder that exists or belongs to another task gets `-2`, `-3`, ….
 - **TASK-2** The branch MUST be: the explicit name if given; else the
   ticket key, plus `-<suffix>` if given; else `villain/<slug of the name>`.
-- **TASK-3** A checkout MUST be cut from the freshly fetched
-  `origin/<base>`, not the local base branch, which may be stale. The commit
+- **TASK-3** A checkout MUST be cut, in the app's copy of the repo
+  (REPO-4), from the freshly fetched `origin/<base>`, not the local base branch, which may be stale. The commit
   it was cut from is recorded as the branch point
   (`Checkout.base_commit`). Everything that measures the branch ("changed",
   the Diff, PR descriptions, handoffs) measures from that point.
@@ -93,16 +106,25 @@ the repo count, running agents, uncommitted changes and the review verdict.
 
 - **TASK-11** A checkout whose folder exists but git cannot read MUST say
   so, with the reason, in the task header, the sidebar and the Diff tab.
-  It is never shown as clean or empty. The common cause is the repository
-  being deleted or cloned again, which takes `.git/worktrees/` and the
-  local branches with it; the files stay in the task folder.
+  It is never shown as clean or empty. It happens when the repository it
+  was registered in is deleted or cloned again, which takes
+  `.git/worktrees/` and the local branches with it; the files stay in the
+  task folder.
+- **TASK-12** At launch, before any pane comes back, every worktree still
+  registered in a user's clone MUST be moved onto the app's copy (REPO-4)
+  in place. The files are untouched, unpushed commits come across, and
+  staging survives. A worktree mid-merge or mid-rebase is left for the
+  next launch. A folder already cut off (TASK-11) is linked back at the
+  commit the status poll last saw it on (`Checkout.last_head`), when the
+  copy has that commit. What could not be moved is reported.
 
 Code: `commands/tasks.rs`, `sidebar/`, `FinishTask.tsx`,
 `CreateTaskDialog.tsx`.
 
 Known gaps:
-- An unlinked worktree (TASK-11) is reported, not repaired. Re-linking is
-  by hand: create the branch at the commit the folder matches,
+- A folder cut off before its last commit was recorded, or whose last
+  commit was never pushed or copied, cannot be linked back automatically
+  (TASK-12). By hand: create the branch at the commit the files match,
   `git worktree add --no-checkout` it somewhere temporary, point the new
   registration and the folder's `.git` file at each other, then
   `git reset` in the folder. Its files are never touched.
@@ -501,7 +523,7 @@ Known gaps:
 |---|---|
 | `~/Library/Application Support/dev.villain.layer/` | `config.json`: repos, tasks, settings, saved panes. At agent launch also `.mcp.json` (0600), `claude-hooks.json`, `copilot-plugin/`, `opencode-plugin.js` |
 | Keychain, service `dev.villain.layer` | one item holding every token |
-| `~/.villain-worktrees/` (settable) | task folders and `_chat/` rooms |
+| `~/.villain-worktrees/` (settable) | task folders, `_chat/` rooms, and `.repos/`: the app's own copy of each repo (REPO-4) |
 | a task folder | the worktrees, `AGENTS.md` and `CLAUDE.md` (task context), `.mcp.json`, and `.gemini/settings.json`, `PR_DESCRIPTION.md`, `PR_FEEDBACK.md` as they come up |
 | `~/.claude.json` | trust entries for the app's own folders only (PANE-10) |
 | `~/Library/Logs/villain-layer/panic.log` | a crash's location and backtrace |

@@ -30,7 +30,7 @@ pub fn list_projects(state: State<AppState>) -> Vec<Project> {
 pub async fn project_branches(app: AppHandle, project_id: String) -> Result<Vec<String>> {
     super::blocking(app, move |state| {
         let project = state.config.project(&project_id)?;
-        git::remote_branches(&PathBuf::from(&project.path))
+        git::remote_branches(&project.repo())
     })
     .await
 }
@@ -41,13 +41,18 @@ pub async fn project_branches(app: AppHandle, project_id: String) -> Result<Vec<
 /// Off the command thread, and one config write rather than one per repo: a
 /// folder of twenty clones meant twenty full serialise-and-rename cycles on
 /// top of three git calls each.
+///
+/// Each gets the app's own copy of its repository afterwards, in the
+/// background: hard-linked, but still a clone per repo, and a scanned
+/// folder of twenty should not hold the dialog open for it. A task started
+/// before its copy is made makes it then.
 #[tauri::command]
 pub async fn add_projects(
     app: AppHandle,
     paths: Vec<String>,
     group: Option<String>,
 ) -> Result<Vec<Project>> {
-    super::blocking(app, move |state| {
+    let added = super::blocking(app.clone(), move |state| {
         let group = group.as_deref();
         let described: Vec<Project> = paths
             .iter()
@@ -57,10 +62,21 @@ pub async fn add_projects(
             described
                 .into_iter()
                 .map(|project| merge_project(c, project))
-                .collect()
+                .collect::<Vec<_>>()
         })
     })
-    .await
+    .await?;
+    let ids: Vec<String> = added.iter().filter(|p| p.store.is_none()).map(|p| p.id.clone()).collect();
+    std::thread::spawn(move || {
+        use tauri::Manager;
+        let state = app.state::<AppState>();
+        for id in ids {
+            if let Err(e) = ensure_store(&state, &id) {
+                eprintln!("villain-layer: no private copy of {id} yet: {e}");
+            }
+        }
+    });
+    Ok(added)
 }
 
 #[tauri::command]
@@ -198,6 +214,7 @@ fn describe_project(path: &str, group: Option<&str>) -> Result<Project> {
         path: root,
         default_branch: git::default_branch(&root_path),
         group: group.map(|g| g.trim().to_string()).filter(|g| !g.is_empty()),
+        store: None,
     })
 }
 
@@ -263,3 +280,125 @@ pub(crate) fn remove_project_inner(state: &AppState, id: &str) -> Result<()> {
     Ok(())
 }
 
+
+// ------------------------------------------------------ the app's own copies
+
+/// One copy made at a time: a task started while the copy its repo is
+/// getting in the background would otherwise race it to the same folder.
+static MAKING: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
+/// The app's copy of a project's repository, made now if it is not there.
+/// It lives in `.repos/` under the task folder location. A folder there that
+/// is already a copy of the same repository, made by the other build or
+/// before the repo was last removed, is taken over rather than duplicated.
+pub(crate) fn ensure_store(state: &AppState, project_id: &str) -> Result<PathBuf> {
+    let _one = MAKING.lock();
+    let project = state.config.project(project_id)?;
+    if let Some(store) = project.store.as_deref().filter(|s| Path::new(s).is_dir()) {
+        return Ok(PathBuf::from(store));
+    }
+    let source = PathBuf::from(&project.path);
+    if !source.is_dir() {
+        return Err(Error::NotFound(format!(
+            "{} is gone, and the app has no copy of it to work from",
+            project.path
+        )));
+    }
+    let root = state.config.worktree_root().join(".repos");
+    let mut store = root.join(format!("{}.git", project.name));
+    let mut n = 2;
+    while store.exists() && !git::is_store_of(&store, &source) {
+        store = root.join(format!("{}-{n}.git", project.name));
+        n += 1;
+    }
+    if !store.exists() {
+        git::create_store(&source, &store)?;
+    }
+    let path = store.to_string_lossy().to_string();
+    state.config.update(|c| {
+        if let Some(p) = c.projects.iter_mut().find(|p| p.id == project_id) {
+            p.store = Some(path.clone());
+        }
+    })?;
+    Ok(store)
+}
+
+/// Where new worktrees for `project` come from: its copy, made if need be.
+/// Falls back to the user's clone, as before, when no copy can be made —
+/// a task that cannot start is worse than one that shares a clone.
+pub(crate) fn repo_for(state: &AppState, project: &Project) -> PathBuf {
+    ensure_store(state, &project.id).unwrap_or_else(|e| {
+        eprintln!("villain-layer: using {} directly: {e}", project.path);
+        PathBuf::from(&project.path)
+    })
+}
+
+/// The repository an existing worktree is registered in, which may not be
+/// the project's copy yet: one that could not be moved still belongs to the
+/// user's clone, and git only removes a worktree through its own repository.
+pub(crate) fn owner_of(project: &Project, worktree: &str) -> PathBuf {
+    git::owner(Path::new(worktree)).unwrap_or_else(|| project.repo())
+}
+
+/// Move every task's worktrees onto the app's copies, making the copies as
+/// needed; a folder whose link is gone is linked back at its last seen
+/// commit where the copy has it. Returns how many moved, and what could
+/// not be. Run before any pane comes back, so no agent is working in a
+/// folder while its link is swapped; after the first launch there is
+/// nothing to do but check.
+pub fn adopt_worktrees(state: &AppState) -> (usize, Vec<String>) {
+    let cfg = state.config.read();
+    let mut moved = 0;
+    let mut problems = Vec::new();
+    for project in cfg.projects.iter().filter(|p| cfg.checkouts.iter().any(|c| c.project_id == p.id)) {
+        let store = match ensure_store(state, &project.id) {
+            Ok(s) => s,
+            Err(e) => {
+                problems.push(format!("{}: {e}", project.name));
+                continue;
+            }
+        };
+        for checkout in cfg.checkouts.iter().filter(|c| c.project_id == project.id) {
+            let wt = Path::new(&checkout.path);
+            if !wt.is_dir() || git::belongs_to(wt, &store) {
+                continue;
+            }
+            let task = cfg.tasks.iter().find(|t| t.id == checkout.task_id);
+            let result = match (git::unlinked(wt), task, checkout.last_head.as_deref()) {
+                (None, _, _) => git::adopt_worktree(&store, wt),
+                (Some(_), Some(task), Some(head)) => git::relink_worktree(&store, wt, &task.branch, head),
+                (Some(why), _, _) => Err(Error::Git(why)),
+            };
+            match result {
+                Ok(()) => {
+                    moved += 1;
+                    state.status_cache.lock().remove(&checkout.id);
+                }
+                Err(e) => problems.push(format!(
+                    "{} in {}: {e}",
+                    project.name,
+                    task.map(|t| t.name.as_str()).unwrap_or("a task"),
+                )),
+            }
+        }
+    }
+    (moved, problems)
+}
+
+/// Copies for the repositories no task uses yet, so the first task on one
+/// does not wait for it. After the panes are back: nothing needs these now.
+pub fn make_missing_stores(state: &AppState) {
+    let ids: Vec<String> = state
+        .config
+        .read()
+        .projects
+        .iter()
+        .filter(|p| p.store.as_deref().is_none_or(|s| !Path::new(s).is_dir()))
+        .map(|p| p.id.clone())
+        .collect();
+    for id in ids {
+        if let Err(e) = ensure_store(state, &id) {
+            eprintln!("villain-layer: no private copy of {id}: {e}");
+        }
+    }
+}

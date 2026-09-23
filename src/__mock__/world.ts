@@ -103,9 +103,9 @@ function issue(key: string, summary: string, status: string, category: string, e
 }
 
 const projects: Project[] = [
-  { id: "p-api", name: "api", path: "/Users/you/code/api", default_branch: "main", group: "platform" },
-  { id: "p-web", name: "web", path: "/Users/you/code/web", default_branch: "main", group: "platform" },
-  { id: "p-infra", name: "infra", path: "/Users/you/code/infra", default_branch: "main", group: null },
+  { id: "p-api", name: "api", path: "/Users/you/code/api", default_branch: "main", group: "platform", store: null },
+  { id: "p-web", name: "web", path: "/Users/you/code/web", default_branch: "main", group: "platform", store: null },
+  { id: "p-infra", name: "infra", path: "/Users/you/code/infra", default_branch: "main", group: null, store: null },
 ];
 
 const clean = { ahead: 0, behind: 0, staged: 0, unstaged: 0, untracked: 0, conflicted: 0, dirty_files: 0 };

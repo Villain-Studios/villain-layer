@@ -5,6 +5,8 @@ export interface Project {
   default_branch: string;
   /** One group per repo; null means ungrouped. */
   group: string | null;
+  /** The app's own copy of the repository, which task worktrees belong to. */
+  store: string | null;
 }
 
 export interface RepoSuggestion {

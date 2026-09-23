@@ -104,10 +104,15 @@ by `scripts/guard.ts`. Its failure message says what to do, and
 
 ### Git
 
-- **Only `git.rs` runs git.** Its `run` is private. Add a named function
-  there. That is where the flags that defend against the user's own git
-  config live: `--no-ext-diff`, `--untracked-files=normal`, `--ff`, `-c`
-  overrides. **(guard, and the compiler)**
+- **Only `git.rs` (and `git/`) runs git.** Its `run` is private. Add a
+  named function there. That is where the flags that defend against the
+  user's own git config live: `--no-ext-diff`, `--untracked-files=normal`,
+  `--ff`, `-c` overrides. **(guard, and the compiler)**
+- **Worktrees belong to the app's copy of a repo, never the user's clone.**
+  New ones are cut from `commands::repo_for(state, project)`. For an
+  existing one, ask it which repository owns it: `commands::owner_of`.
+  `Project.path` is where the user's clone is, for showing and copying,
+  not for running git.
 - **Never `--force`.** A rebased branch is pushed with
   `--force-with-lease=<branch>:<sha>`, from `Checkout.push_lease`, and only
   through `git::push`.
@@ -218,7 +223,7 @@ build does the same.
 | `src-tauri/src/pty.rs` | panes: spawning, output buffer and throttling, stop/kill, activity state |
 | `src-tauri/src/agents.rs` | the agent CLI catalogue and how each reports its state |
 | `src-tauri/src/mcp.rs` | the app's MCP server for agents, and `/hook` for their status reports |
-| `src-tauri/src/git.rs` | the only place that runs git |
+| `src-tauri/src/git.rs`, `git/store.rs` | the only place that runs git; `store.rs` is the app's own copy of each repo |
 | `src-tauri/src/attention.rs` | agents that need you: dock count, banners |
 | `src-tauri/src/news.rs` | new review requests and tickets, for banners |
 | `src-tauri/src/integrations/` | Jira, GitHub and Slack HTTP clients |

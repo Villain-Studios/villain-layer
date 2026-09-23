@@ -8,6 +8,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 
+mod store;
+pub use store::{adopt_worktree, belongs_to, create_store, is_store_of, owner, relink_worktree};
+
 fn command(dir: &Path, args: &[&str]) -> Command {
     let mut cmd = Command::new("git");
     cmd.args(args)
@@ -368,6 +371,10 @@ pub fn remove_worktree(repo: &Path, path: &str, force: bool) -> Result<()> {
 #[derive(Debug, Clone, Serialize)]
 pub struct WorktreeStatus {
     pub branch: String,
+    /// The commit checked out. Recorded per checkout, so a folder cut off
+    /// from its repository can be linked back at the right place.
+    #[serde(skip)]
+    pub head: String,
     pub ahead: u32,
     pub behind: u32,
     pub staged: u32,
@@ -389,6 +396,7 @@ pub fn status(dir: &Path) -> Result<WorktreeStatus> {
     )?;
     let mut s = WorktreeStatus {
         branch: String::new(),
+        head: String::new(),
         ahead: 0,
         behind: 0,
         staged: 0,
@@ -401,6 +409,11 @@ pub fn status(dir: &Path) -> Result<WorktreeStatus> {
     for line in out.lines() {
         if let Some(rest) = line.strip_prefix("# branch.head ") {
             s.branch = rest.to_string();
+        } else if let Some(rest) = line.strip_prefix("# branch.oid ") {
+            // "(initial)" before the first commit.
+            if !rest.starts_with('(') {
+                s.head = rest.to_string();
+            }
         } else if let Some(rest) = line.strip_prefix("# branch.ab ") {
             for tok in rest.split_whitespace() {
                 let n: u32 = tok[1..].parse().unwrap_or(0);

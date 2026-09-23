@@ -145,13 +145,15 @@ function maskRust(src: string): string {
 }
 
 /**
- * Blank out test-only code: a `#[cfg(test)]` item runs to the next `}` in
- * column 0, which is where rustfmt closes a top-level item.
+ * Blank out test-only code: a `#[cfg(test)]` item runs to the next `}` at
+ * the attribute's own indentation, which is where rustfmt closes it — column
+ * 0 for a module, deeper for a method inside an `impl`.
  */
 function withoutTests(masked: string): string {
   const lines = masked.split("\n");
   for (let i = 0; i < lines.length; i++) {
     if (lines[i].trim() !== "#[cfg(test)]") continue;
+    const close = lines[i].slice(0, lines[i].indexOf("#")) + "}";
     let j = i + 1;
     while (j < lines.length && lines[j].trim().startsWith("#[")) j++;
     if (lines[j]?.trimEnd().endsWith(";")) {
@@ -159,7 +161,7 @@ function withoutTests(masked: string): string {
       i = j;
       continue;
     }
-    while (j < lines.length && !lines[j].startsWith("}")) j++;
+    while (j < lines.length && !lines[j].startsWith(close)) j++;
     for (let k = i; k <= j && k < lines.length; k++) lines[k] = "";
     i = j;
   }

@@ -27,14 +27,17 @@ to change. What the app *does* is in [`features.md`](features.md).
         (in task folders)  ── curl ─────────▶ /hook
 ```
 
-A task is a folder holding one worktree per repo:
+A task is a folder holding one worktree per repo. The worktrees belong to
+the app's own copy of each repository, not to the user's clone:
 
 ```
-~/.villain-worktrees/ACME-123/      ← task folder; agents start here
-  AGENTS.md, CLAUDE.md              ← task context, written by the app
-  .mcp.json                         ← the app's MCP server (0600)
-  api/                              ← worktree of repo "api", branch ACME-123
-  web/                              ← worktree of repo "web", branch ACME-123
+~/.villain-worktrees/
+  .repos/api.git, .repos/web.git    ← the app's bare copies (hard-linked from ~/code/api, …)
+  ACME-123/                         ← task folder; agents start here
+    AGENTS.md, CLAUDE.md            ← task context, written by the app
+    .mcp.json                       ← the app's MCP server (0600)
+    api/                            ← worktree of .repos/api.git, branch ACME-123
+    web/                            ← worktree of .repos/web.git, branch ACME-123
 ```
 
 ## Where work runs
@@ -118,6 +121,7 @@ for, and the reverse, and that each is in this table.
 | `pr:draft` | `{ task_id, text }` | a chunk of a drafted PR description | `PrPanel.tsx` |
 | `issue:draft` | `{ request_id, text }` | a chunk of an improved ticket description | `tickets/OptimizeDescription.tsx` |
 | `system-notify-click` | a `NotifyTarget` | a banner was clicked | `App.tsx` → open what it is about |
+| `app:notices` | none | a notice was queued after startup (`commands::notify`) | `App.tsx` → `takeNotices`, as toasts |
 
 What still polls, and why, is marked at each `setInterval` with
 `// guard: allow poll — <reason>`. Everything polls only while the window is
@@ -185,7 +189,8 @@ app's config folder and returns its extra arguments and environment.
 
 ## Git
 
-`git.rs` is the only place git runs, through a private `run`. Every call
+`git.rs` (and `git/store.rs`, its submodule) is the only place git runs,
+through a private `run`. Every call
 sets `GIT_OPTIONAL_LOCKS=0` (the status poll must not take `index.lock`
 while an agent commits) and `GIT_TERMINAL_PROMPT=0`. It also uses the login
 shell's PATH, so hooks find `node`.
@@ -207,6 +212,20 @@ not know, but refuses an option it does not know.
 Anything from outside that reaches a git argument is checked:
 `check_names`, `commit_id`, the leading-`-` guards, `--` before paths. A
 base of `--upload-pack=<cmd>` once ran the command.
+
+**The app's own copies** (`git/store.rs`). Adding a repo makes
+`<task folder location>/.repos/<name>.git` with `git clone --bare --local`.
+That hard-links the objects, so it costs little disk, and the links
+outlive the user's clone. The copy fetches from the clone's `origin`,
+keeps reflogs, and takes the clone's repo-local settings (identity,
+signing, `sshCommand`, hooks path) once, when it is made. At every launch,
+before panes come back, `adopt_worktrees` moves any worktree still
+registered in a user's clone onto the copy, in place. The branch comes
+across first, and the index is copied so staging survives. A folder whose
+link is already gone is linked back at `Checkout.last_head`, which the
+status poll keeps current. Per-worktree operations (remove, prune, the
+branch deleted at finish) ask the worktree which repository owns it
+(`owner_of`), so a worktree that could not be moved is still handled.
 
 **Branch point and lease.** `Checkout.base_commit` is where the branch was
 cut. It moves to what was merged in or rebased onto. `git::baseline` uses
@@ -263,6 +282,11 @@ push.
 - **A worktree per repo per task**, not branches switched in one clone.
   Agents work in parallel, and a checkout switch under a running agent
   loses its work.
+- **Worktrees belong to the app's copy, not the user's clone.** When they
+  were the clone's, re-cloning it (2026-09-23) cut seven task folders off
+  at once, and a `git worktree prune`, `gc` or branch deletion there could
+  do the same. The clone is the user's to do anything with. The cost: task
+  branches show in it only after a push and a fetch.
 - **One branch name across a task's repos**, and one folder with the repos
   as siblings. A ticket that touches `api` and `web` is one piece of work,
   and the agent can see both.

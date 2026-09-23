@@ -309,7 +309,14 @@ function Watchers() {
     const t = setTimeout(() => {
       void api.takeNotices().then(show).catch(() => {});
     }, 4000);
-    return () => clearTimeout(t);
+    // Anything raised later, by work that outlasted the two looks above.
+    const p = listen("app:notices", () => {
+      void api.takeNotices().then(show).catch(() => {});
+    });
+    return () => {
+      clearTimeout(t);
+      void p.then((un) => un());
+    };
   }, []);
 
   // Say when a review lands, once.

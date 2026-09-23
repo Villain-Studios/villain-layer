@@ -97,6 +97,11 @@ blocked by Gatekeeper, since it is not signed yet: right-click → Open, once.
 
 - **Task folders** go in `~/.villain-worktrees/` (settable). Each holds a
   worktree per repo, plus the app's context files for the agents.
+- **The app's own copy of each repo** goes in `~/.villain-worktrees/.repos/`.
+  Task worktrees come from it, never from your clone, so you can re-clone,
+  move or delete your clones without breaking a task. The copy hard-links
+  git's objects, so it takes little extra disk. Task branches show up in
+  your own clone once they are pushed and you fetch.
 - **`~/.claude.json`**: with *Trust the folders this app creates* on (the
   default), the app marks its own task folders as trusted, so Claude Code
   does not stop to ask. It touches nothing else in that file, and never a

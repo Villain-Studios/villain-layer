@@ -148,9 +148,32 @@ pub fn run() {
 
             // Put back the panes that were open last time. Off the startup
             // path too: each agent spawn waits on the login shell's PATH.
+            //
+            // Worktrees move onto the app's own copies of their repositories
+            // first, while no agent is working in them (`git/store.rs`).
             let restore = handle.clone();
             std::thread::spawn(move || {
+                let state = restore.state::<AppState>();
+                let (moved, problems) = commands::adopt_worktrees(&state);
+                if moved > 0 {
+                    commands::notify(
+                        &restore,
+                        "info",
+                        format!(
+                            "{moved} task folder{} now belong to the app's own copies of their repositories, so nothing done to your clones can break them.",
+                            if moved == 1 { "" } else { "s" }
+                        ),
+                    );
+                }
+                if !problems.is_empty() {
+                    commands::notify(
+                        &restore,
+                        "error",
+                        format!("Some task folders still depend on your clones: {}", problems.join("; ")),
+                    );
+                }
                 commands::restore_panes(&restore);
+                commands::make_missing_stores(&state);
             });
             Ok(())
         })

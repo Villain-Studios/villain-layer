@@ -87,6 +87,15 @@ pub fn push_notice(state: &AppState, kind: &str, text: impl Into<String>) {
     });
 }
 
+/// A notice raised after the UI may already have drained the queue, at any
+/// time: queued as ever, and announced, so the UI takes it now. Notices from
+/// startup work that ran past the UI's second look were never shown.
+pub fn notify(app: &tauri::AppHandle, kind: &str, text: impl Into<String>) {
+    use tauri::{Emitter, Manager};
+    push_notice(&app.state::<AppState>(), kind, text);
+    let _ = app.emit("app:notices", ());
+}
+
 mod projects;
 mod tasks;
 mod panes;
@@ -120,6 +129,7 @@ mod tests {
             path: format!("/repos/{id}"),
             default_branch: "main".into(),
             group: group.map(str::to_string),
+            store: None,
         }
     }
 
@@ -390,5 +400,94 @@ mod tests {
             .map(|i| saved(&i.to_string(), "t", "shell", "/same"))
             .collect();
         assert_eq!(panes_to_restore(many, RESTORE_LIMIT).len(), RESTORE_LIMIT);
+    }
+
+    /// The clone a task was cut from is cloned again, as happened to seven
+    /// task folders at once: after adoption the folders belong to the app's
+    /// copy and do not notice.
+    #[test]
+    fn task_folders_move_onto_the_apps_copy_and_outlive_a_reclone() {
+        use crate::config::{Checkout, ConfigStore, Task};
+        let root = std::env::temp_dir().join(format!("vl-adopt-{}", uuid::Uuid::new_v4()));
+        let git = |dir: &std::path::Path, args: &[&str]| crate::git::run_for_tests(dir, args).unwrap();
+        let remote = root.join("remote.git");
+        std::fs::create_dir_all(&remote).unwrap();
+        git(&remote, &["init", "-q", "-b", "main", "--bare"]);
+        let clone = root.join("code/api");
+        std::fs::create_dir_all(clone.parent().unwrap()).unwrap();
+        git(&root, &["clone", "-q", remote.to_str().unwrap(), clone.to_str().unwrap()]);
+        git(&clone, &["config", "user.email", "t@villain.local"]);
+        git(&clone, &["config", "user.name", "Test"]);
+        std::fs::write(clone.join("a.txt"), "one\n").unwrap();
+        git(&clone, &["add", "-A"]);
+        git(&clone, &["commit", "-qm", "init"]);
+        git(&clone, &["push", "-q", "-u", "origin", "main"]);
+
+        let tasks_root = root.join("worktrees");
+        let wt = tasks_root.join("T-1/api");
+        crate::git::add_worktree(&clone, &wt, "T-1", "main").unwrap();
+        std::fs::write(wt.join("a.txt"), "work\n").unwrap();
+        git(&wt, &["commit", "-qam", "unpushed"]);
+        let unpushed = git(&wt, &["rev-parse", "HEAD"]).trim().to_string();
+        std::fs::write(wt.join("a.txt"), "more work\n").unwrap();
+
+        let mut cfg = AppConfig {
+            worktree_root: Some(tasks_root.to_string_lossy().to_string()),
+            ..Default::default()
+        };
+        let mut p = project("api", None);
+        p.path = clone.to_string_lossy().to_string();
+        cfg.projects.push(p);
+        cfg.tasks.push(Task {
+            id: "t1".into(),
+            name: "T-1".into(),
+            root: tasks_root.join("T-1").to_string_lossy().to_string(),
+            branch: "T-1".into(),
+            issue_key: None,
+            issue_url: None,
+            created_at: chrono::Utc::now(),
+        });
+        cfg.checkouts.push(Checkout {
+            id: "c1".into(),
+            task_id: "t1".into(),
+            project_id: "api".into(),
+            path: wt.to_string_lossy().to_string(),
+            base: "main".into(),
+            base_commit: None,
+            push_lease: None,
+            point_before_update: None,
+            last_head: None,
+        });
+        let state = super::AppState {
+            config: ConfigStore::for_tests(root.join("config.json"), cfg),
+            ptys: crate::pty::PtyManager::default(),
+            jira_types: Default::default(),
+            epic_field_missing: Default::default(),
+            pending_notices: Default::default(),
+            status_cache: Default::default(),
+            news: Default::default(),
+        };
+
+        assert_eq!(super::adopt_worktrees(&state), (1, Vec::new()));
+        let store = state.config.project("api").unwrap().store.expect("a copy was made");
+        assert!(crate::git::belongs_to(&wt, std::path::Path::new(&store)));
+        assert_eq!(super::adopt_worktrees(&state), (0, Vec::new()), "the second launch has nothing to do");
+
+        // What happened on 2026-09-23: the clone is deleted and cloned again.
+        std::fs::remove_dir_all(&clone).unwrap();
+        git(&root, &["clone", "-q", remote.to_str().unwrap(), clone.to_str().unwrap()]);
+
+        assert!(crate::git::unlinked(&wt).is_none());
+        assert_eq!(git(&wt, &["rev-parse", "HEAD"]).trim(), unpushed, "the unpushed commit is safe");
+        assert_eq!(std::fs::read_to_string(wt.join("a.txt")).unwrap(), "more work\n");
+        let views = super::list_tasks_inner(&state, Some("t1".into()));
+        let seen = &views[0].checkouts[0];
+        assert!(seen.broken.is_none() && seen.changed == 1, "reads as one uncommitted edit");
+        assert_eq!(
+            state.config.read().checkouts[0].last_head.as_deref(),
+            Some(unpushed.as_str()),
+            "the poll remembers where the worktree is"
+        );
+        std::fs::remove_dir_all(&root).ok();
     }
 }

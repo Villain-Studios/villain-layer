@@ -770,7 +770,7 @@ pub fn restore_panes(app: &AppHandle) {
         eprintln!("{text}");
         // Queued for the UI: restore runs off the startup path and may finish
         // before or after the webview is listening.
-        super::push_notice(&state, "info", text);
+        super::notify(app, "info", text);
     }
     // The list is rebuilt as each pane comes back with a new id: its old
     // entry is taken off only then. Clearing it up front meant a restore that

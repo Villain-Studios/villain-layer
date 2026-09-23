@@ -21,12 +21,26 @@ pub const SCHEMA_VERSION: u32 = 2;
 pub struct Project {
     pub id: String,
     pub name: String,
-    /// Absolute path to the main repository checkout.
+    /// Absolute path to the user's own clone: where the repository was found,
+    /// and what the app copies. Task worktrees do not come from it.
     pub path: String,
     pub default_branch: String,
     /// "frontend", "backend", ... One group per repo; None means ungrouped.
     #[serde(default)]
     pub group: Option<String>,
+    /// The app's own bare copy of the repository, which task worktrees
+    /// belong to (`git/store.rs`). None until it has been made.
+    #[serde(default)]
+    pub store: Option<String>,
+}
+
+impl Project {
+    /// The repository new task worktrees are cut from: the app's copy once
+    /// there is one, the user's clone until then. For a worktree that
+    /// already exists, ask it (`commands::owner_of`) instead.
+    pub fn repo(&self) -> PathBuf {
+        PathBuf::from(self.store.as_deref().unwrap_or(&self.path))
+    }
 }
 
 /// One ticket's worth of work, spanning one or more repositories.
@@ -75,6 +89,10 @@ pub struct Checkout {
     /// branch's own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub point_before_update: Option<String>,
+    /// The commit the worktree was last seen on. What a folder cut off from
+    /// its repository is linked back at.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_head: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -318,6 +336,7 @@ impl AppConfig {
                 base_commit: None,
                 push_lease: None,
                 point_before_update: None,
+                last_head: None,
             });
         }
         self.version = SCHEMA_VERSION;
@@ -406,6 +425,13 @@ impl ConfigStore {
 
     pub fn read(&self) -> AppConfig {
         self.inner.read().clone()
+    }
+
+    /// A store over `cfg`, saving to `path`, for tests that need an
+    /// `AppState` without a running app.
+    #[cfg(test)]
+    pub fn for_tests(path: PathBuf, cfg: AppConfig) -> Self {
+        Self { path, inner: RwLock::new(cfg), disk: parking_lot::Mutex::new(()) }
     }
 
     /// Mutate the config and write it back to disk atomically.

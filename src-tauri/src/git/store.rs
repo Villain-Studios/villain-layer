@@ -1,0 +1,384 @@
+//! The app's own copy of each repository, which every task worktree belongs
+//! to.
+//!
+//! Worktrees used to be cut from the user's clone, and so lived inside it:
+//! its `.git/worktrees/` held their registration, its branches their
+//! commits. Re-cloning that clone cut seven task folders off at once (every
+//! file still there, git unable to read any of them), and deleting a branch,
+//! `git worktree prune` or `gc` in it reached into tasks the same way. A copy
+//! the app alone uses keeps the user's clone the user's.
+//!
+//! The copy is `git clone --bare --local`, which hard-links the object files
+//! rather than copying them. A hard link outlives the file it was made from,
+//! so the copy costs little disk and survives the clone being deleted.
+
+use std::path::{Path, PathBuf};
+
+use super::run;
+use crate::error::{Error, Result};
+
+/// Make `store`, a private bare copy of `source`, fetching from where
+/// `source` fetches.
+pub fn create_store(source: &Path, store: &Path) -> Result<()> {
+    let parent = store
+        .parent()
+        .ok_or_else(|| Error::Git(format!("{} has no parent folder", store.display())))?;
+    std::fs::create_dir_all(parent)?;
+    let (from, to) = (source.to_string_lossy(), store.to_string_lossy());
+    run(parent, &["clone", "--bare", "--local", "--quiet", "--", &from, &to])?;
+
+    let made = (|| {
+        // A bare clone takes branches and tags only. What `source` knows of
+        // origin comes along from disk, so bases and the branch picker work
+        // before the first fetch reaches the network.
+        let _ = run(
+            store,
+            &["fetch", "--quiet", "--no-tags", "--", &from, "+refs/remotes/origin/*:refs/remotes/origin/*"],
+        );
+        // Fetches and pushes go where the user's clone sends them, not to
+        // the clone itself; a clone with no origin keeps the path.
+        if let Ok(url) = run(source, &["config", "--get", "remote.origin.url"]) {
+            run(store, &["config", "remote.origin.url", url.trim()])?;
+        }
+        run(store, &["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"])?;
+        // A bare repository keeps no reflogs by default. They are what gets a
+        // lost commit back.
+        run(store, &["config", "core.logAllRefUpdates", "true"])?;
+        copy_local_config(source, store)
+    })();
+    if made.is_err() {
+        let _ = std::fs::remove_dir_all(store);
+    }
+    made
+}
+
+/// Whether `store` is a copy this app made of the repository at `source`:
+/// a bare repository fetching from the same place. Lets a second build, or
+/// a repo added again, reuse the copy instead of making another.
+pub fn is_store_of(store: &Path, source: &Path) -> bool {
+    let bare = run(store, &["rev-parse", "--is-bare-repository"])
+        .map(|o| o.trim() == "true")
+        .unwrap_or(false);
+    let url = |dir: &Path| run(dir, &["config", "--get", "remote.origin.url"]).ok().map(|u| u.trim().to_string());
+    bare && url(store).is_some() && url(store) == url(source)
+}
+
+/// The user's settings for this repository, carried into the copy: a work
+/// email, commit signing, an ssh command, a hooks path. Worktrees of the
+/// clone used to get them for free, and a commit signed as the wrong person
+/// is not something to find out from review. What describes the clone
+/// itself rather than the user stays behind.
+fn copy_local_config(from: &Path, to: &Path) -> Result<()> {
+    let listed = run(from, &["config", "--local", "--null", "--list"])?;
+    let mut seen: Vec<String> = Vec::new();
+    for entry in listed.split('\0').filter(|e| !e.is_empty()) {
+        let (key, value) = entry.split_once('\n').unwrap_or((entry, ""));
+        if !carried(key) {
+            continue;
+        }
+        // The first value replaces whatever the clone wrote; the rest are
+        // added, for keys that hold several (`url.<x>.insteadOf`).
+        let first = !seen.iter().any(|k| k == key);
+        let flag = if first { "--replace-all" } else { "--add" };
+        run(to, &["config", flag, "--", key, value])?;
+        if first {
+            seen.push(key.to_string());
+        }
+    }
+    Ok(())
+}
+
+fn carried(key: &str) -> bool {
+    let k = key.to_ascii_lowercase();
+    let clone_only = ["remote.", "branch.", "submodule.", "extensions.", "worktree."];
+    !(clone_only.iter().any(|p| k.starts_with(p))
+        || matches!(
+            k.as_str(),
+            "core.bare" | "core.repositoryformatversion" | "core.worktree" | "core.logallrefupdates"
+        ))
+}
+
+/// The registration folder a worktree's `.git` link names, if the link is
+/// there and so is the folder.
+fn registration(wt: &Path) -> Option<PathBuf> {
+    let text = std::fs::read_to_string(wt.join(".git")).ok()?;
+    let admin = wt.join(text.strip_prefix("gitdir:")?.trim());
+    admin.is_dir().then_some(admin)
+}
+
+/// The repository a registration belongs to.
+fn common_dir(admin: &Path) -> Option<PathBuf> {
+    let rel = std::fs::read_to_string(admin.join("commondir")).ok()?;
+    std::fs::canonicalize(admin.join(rel.trim())).ok()
+}
+
+/// The repository a worktree is registered in: the app's copy, or for one
+/// not moved yet, the user's clone (its `.git`). None when it is not linked.
+pub fn owner(wt: &Path) -> Option<PathBuf> {
+    registration(wt).as_deref().and_then(common_dir)
+}
+
+/// Whether `wt` is already registered in `store`.
+pub fn belongs_to(wt: &Path, store: &Path) -> bool {
+    match (registration(wt).as_deref().and_then(common_dir), std::fs::canonicalize(store)) {
+        (Some(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
+/// Move a worktree's registration from the clone it was cut from into
+/// `store`, leaving every file where it is.
+///
+/// The branch comes across first, so commits nobody pushed are not left
+/// behind in the old clone. The index is copied rather than rebuilt, so
+/// what was staged stays staged. Refused mid-merge or mid-rebase: that
+/// state lives in the old registration, and is not worth moving half way.
+pub fn adopt_worktree(store: &Path, wt: &Path) -> Result<()> {
+    if belongs_to(wt, store) {
+        return Ok(());
+    }
+    let old = registration(wt).ok_or_else(|| {
+        Error::Git(format!("{} is not linked to any repository", wt.display()))
+    })?;
+    let source = common_dir(&old)
+        .ok_or_else(|| Error::Git(format!("cannot tell which repository {} came from", wt.display())))?;
+    if super::in_progress(wt).is_some() {
+        return Err(Error::Git(format!(
+            "{} is in the middle of a merge or rebase; finish or abort it first",
+            wt.display()
+        )));
+    }
+    let branch = run(wt, &["symbolic-ref", "-q", "--short", "HEAD"])
+        .map(|b| b.trim().to_string())
+        .map_err(|_| Error::Git(format!("{} is not on a branch", wt.display())))?;
+    super::check_names(&branch, "HEAD")?;
+
+    let from = source.to_string_lossy();
+    run(
+        store,
+        &["fetch", "--quiet", "--no-tags", "--", &from, &format!("+refs/heads/{branch}:refs/heads/{branch}")],
+    )?;
+    // Where the branch pushes to, if it was pushed from the clone.
+    for key in ["remote", "merge"] {
+        let name = format!("branch.{branch}.{key}");
+        if let Ok(v) = run(&source, &["config", "--get", &name]) {
+            let _ = run(store, &["config", &name, v.trim()]);
+        }
+    }
+
+    register_in_place(store, wt, &branch, Some(&old))?;
+    // The clone it came from would still count the branch as checked out,
+    // and refuse to delete or check it out, until this goes.
+    let _ = std::fs::remove_dir_all(&old);
+    Ok(())
+}
+
+/// Link a worktree whose registration is gone back into `store`, at the
+/// commit it was last seen on, leaving every file where it is.
+///
+/// For a folder cut off by its clone being deleted or cloned again. The
+/// branch is made at `head` unless `store` already has it. Nothing staged
+/// survives — that lived in the lost registration — so the index is
+/// rebuilt from the commit and every change reads as unstaged.
+pub fn relink_worktree(store: &Path, wt: &Path, branch: &str, head: &str) -> Result<()> {
+    if registration(wt).is_some() {
+        return Err(Error::Git(format!("{} is still linked; nothing to repair", wt.display())));
+    }
+    super::check_names(branch, "HEAD")?;
+    super::commit_id(head)?;
+    if !super::branch_exists(store, branch) {
+        run(store, &["cat-file", "-e", &format!("{head}^{{commit}}")])
+            .map_err(|_| Error::Git(format!("the app's copy does not have commit {head}")))?;
+        run(store, &["branch", "--", branch, head])?;
+    }
+    register_in_place(store, wt, branch, None)?;
+    run(wt, &["reset", "--quiet"])?;
+    Ok(())
+}
+
+/// Register `wt` in `store` on `branch` without checking anything out, and
+/// point the two at each other. The files in `wt` are never touched.
+fn register_in_place(store: &Path, wt: &Path, branch: &str, carry: Option<&Path>) -> Result<()> {
+    let folder = |p: &Path| p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let parent = wt.parent().map(folder).unwrap_or_default();
+    let name = format!("{parent}-{}", folder(wt))
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .collect::<String>();
+
+    // `git worktree add` names the registration after the folder it makes,
+    // so make an empty one with the name wanted, somewhere out of the way.
+    let staging = store.join("villain-adopting");
+    let mut tmp = staging.join(&name);
+    let mut n = 2;
+    while tmp.exists() || store.join("worktrees").join(folder(&tmp)).exists() {
+        tmp = staging.join(format!("{name}-{n}"));
+        n += 1;
+    }
+    std::fs::create_dir_all(&staging)?;
+    let tmp_s = tmp.to_string_lossy().to_string();
+    run(store, &["worktree", "add", "--no-checkout", "--quiet", &tmp_s, branch])?;
+
+    let linked = (|| -> Result<()> {
+        let link = std::fs::read_to_string(tmp.join(".git"))?;
+        let admin = PathBuf::from(
+            link.strip_prefix("gitdir:")
+                .ok_or_else(|| Error::Git("unexpected worktree link".into()))?
+                .trim(),
+        );
+        if let Some(old) = carry {
+            for file in ["index", "logs/HEAD"] {
+                if old.join(file).is_file() {
+                    if let Some(dir) = admin.join(file).parent() {
+                        std::fs::create_dir_all(dir)?;
+                    }
+                    std::fs::copy(old.join(file), admin.join(file))?;
+                }
+            }
+        }
+        std::fs::write(admin.join("gitdir"), format!("{}\n", wt.join(".git").display()))?;
+        // The switch itself: one rename, so a git running in the folder at
+        // that moment reads one link or the other, never half of one.
+        let next = wt.join(".git.villain-next");
+        std::fs::write(&next, &link)?;
+        std::fs::rename(&next, wt.join(".git"))?;
+        Ok(())
+    })();
+
+    let _ = std::fs::remove_file(tmp.join(".git"));
+    let _ = std::fs::remove_dir(&tmp);
+    let _ = std::fs::remove_dir(&staging);
+    if linked.is_err() {
+        // Nothing points at the new registration yet; let git forget it.
+        let _ = run(store, &["worktree", "prune"]);
+    }
+    linked
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sandbox() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("vl-store-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// A remote, and the user's clone of it with its own identity set only
+    /// in the clone — the setting a copy most needs to keep.
+    fn user_clone(root: &Path) -> (PathBuf, PathBuf) {
+        let remote = root.join("remote.git");
+        std::fs::create_dir_all(&remote).unwrap();
+        run(&remote, &["init", "-q", "-b", "main", "--bare"]).unwrap();
+        let clone = root.join("clone");
+        run(root, &["clone", "-q", remote.to_str().unwrap(), clone.to_str().unwrap()]).unwrap();
+        run(&clone, &["config", "user.email", "me@work.example"]).unwrap();
+        run(&clone, &["config", "user.name", "Me"]).unwrap();
+        std::fs::write(clone.join("a.txt"), "one\n").unwrap();
+        run(&clone, &["add", "-A"]).unwrap();
+        run(&clone, &["commit", "-qm", "init"]).unwrap();
+        run(&clone, &["push", "-q", "-u", "origin", "main"]).unwrap();
+        (remote, clone)
+    }
+
+    fn head(dir: &Path) -> String {
+        run(dir, &["rev-parse", "HEAD"]).unwrap().trim().to_string()
+    }
+
+    #[test]
+    fn a_copy_fetches_from_the_remote_and_outlives_the_clone() {
+        let root = sandbox();
+        let (remote, clone) = user_clone(&root);
+        let store = root.join("store/clone.git");
+        create_store(&clone, &store).unwrap();
+        assert!(is_store_of(&store, &clone));
+        let url = run(&store, &["config", "--get", "remote.origin.url"]).unwrap();
+        assert_eq!(url.trim(), remote.to_str().unwrap(), "fetches go to the remote, not the clone");
+        assert!(super::super::branch_exists(&store, "main"));
+        assert!(run(&store, &["rev-parse", "--verify", "refs/remotes/origin/main"]).is_ok());
+
+        let wt = root.join("task/clone");
+        super::super::add_worktree(&store, &wt, "task", "main").unwrap();
+        std::fs::remove_dir_all(&clone).unwrap();
+        std::fs::write(wt.join("a.txt"), "two\n").unwrap();
+        run(&wt, &["commit", "-qam", "work"]).unwrap();
+        let author = run(&wt, &["log", "-1", "--format=%ae"]).unwrap();
+        assert_eq!(author.trim(), "me@work.example", "the clone's own identity came across");
+        assert_eq!(super::super::status(&wt).unwrap().branch, "task");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_worktree_moves_into_the_copy_with_its_commits_and_its_staging() {
+        let root = sandbox();
+        let (_remote, clone) = user_clone(&root);
+        let wt = root.join("task/clone");
+        super::super::add_worktree(&clone, &wt, "task", "main").unwrap();
+        let store = root.join("store/clone.git");
+        create_store(&clone, &store).unwrap();
+
+        // Made after the copy, and never pushed: only the clone has it.
+        std::fs::write(wt.join("a.txt"), "committed\n").unwrap();
+        run(&wt, &["commit", "-qam", "unpushed"]).unwrap();
+        let unpushed = head(&wt);
+        std::fs::write(wt.join("staged.txt"), "s\n").unwrap();
+        run(&wt, &["add", "staged.txt"]).unwrap();
+        std::fs::write(wt.join("a.txt"), "edited\n").unwrap();
+        std::fs::write(wt.join("new.txt"), "n\n").unwrap();
+
+        adopt_worktree(&store, &wt).unwrap();
+        assert!(belongs_to(&wt, &store));
+        assert_eq!(head(&wt), unpushed, "the unpushed commit came across");
+        let st = super::super::status(&wt).unwrap();
+        assert_eq!((st.staged, st.unstaged, st.untracked), (1, 1, 1), "staging kept as it was");
+
+        // The clone lets go of the branch, and can be deleted outright.
+        run(&clone, &["branch", "-D", "task"]).unwrap();
+        std::fs::remove_dir_all(&clone).unwrap();
+        assert_eq!(super::super::status(&wt).unwrap().staged, 1);
+        assert_eq!(std::fs::read_to_string(wt.join("a.txt")).unwrap(), "edited\n");
+        assert!(adopt_worktree(&store, &wt).is_ok(), "adopting twice changes nothing");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_folder_cut_off_from_its_clone_is_relinked_at_its_last_commit() {
+        let root = sandbox();
+        let (_remote, clone) = user_clone(&root);
+        let store = root.join("store/clone.git");
+        create_store(&clone, &store).unwrap();
+        let wt = root.join("task/clone");
+        super::super::add_worktree(&clone, &wt, "task", "main").unwrap();
+        let last = head(&wt);
+        std::fs::write(wt.join("a.txt"), "uncommitted\n").unwrap();
+
+        // The clone is cloned again: the registration goes, the folder stays.
+        std::fs::remove_dir_all(clone.join(".git/worktrees")).unwrap();
+        assert!(super::super::unlinked(&wt).is_some());
+
+        relink_worktree(&store, &wt, "task", &last).unwrap();
+        assert!(super::super::unlinked(&wt).is_none());
+        assert_eq!(head(&wt), last);
+        let st = super::super::status(&wt).unwrap();
+        assert_eq!((st.branch.as_str(), st.unstaged), ("task", 1), "the edit reads as an edit");
+        assert_eq!(std::fs::read_to_string(wt.join("a.txt")).unwrap(), "uncommitted\n");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_worktree_mid_merge_is_left_where_it_is() {
+        let root = sandbox();
+        let (_remote, clone) = user_clone(&root);
+        let wt = root.join("task/clone");
+        super::super::add_worktree(&clone, &wt, "task", "main").unwrap();
+        let store = root.join("store/clone.git");
+        create_store(&clone, &store).unwrap();
+        let git_dir = run(&wt, &["rev-parse", "--git-dir"]).unwrap();
+        let merge_head = wt.join(git_dir.trim()).join("MERGE_HEAD");
+        std::fs::write(&merge_head, format!("{}\n", head(&wt))).unwrap();
+        assert!(adopt_worktree(&store, &wt).is_err());
+        assert!(!belongs_to(&wt, &store));
+        std::fs::remove_dir_all(&root).ok();
+    }
+}

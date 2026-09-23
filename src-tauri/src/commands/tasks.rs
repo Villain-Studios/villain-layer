@@ -215,9 +215,17 @@ pub(crate) fn list_tasks_inner(state: &AppState, focus: Option<String>) -> Vec<T
     let dirs: Vec<PathBuf> = cold.iter().map(|(_, _, d)| d.clone()).collect();
     let statuses = fresh_statuses(&dirs);
 
+    // Where each worktree was last seen, when that moved: what a folder cut
+    // off from its repository is linked back at (`adopt_worktrees`).
+    let mut seen_heads: std::collections::HashMap<String, String> = Default::default();
     let mut cache = state.status_cache.lock();
     for ((ti, ci, _), fresh) in cold.into_iter().zip(statuses) {
         let view = &mut views[ti][ci];
+        if let Some(head) = fresh.status.as_ref().map(|s| &s.head).filter(|h| !h.is_empty()) {
+            if view.checkout.last_head.as_ref() != Some(head) {
+                seen_heads.insert(view.checkout.id.clone(), head.clone());
+            }
+        }
         cache.insert(
             view.checkout.id.clone(),
             super::CachedStatus {
@@ -234,6 +242,15 @@ pub(crate) fn list_tasks_inner(state: &AppState, focus: Option<String>) -> Vec<T
         view.broken = fresh.broken;
     }
     drop(cache);
+    if !seen_heads.is_empty() {
+        let _ = state.config.update(|c| {
+            for ch in c.checkouts.iter_mut() {
+                if let Some(head) = seen_heads.remove(&ch.id) {
+                    ch.last_head = Some(head);
+                }
+            }
+        });
+    }
 
     cfg.tasks
         .iter()
@@ -393,7 +410,7 @@ pub(crate) fn create_checkout(
     );
 
     let base = base_for(project, base);
-    let repo = PathBuf::from(&project.path);
+    let repo = super::repo_for(state, project);
     let base_commit = if fetched {
         git::add_worktree_fetched(&repo, &path, &task.branch, &base)?
     } else {
@@ -409,6 +426,7 @@ pub(crate) fn create_checkout(
         base_commit: Some(base_commit).filter(|c| !c.is_empty()),
         push_lease: None,
         point_before_update: None,
+        last_head: None,
     };
     state
         .config
@@ -489,7 +507,7 @@ pub(crate) fn new_task(state: &AppState, req: NewTask) -> Result<Task> {
     // Every base at once, before any worktree: see `git::fetch_bases`.
     let targets: Vec<(PathBuf, String)> = projects
         .iter()
-        .map(|p| (PathBuf::from(&p.path), base_for(p, base)))
+        .map(|p| (super::repo_for(state, p), base_for(p, base)))
         .collect();
     git::fetch_bases(&targets);
 
@@ -500,7 +518,7 @@ pub(crate) fn new_task(state: &AppState, req: NewTask) -> Result<Task> {
         // back. Left behind, a retry with a different base found the branch
         // already there, checked it out as it was, and measured it against
         // the new base — the old base's commits then showed up in the diff.
-        let repo = PathBuf::from(&project.path);
+        let repo = super::repo_for(state, project);
         let fresh_branch = !git::branch_exists(&repo, &task.branch);
         match create_checkout(state, &task, project, &mut taken, base, true) {
             Ok(c) => created.push((c, fresh_branch)),
@@ -512,7 +530,7 @@ pub(crate) fn new_task(state: &AppState, req: NewTask) -> Result<Task> {
                 }
                 for (c, fresh) in &created {
                     if let Ok(p) = state.config.project(&c.project_id) {
-                        let repo = PathBuf::from(&p.path);
+                        let repo = super::owner_of(&p, &c.path);
                         let _ = git::remove_worktree(&repo, &c.path, true);
                         if *fresh {
                             let _ = git::delete_branch(&repo, &task.branch);
@@ -725,15 +743,17 @@ fn remove_checkout_inner(state: &AppState, checkout_id: String, force: bool) -> 
     // here returned at the next launch.
     let closed = state.ptys.close_checkout(&checkout_id, &checkout.path);
     let _ = state.config.update(|c| c.saved_panes.retain(|p| !closed.contains(&p.id)));
-    let repo = PathBuf::from(&project.path);
+    let repo = super::owner_of(&project, &checkout.path);
     if Path::new(&checkout.path).exists() {
         // A refusal — uncommitted work, without force — keeps the record too:
         // dropping it would leave the worktree on disk with nothing pointing
         // at it, which is the orphan delete_task already learned not to make.
         git::remove_worktree(&repo, &checkout.path, force)?;
     } else {
-        // Already removed by hand; just tidy the admin files.
-        let _ = git::prune_worktrees(&repo);
+        // Already removed by hand; just tidy the admin files, wherever it
+        // was registered.
+        let _ = git::prune_worktrees(&project.repo());
+        let _ = git::prune_worktrees(Path::new(&project.path));
     }
 
     state
@@ -790,7 +810,8 @@ pub async fn finish_task(
                 .into_iter()
                 .filter_map(|c| {
                     let p = state.config.project(&c.project_id).ok()?;
-                    Some((c.id, p.name, PathBuf::from(p.path), c.base))
+                    let home = super::owner_of(&p, &c.path);
+                    Some((c.id, p.name, home, c.base))
                 })
                 .collect();
             let repos = delete_task_inner(state, task_id, false)?;
@@ -922,11 +943,13 @@ fn delete_task_inner(state: &AppState, id: String, force: bool) -> Result<Vec<Re
 
         let path = PathBuf::from(&checkout.path);
         let (ok, detail) = if !path.exists() {
-            // Already removed by hand; just tidy the admin files.
-            let _ = git::prune_worktrees(&PathBuf::from(&project.path));
+            // Already removed by hand; just tidy the admin files, wherever
+            // it was registered.
+            let _ = git::prune_worktrees(&project.repo());
+            let _ = git::prune_worktrees(Path::new(&project.path));
             (true, "already gone".to_string())
         } else {
-            match git::remove_worktree(&PathBuf::from(&project.path), &checkout.path, force) {
+            match git::remove_worktree(&super::owner_of(&project, &checkout.path), &checkout.path, force) {
                 Ok(()) => (true, "removed".to_string()),
                 Err(e) => (false, e.to_string()),
             }

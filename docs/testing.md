@@ -11,6 +11,7 @@ Run before every commit. It stops at the first failure.
 | Step | What it proves |
 |---|---|
 | `bun scripts/guard.ts` | the rules in `AGENTS.md` that tools cannot check: command and event sync, nothing blocking the main thread or runtime, no panics, file sizes, docs listing every tool, CLI and event |
+| `bun test scripts` | the frontend's pure logic that has tests: the Markdown parser (`scripts/markdown.test.ts`). Kept outside `src/` because tsc has no bun types |
 | `tsc` | the frontend type-checks, including the mock harness against `types.ts` |
 | `vite build` | the frontend bundles; `tauri::generate_context!` needs `dist/` for the Rust steps |
 | `cargo clippy --all-targets -- -D warnings` | the backend, tests included, compiles clean. A warning is a failure |

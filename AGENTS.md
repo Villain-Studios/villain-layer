@@ -26,8 +26,9 @@ those tasks to Jira, GitHub and Slack. What it does, feature by feature, is in
 3. **Make the smallest change that meets the requirement.** Prefer extending
    what exists over adding a parallel version of it: one helper, one store
    action, one way to run blocking work.
-4. **Prove it.** `bun run check` must pass. It runs the guard, tsc, the
-   frontend build, clippy and the Rust tests. A UI change is looked at and
+4. **Prove it.** `bun run check` must pass. It runs the guard, the
+   frontend's tests, tsc, the frontend build, clippy and the Rust tests.
+   A UI change is looked at and
    clicked through in the mock harness ([`docs/testing.md`](docs/testing.md)).
    A bug fix comes with a test that fails without it.
 5. **Say what you did not verify.** An agent CLI you could not run, a Jira

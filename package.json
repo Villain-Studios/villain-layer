@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "guard": "bun scripts/guard.ts",
-    "check": "bun scripts/guard.ts && tsc && vite build && cd src-tauri && cargo clippy --all-targets -- -D warnings && cargo test --lib",
+    "check": "bun scripts/guard.ts && bun test scripts && tsc && vite build && cd src-tauri && cargo clippy --all-targets -- -D warnings && cargo test --lib",
     "preview": "vite preview",
     "tauri": "tauri",
     "dev:app": "tauri dev --config src-tauri/tauri.dev.conf.json",

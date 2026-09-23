@@ -419,9 +419,16 @@ finish a merged task.
   toast.
 - **PR-9** A late answer MUST NOT overwrite a newer one. A sweep that
   started before a PR was opened does not put back "no PR".
+- **PR-10** The feedback picker MUST show each item in full, with no
+  click to expand it: every comment of a thread, and a check's report and
+  log. Markdown is shown as GitHub shows it (headings, emphasis, code,
+  lists, tables, links), built from elements and never from HTML, since
+  the text is someone else's: raw tags keep only their text, a link opens
+  in the browser only for http(s) and mailto, and images are not loaded.
+  Clicking an item's heading picks it; its text can be selected.
 
 Code: `commands/github.rs`, `integrations/github.rs`, `PrPanel.tsx`,
-`PrFeedback.tsx`.
+`PrFeedback.tsx`, `Markdown.tsx`, `lib/markdown.ts`.
 
 Known gaps:
 - Only the first 100 check runs of a commit are read.

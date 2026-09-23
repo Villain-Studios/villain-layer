@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, errMessage } from "../lib/api";
 import { read, write } from "../lib/persist";
@@ -6,6 +6,7 @@ import { useStore } from "../store";
 import type { FeedbackItem, FeedbackNote, RepoFeedback, TaskView } from "../lib/types";
 import { Modal, Spinner } from "./ui";
 import { AgentTargetFields, useAgentTarget } from "./AgentTarget";
+import { Markdown } from "./Markdown";
 
 /** One row in the picker, and what it becomes if it is sent. */
 interface Entry {
@@ -100,80 +101,58 @@ const REVIEW_VERB: Record<string, string> = {
   COMMENTED: "reviewed",
 };
 
-function EntryRow({
-  entry, on, onToggle, open, onOpen,
-}: {
-  entry: Entry;
-  on: boolean;
-  onToggle: () => void;
-  open: boolean;
-  onOpen: () => void;
-}) {
+function EntryRow({ entry, on, onToggle }: { entry: Entry; on: boolean; onToggle: () => void }) {
   const item = entry.item;
   let head: string;
-  let body: string;
-  let url: string | null;
-  let more: string | null = null;
+  let content: ReactNode;
+  // All of it, as GitHub shows it: choosing what to send means reading it,
+  // and a two-line preview behind "more" was a click per comment.
   if (item.kind === "thread") {
     head = item.line ? `${item.path}:${item.line}` : item.path;
-    const first = item.comments[0];
-    body = first ? `${first.author}: ${first.body}` : "";
-    const replies = item.comments.length - 1;
-    if (replies > 0) more = `+${replies} repl${replies === 1 ? "y" : "ies"}`;
-    url = item.url;
+    content = item.comments.map((c, n) => (
+      <div key={n} className="fb-comment">
+        <div className="fb-author">{c.author}</div>
+        <Markdown text={c.body} />
+      </div>
+    ));
   } else if (item.kind === "review") {
     head = `${item.author} ${REVIEW_VERB[item.state ?? ""] ?? "reviewed"}`;
-    body = item.body;
-    url = item.url;
+    content = item.body && <Markdown text={item.body} />;
   } else if (item.kind === "comment") {
     head = `${item.author} commented`;
-    body = item.body;
-    url = item.url;
+    content = item.body && <Markdown text={item.body} />;
   } else {
     head = `${item.name} — ${item.conclusion.replace(/_/g, " ")}`;
-    body = item.summary || (item.log ? "" : "No report or log could be read.");
-    url = item.url;
-    const lines = item.log ? item.log.split("\n").length : 0;
-    if (lines > 0) more = `${lines} lines of log`;
+    content = (
+      <>
+        {item.summary && <Markdown text={item.summary} />}
+        {item.log && <pre className="fb-log">{item.log}</pre>}
+        {!item.summary && !item.log && <div className="fb-body">No report or log could be read.</div>}
+      </>
+    );
   }
-  // All of it, for when the two lines shown are not enough to decide on.
-  const detail =
-    item.kind === "check"
-      ? [item.summary, item.log].filter(Boolean).join("\n\n────\n\n")
-      : item.kind === "thread"
-        ? item.comments.map((c) => `${c.author}: ${c.body}`).join("\n\n")
-        : item.body;
-  const long = more !== null || body.length > 180 || body.split("\n").length > 2;
+  const url = item.url;
 
   return (
     <div className="fb-item">
       <input type="checkbox" checked={on} onChange={onToggle} />
-      <div className="fb-main" onClick={onToggle}>
-        <div className="row">
+      <div className="fb-main">
+        {/* The heading picks the item; the body is for reading, selecting and following links. */}
+        <div className="row fb-pick" onClick={onToggle}>
           <span className={item.kind === "thread" || item.kind === "check" ? "fb-head mono" : "fb-head"}>{head}</span>
           {entry.why.map((w) => <span key={w} className="chip">{w}</span>)}
           <div className="spacer" />
-          {long && detail && (
-            <button
-              className="btn-sm"
-              onClick={(e) => { e.stopPropagation(); onOpen(); }}
-              title={open ? "Show less" : "Show all of it"}
-            >
-              {more ?? "more"} {open ? "▴" : "▾"}
-            </button>
-          )}
           {url && (
             <button
               className="btn-sm"
               title="Open on GitHub"
-              onClick={(e) => { e.stopPropagation(); void openUrl(url!).catch(() => {}); }}
+              onClick={(e) => { e.stopPropagation(); void openUrl(url).catch(() => {}); }}
             >
               ↗
             </button>
           )}
         </div>
-        {body && !open && <div className="fb-body">{body}</div>}
-        {open && detail && <pre className="fb-log">{detail}</pre>}
+        {content && <div className="fb-content">{content}</div>}
       </div>
     </div>
   );
@@ -195,7 +174,6 @@ export function PrFeedback({ task, onClose }: { task: TaskView; onClose: () => v
   const [rows, setRows] = useState<RepoFeedback[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [picked, setPicked] = useState<Set<string>>(new Set());
-  const [open, setOpen] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
 
   const sent = useMemo(() => new Set(read<string[]>(sentKey(task.id), [])), [task.id]);
@@ -315,8 +293,6 @@ export function PrFeedback({ task, onClose }: { task: TaskView; onClose: () => v
               entry={e}
               on={picked.has(e.key)}
               onToggle={() => setPicked((p) => toggle(p, e.key))}
-              open={open.has(e.key)}
-              onOpen={() => setOpen((o) => toggle(o, e.key))}
             />
           ))}
           {resolved > 0 && (

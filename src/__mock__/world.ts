@@ -247,11 +247,23 @@ const feedback: RepoFeedback[] = [
     threads: [
       {
         path: "src/auth.ts", line: 42, resolved: false, outdated: false, url: "https://github.com/acme/api/pull/42#t1",
-        comments: [{ author: "ana", bot: false, state: null, body: "The retry counter starts at 1, so this makes one attempt fewer than configured.", url: "", at: ago(1800) }],
+        comments: [
+          { author: "ana", bot: false, state: null, body: "The retry counter starts at `1`, so this makes **one attempt fewer** than configured.\n\n```ts\nlet attempt = 0;\n```", url: "", at: ago(1800) },
+          { author: "you", bot: false, state: null, body: "Good catch — fixed in the next push.", url: "", at: ago(1700) },
+        ],
       },
     ],
     reviews: [{ author: "ana", bot: false, state: "CHANGES_REQUESTED", body: "Needs a test for the retry path.", url: "", at: ago(1800) }],
-    comments: [{ author: "codecov", bot: true, state: null, body: "Coverage dropped 0.4%.", url: "", at: ago(1700) }],
+    comments: [
+      {
+        author: "github-actions", bot: true, state: null, url: "", at: ago(360),
+        body: "<!-- deploy-comment -->\n### 🚀 Preview deployed\n\n**Build:** `a1b2c3d`\n\n**Available at:**\n- https://acme-123.web.preview.acme.test",
+      },
+      {
+        author: "codecov", bot: true, state: null, url: "", at: ago(1700),
+        body: "## Coverage dropped 0.4%\n\n| File | Coverage | Δ |\n|:--|--:|--:|\n| src/auth.ts | 81.2% | -2.1% |\n| src/retry.ts | 94.0% | +0.3% |\n\n<details><summary>Details</summary>\n\n- [x] tests ran\n- [ ] integration suite\n</details>",
+      },
+    ],
     checks: [{
       name: "build", conclusion: "failure", url: "https://github.com/acme/api/actions/runs/1", summary: "",
       log: "src/auth.test.ts:\n  ✗ retries the configured number of times\n    expected 3, got 2",

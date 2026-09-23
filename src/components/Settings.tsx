@@ -49,6 +49,7 @@ export function Settings() {
 
   const [ghApi, setGhApi] = useState("https://api.github.com");
   const [ghWeb, setGhWeb] = useState("https://github.com");
+  const [ghTeam, setGhTeam] = useState("");
   const [ghToken, setGhToken] = useState("");
 
   const [slackSecret, setSlackSecret] = useState("");
@@ -64,6 +65,7 @@ export function Settings() {
     setJiraJql(settings.jira?.jql ?? "");
     setGhApi(settings.github?.api_url ?? "https://api.github.com");
     setGhWeb(settings.github?.web_url ?? "https://github.com");
+    setGhTeam(settings.github?.review_team ?? "");
     setSlackChannel(settings.slack?.channel ?? "");
     setWorktreeRoot(settings.worktree_root_is_default ? "" : settings.worktree_root);
   }, [settings]);
@@ -89,7 +91,9 @@ export function Settings() {
   async function connectGithub() {
     setBusy(true);
     try {
-      const login = await api.githubConnect(ghApi.trim(), ghWeb.trim(), ghToken.trim());
+      const login = await api.githubConnect(
+        ghApi.trim(), ghWeb.trim(), ghToken.trim(), ghTeam.trim() || null,
+      );
       setGhToken("");
       toast("success", `GitHub connected as ${login}`);
       await refreshSettings();
@@ -212,6 +216,20 @@ export function Settings() {
                   {Math.round(v * 100)}%
                 </button>
               ))}
+            </div>
+          </Field>
+
+          <Field
+            label="Notifications"
+            hint="Only while the window is in the background. Opening the app does not announce what was already waiting."
+          >
+            <div className="switch-list">
+              <Switch
+                label="New reviews and tickets"
+                detail="A banner when a pull request starts waiting on your review, or a ticket is assigned to you."
+                checked={settings.ui.system_notifications}
+                onChange={(v) => void saveUi({ ...settings.ui, system_notifications: v })}
+              />
             </div>
           </Field>
 
@@ -361,6 +379,16 @@ export function Settings() {
           </Field>
           <Field label="Web URL" hint="Used for building links back to the browser.">
             <input value={ghWeb} onChange={(e) => setGhWeb(e.target.value)} />
+          </Field>
+          <Field
+            label="Review team"
+            hint="Optional. A second list of pull requests requested of this team, as @fe or org/fe. A bare name is looked up from the teams you belong to, which needs the read:org scope; org/fe does not."
+          >
+            <input
+              value={ghTeam}
+              onChange={(e) => setGhTeam(e.target.value)}
+              placeholder="@fe"
+            />
           </Field>
           <Field
             label="Personal access token"

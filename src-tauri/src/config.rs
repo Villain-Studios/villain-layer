@@ -87,6 +87,11 @@ pub struct GithubConfig {
     pub api_url: String,
     /// Web base, used for building links.
     pub web_url: String,
+    /// Team whose review queue is listed beside your own. `@fe` or `org/fe`.
+    /// Absent means only reviews requested of you. A name, not a constant:
+    /// which team matters is a property of the install.
+    #[serde(default)]
+    pub review_team: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -176,6 +181,12 @@ pub struct UiPrefs {
     /// board and this app do not disagree about what is being worked on.
     #[serde(default = "yes")]
     pub sync_jira_status: bool,
+    /// A banner when a review is requested or a ticket is assigned, and only
+    /// while the window is in the background. On by default: the first sweep
+    /// after launch is silent, so turning the app on does not announce the
+    /// queue that was already waiting.
+    #[serde(default = "yes")]
+    pub system_notifications: bool,
     /// Let agents read the output of terminals in this app.
     ///
     /// Off by default, and deliberately: a shell's scrollback holds whatever
@@ -193,6 +204,7 @@ impl Default for UiPrefs {
             restore_panes: true,
             trust_agent_dirs: true,
             sync_jira_status: true,
+            system_notifications: true,
             agents_read_panes: false,
         }
     }

@@ -52,6 +52,7 @@ export function TicketsView() {
   // Filing under an epic: the parent is fixed, everything else is asked for.
   const [filing, setFiling] = useState<{ key: string; summary: string } | null>(null);
   const [creatingEpic, setCreatingEpic] = useState(false);
+  const [creatingTicket, setCreatingTicket] = useState(false);
 
   const jiraBase = settings?.jira?.base_url.replace(/\/+$/, "") ?? "";
   const types = useMemo(() => typeMap(issueTypes), [issueTypes]);
@@ -305,6 +306,9 @@ export function TicketsView() {
             >
               {allShut ? "Expand all" : "Collapse all"}
             </button>
+            <button type="button" className="btn btn-sm" onClick={() => setCreatingTicket(true)}>
+              New ticket…
+            </button>
             <button className="btn btn-sm" onClick={() => setCreatingEpic(true)}>
               New epic…
             </button>
@@ -488,12 +492,12 @@ export function TicketsView() {
         );
       })}
 
-      {filing && (
+      {(filing || creatingTicket) && (
         <FileIssueDialog
           epic={filing}
           issueTypes={issueTypes}
           types={types}
-          onClose={() => setFiling(null)}
+          onClose={() => { setFiling(null); setCreatingTicket(false); }}
           onFiled={(issue) => setOpen(issue)}
         />
       )}

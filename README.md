@@ -88,12 +88,13 @@ dialog takes a fully explicit branch name if you would rather set one yourself.
 
 ## Layout
 
-Four top-level views:
+Five top-level views:
 
 | | |
 |---|---|
 | **Work** | your tasks. With one selected: its terminals, diff and pull requests. With none selected: every agent across every task — what it is doing, how long since it last printed, and whether it has gone quiet waiting for you |
 | **Tickets** | your Jira backlog, grouped by epic, with each issue's own Jira type icon |
+| **Reviews** | pull requests waiting on your review, and — if a review team is set — on that team's |
 | **Chat** | a standing agent with no worktree |
 | **Repos** | the repositories Villain Layer knows about, and their groups |
 

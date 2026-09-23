@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../../lib/api";
+import { read, write } from "../../lib/persist";
 import { useStore } from "../../store";
 import type { CreateField, JiraIssue, JiraIssueType } from "../../lib/types";
-import { Field, Modal } from "../ui";
+import { Combo, Field, Modal } from "../ui";
 import { IssueTypeIcon, type TypeMap } from "../IssueType";
 import { creatableTypes, preferredCreatable } from "../task-forms/creatable";
 import { OptimizeDescription } from "./OptimizeDescription";
@@ -14,16 +15,20 @@ export function FileIssueDialog({
   onClose,
   onFiled,
 }: {
-  epic: { key: string; summary: string };
+  /** Set when filing under an epic. Absent means a ticket in a project you pick. */
+  epic: { key: string; summary: string } | null;
   issueTypes: JiraIssueType[];
   types: TypeMap;
   onClose: () => void;
   onFiled: (issue: JiraIssue) => void;
 }) {
+  const settings = useStore((s) => s.settings);
+  const issues = useStore((s) => s.issues);
   const refreshIssues = useStore((s) => s.refreshIssues);
   const toast = useStore((s) => s.toast);
   const fail = useStore((s) => s.fail);
 
+  const [project, setProject] = useState(() => read("jiraProject", ""));
   const [newSummary, setNewSummary] = useState("");
   const [newDesc, setNewDesc] = useState("");
   const [newType, setNewType] = useState("");
@@ -34,6 +39,20 @@ export function FileIssueDialog({
   const [extra, setExtra] = useState<Record<string, string[]>>({});
 
   const creatable = useMemo(() => creatableTypes(issueTypes), [issueTypes]);
+  const boardKeys = useMemo(
+    () => [...new Set(issues.map((i) => i.key.split("-")[0]).filter(Boolean))],
+    [issues],
+  );
+  const defaultProject = settings?.jira?.project_key ?? boardKeys[0] ?? "";
+  // An epic already says which project. Otherwise the last one filed in, then
+  // the board's own key.
+  const projectKey = epic ? epic.key.split("-")[0] : project.trim();
+
+  useEffect(() => {
+    if (epic) return;
+    setProject((current) => current || defaultProject);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (newType && creatable.some((t) => t.name === newType)) return;
@@ -41,18 +60,17 @@ export function FileIssueDialog({
   }, [creatable, newType]);
 
   useEffect(() => {
-    const project = epic.key.split("-")[0];
     const typeId = creatable.find((t) => t.name === newType)?.id;
-    if (!project || !typeId) { setNeeded([]); return; }
+    if (!projectKey || !typeId) { setNeeded([]); return; }
     setNeededLoading(true);
     setExtra({});
-    api.jiraCreateFields(project, typeId)
+    api.jiraCreateFields(projectKey, typeId)
       .then((f) => setNeeded(f.filter((x) => x.required)))
       // A site that will not describe its own form is no reason to block the
       // dialog: Jira still says what is missing if the create is refused.
       .catch(() => setNeeded([]))
       .finally(() => setNeededLoading(false));
-  }, [epic.key, newType, creatable]);
+  }, [projectKey, newType, creatable]);
 
   /// Shaped the way Jira wants each field, from the metadata it gave us.
   function extraFields(): Record<string, unknown> {
@@ -67,7 +85,12 @@ export function FileIssueDialog({
   }
 
   // Fields the dialog fills itself, whether or not Jira calls them required.
-  const OWN = ["summary", "description", "issuetype", "project", "parent", "reporter"];
+  // Parent is one of them only when an epic was named — a ticket filed on its
+  // own does not have one, and a project that insists on a parent should say so.
+  const OWN = [
+    "summary", "description", "issuetype", "project", "reporter",
+    ...(epic ? ["parent"] : []),
+  ];
   // Required, and a closed set of values, so it can be offered as a choice.
   const pickable = needed.filter((f) => !OWN.includes(f.id) && f.allowed.length > 0);
   // Required, free-form, and not something this dialog asks for. Nothing
@@ -83,18 +106,18 @@ export function FileIssueDialog({
   ];
 
   async function fileIssue() {
-    if (!newSummary.trim() || !newType) return;
+    if (!newSummary.trim() || !newType || !projectKey) return;
     setFilingBusy(true);
     try {
       const issue = await api.jiraCreateIssue({
         summary: newSummary.trim(),
         description: newDesc.trim(),
         issue_type: newType,
-        project_key: null,
-        parent_key: epic.key,
+        project_key: epic ? null : projectKey,
+        parent_key: epic?.key ?? null,
         fields: extraFields(),
       });
-      toast("success", `Filed ${issue.key} under ${epic.key}`);
+      toast("success", epic ? `Filed ${issue.key} under ${epic.key}` : `Filed ${issue.key}`);
       onClose();
       await refreshIssues();
       // Straight into the start-work dialog: filing it is usually the first
@@ -109,14 +132,14 @@ export function FileIssueDialog({
 
   return (
     <Modal
-      title={`New ticket in ${epic.key}`}
+      title={epic ? `New ticket in ${epic.key}` : "New ticket"}
       onClose={onClose}
       footer={
         <>
           <button className="btn" onClick={onClose}>Cancel</button>
           <button
             className="btn btn-primary"
-            disabled={filingBusy || !newSummary.trim() || !newType || missing.length > 0}
+            disabled={filingBusy || !newSummary.trim() || !newType || !projectKey || missing.length > 0}
             title={
               missing.length > 0
                 ? `${missing.map((f) => f.name).join(", ")} required by this project`
@@ -130,10 +153,32 @@ export function FileIssueDialog({
       }
     >
       <div className="muted" style={{ marginBottom: 12, lineHeight: 1.6 }}>
-        Filed under <b>{epic.key}</b>
-        {epic.summary ? ` — ${epic.summary}` : ""}, in that epic's own project.
+        {epic ? (
+          <>
+            Filed under <b>{epic.key}</b>
+            {epic.summary ? ` — ${epic.summary}` : ""}, in that epic's own project.
+          </>
+        ) : (
+          <>Filed in the project you pick, with no parent epic.</>
+        )}{" "}
         Nothing is checked out; the start-work dialog opens once it exists.
       </div>
+
+      {!epic && (
+        <Field label="Project" hint="The key the ticket is filed under.">
+          <Combo
+            value={project}
+            options={boardKeys}
+            placeholder="ACME"
+            width="100%"
+            onChange={(raw) => {
+              const v = raw.trim().toUpperCase();
+              setProject(v);
+              write("jiraProject", v);
+            }}
+          />
+        </Field>
+      )}
 
       <Field label="Summary">
         <input

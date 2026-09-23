@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use serde::Serialize;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 
 use crate::config::{GithubConfig, JiraConfig, SlackConfig, UiPrefs};
 use crate::error::{Error, Result};
@@ -63,8 +63,51 @@ pub fn set_ui_prefs(state: State<AppState>, ui: UiPrefs) -> Result<()> {
         agents_read_panes: ui.agents_read_panes,
         trust_agent_dirs: ui.trust_agent_dirs,
         sync_jira_status: ui.sync_jira_status,
+        system_notifications: ui.system_notifications,
     };
     state.config.update(|c| c.ui = ui)
+}
+
+/// A banner, and which view a click on it should open.
+///
+/// The notification plugin's desktop backend shows the banner and drops the
+/// click — `show` never waits for it — so a click could focus the app and
+/// still leave you on whichever view you had left. This shows it itself and
+/// emits `system-notify-click` only for the activation, not a dismissal.
+#[tauri::command]
+pub fn system_notify(app: AppHandle, title: String, body: String, view: String) -> Result<()> {
+    // A dev build has no bundle id macOS will attribute a notification to.
+    // Borrowing Terminal's is what the plugin does, and without it a `tauri
+    // dev` banner is delivered to nobody.
+    #[cfg(target_os = "macos")]
+    {
+        let identifier = app.config().identifier.clone();
+        let bundle = if tauri::is_dev() {
+            "com.apple.Terminal"
+        } else {
+            identifier.as_str()
+        };
+        let _ = notify_rust::set_application(bundle);
+    }
+
+    // `wait_for_action` blocks until the banner is clicked or dismissed, and
+    // this command runs on the thread that owns the window.
+    std::thread::Builder::new()
+        .name("system-notify".into())
+        .spawn(move || {
+            let mut notification = notify_rust::Notification::new();
+            notification.summary(&title).body(&body);
+            let Ok(handle) = notification.show() else {
+                return;
+            };
+            handle.wait_for_action(move |action| {
+                if action == "default" {
+                    let _ = app.emit("system-notify-click", view);
+                }
+            });
+        })
+        .map_err(|e| Error::Other(format!("notification: {e}")))?;
+    Ok(())
 }
 
 #[tauri::command]

@@ -56,10 +56,17 @@ fn report_panics() {
             let _ = std::fs::create_dir_all(dir);
         }
         // A crash loop should not fill the disk with its own account of itself.
-        if std::fs::metadata(&path).map(|m| m.len() > 1_000_000).unwrap_or(false) {
+        if std::fs::metadata(&path)
+            .map(|m| m.len() > 1_000_000)
+            .unwrap_or(false)
+        {
             let _ = std::fs::remove_file(&path);
         }
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
             use std::io::Write;
             let _ = writeln!(f, "{} {text}", chrono::Utc::now().to_rfc3339());
         }
@@ -85,6 +92,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let handle = app.handle();
             let state = AppState {
@@ -190,6 +198,7 @@ pub fn run() {
             commands::github_connect,
             commands::github_task_prs,
             commands::github_all_prs,
+            commands::github_review_queue,
             commands::set_checkout_base,
             commands::checkout_branches,
             commands::task_branch_facts,
@@ -202,6 +211,7 @@ pub fn run() {
             commands::slack_cleanup,
             commands::slack_delete_posted,
             commands::get_settings,
+            commands::system_notify,
             commands::take_notices,
             commands::set_worktree_root,
             commands::set_ui_prefs,

@@ -35,6 +35,8 @@ base64 = "0.22"
 parking_lot = "0.12"
 libc = "0.2"
 tauri-plugin-clipboard-manager = "2"
+tauri-plugin-notification = "2"
+notify-rust = "4"
 
 [profile.release]
 codegen-units = 1

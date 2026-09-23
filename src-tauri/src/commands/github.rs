@@ -11,10 +11,10 @@ use crate::git;
 use crate::integrations::github::{self, GitHub};
 use crate::secrets;
 
-use super::AppState;
 use super::diff::RepoResult;
 use super::jira::{jira_client, stored_or};
 use super::slack::{record_post, slack_for};
+use super::AppState;
 
 // ------------------------------------------------------------------ github
 
@@ -34,10 +34,14 @@ pub async fn github_connect(
     api_url: String,
     web_url: String,
     token: String,
+    review_team: Option<String>,
 ) -> Result<String> {
     let cfg = GithubConfig {
         api_url: api_url.trim_end_matches('/').to_string(),
         web_url: web_url.trim_end_matches('/').to_string(),
+        review_team: review_team
+            .as_deref()
+            .and_then(github::normalize_review_team),
     };
     let token = stored_or(secrets::GITHUB, &token, "GitHub")?;
     let login = GitHub::new(&cfg, &token).login().await?;
@@ -114,10 +118,7 @@ pub struct RepoBranchFacts {
 /// repository, and the Diff view asks for all of them again every time its
 /// file list is rebuilt.
 #[tauri::command]
-pub async fn task_branch_facts(
-    app: AppHandle,
-    task_id: String,
-) -> Result<Vec<RepoBranchFacts>> {
+pub async fn task_branch_facts(app: AppHandle, task_id: String) -> Result<Vec<RepoBranchFacts>> {
     super::blocking(app, move |state| task_branch_facts_inner(state, task_id)).await
 }
 
@@ -157,10 +158,7 @@ pub async fn checkout_branches(app: AppHandle, checkout_id: String) -> Result<Ve
 
 /// Move the open pull request for a checkout onto its current base.
 #[tauri::command]
-pub async fn github_retarget_pr(
-    state: State<'_, AppState>,
-    checkout_id: String,
-) -> Result<String> {
+pub async fn github_retarget_pr(state: State<'_, AppState>, checkout_id: String) -> Result<String> {
     let checkout = state.config.checkout(&checkout_id)?;
     let task = state.config.task(&checkout.task_id)?;
     let (client, _) = github_client(&state)?;
@@ -219,7 +217,94 @@ pub async fn github_all_prs(state: State<'_, AppState>) -> Result<Vec<TaskPrs>> 
     Ok(out)
 }
 
-pub(crate) async fn task_prs(state: &AppState, client: &GitHub, task_id: &str) -> Result<Vec<CheckoutPr>> {
+/// Pull requests waiting on the signed-in user, and on the configured team.
+#[derive(Debug, Serialize)]
+pub struct ReviewQueue {
+    pub mine: Vec<github::ReviewRequest>,
+    /// GitHub had more personal hits than the one page we asked for.
+    pub mine_more: bool,
+    /// Absent when no review team is configured. Present, with `error` set,
+    /// when the team was configured but could not be resolved or searched —
+    /// the personal list is still worth showing.
+    pub team: Option<TeamReviews>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TeamReviews {
+    /// `org/slug`.
+    pub slug: String,
+    pub name: String,
+    pub prs: Vec<github::ReviewRequest>,
+    pub more: bool,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn github_review_queue(state: State<'_, AppState>) -> Result<ReviewQueue> {
+    let (client, cfg) = github_client(&state)?;
+    let (mine, mine_more) = client.search_prs(github::mine_review_query()).await?;
+    let team = match cfg.review_team.as_deref() {
+        Some(raw) => Some(load_team_reviews(&client, raw, &mine).await),
+        None => None,
+    };
+    Ok(ReviewQueue {
+        mine,
+        mine_more,
+        team,
+    })
+}
+
+/// The team column must not take the personal one down with it: a missing
+/// `read:org` scope, or a slug that matches nothing, is a problem with that
+/// column alone.
+async fn load_team_reviews(
+    client: &GitHub,
+    raw: &str,
+    mine: &[github::ReviewRequest],
+) -> TeamReviews {
+    let fallback = raw.trim_start_matches('@').to_string();
+    let team = match client.resolve_team(raw).await {
+        Ok(team) => team,
+        Err(e) => {
+            return TeamReviews {
+                slug: fallback.clone(),
+                name: fallback,
+                prs: Vec::new(),
+                more: false,
+                error: Some(e.to_string()),
+            };
+        }
+    };
+    let slug = format!("{}/{}", team.org, team.slug);
+    match client
+        .search_prs(&github::team_review_query(&team.org, &team.slug))
+        .await
+    {
+        Ok((mut prs, more)) => {
+            github::drop_already_listed(&mut prs, mine);
+            TeamReviews {
+                slug,
+                name: team.name,
+                prs,
+                more,
+                error: None,
+            }
+        }
+        Err(e) => TeamReviews {
+            slug,
+            name: team.name,
+            prs: Vec::new(),
+            more: false,
+            error: Some(e.to_string()),
+        },
+    }
+}
+
+pub(crate) async fn task_prs(
+    state: &AppState,
+    client: &GitHub,
+    task_id: &str,
+) -> Result<Vec<CheckoutPr>> {
     let task = state.config.task(task_id)?;
     let mut out = Vec::new();
 
@@ -362,8 +447,13 @@ pub async fn github_open_prs(
                 None => (
                     client
                         .create_pull(
-                            &owner, &name, &title, &body, &task.branch,
-                            &checkout.base, draft,
+                            &owner,
+                            &name,
+                            &title,
+                            &body,
+                            &task.branch,
+                            &checkout.base,
+                            draft,
                         )
                         .await?,
                     true,
@@ -441,4 +531,3 @@ pub async fn github_open_prs(
 
     Ok(results)
 }
-

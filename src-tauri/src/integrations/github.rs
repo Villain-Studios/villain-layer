@@ -262,12 +262,276 @@ impl GitHub {
                             .get("conclusion")
                             .and_then(|x| x.as_str())
                             .map(str::to_string),
-                        url: c.get("html_url").and_then(|x| x.as_str()).map(str::to_string),
+                        url: c
+                            .get("html_url")
+                            .and_then(|x| x.as_str())
+                            .map(str::to_string),
                     })
                     .collect()
             })
             .unwrap_or_default())
     }
+
+    /// Open pull requests matching a search query, newest activity first.
+    ///
+    /// One page. This feeds an inbox, and the search API is rate-limited
+    /// separately from the rest of REST — a second page on every poll would
+    /// spend that budget on rows nobody scrolls to. `more` is set when GitHub
+    /// had further hits.
+    pub async fn search_prs(&self, query: &str) -> Result<(Vec<ReviewRequest>, bool)> {
+        let v = self
+            .json(self.req(reqwest::Method::GET, "/search/issues").query(&[
+                ("q", query),
+                ("sort", "updated"),
+                ("order", "desc"),
+                ("per_page", "100"),
+            ]))
+            .await?;
+        Ok(parse_search_page(&v))
+    }
+
+    /// Teams the token's user belongs to.
+    ///
+    /// Capped. A server that ignores `page` would otherwise be followed
+    /// forever, and nobody belongs to enough teams for ten pages to matter.
+    pub async fn user_teams(&self) -> Result<Vec<GhTeam>> {
+        let mut out = Vec::new();
+        for page in 1..=10 {
+            let page_n = page.to_string();
+            let v = self
+                .json(
+                    self.req(reqwest::Method::GET, "/user/teams")
+                        .query(&[("per_page", "100"), ("page", page_n.as_str())]),
+                )
+                .await?;
+            let Some(arr) = v.as_array() else {
+                return Err(Error::Other(
+                    "GitHub /user/teams did not return a list".into(),
+                ));
+            };
+            if arr.is_empty() {
+                break;
+            }
+            let n = arr.len();
+            for t in arr {
+                if let Some(team) = parse_team(t) {
+                    out.push(team);
+                }
+            }
+            if n < 100 {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
+    /// Turn a settings value into the team GitHub's search qualifier wants.
+    ///
+    /// `org/slug` is used as written, so a token without `read:org` still
+    /// works. A bare slug has to be looked up, because the qualifier is
+    /// `org/slug` and the org is not in the name the user types.
+    pub async fn resolve_team(&self, raw: &str) -> Result<GhTeam> {
+        let bare = raw.trim().trim_start_matches('@').trim();
+        if bare.contains('/') {
+            return pick_team(bare, &[]).map_err(Error::Other);
+        }
+        let teams = self.user_teams().await.map_err(|e| {
+            Error::Other(format!(
+                "could not look up @{bare} ({e}). Set the team as org/{bare} — a bare name needs the read:org scope."
+            ))
+        })?;
+        pick_team(bare, &teams).map_err(Error::Other)
+    }
+}
+
+/// A pull request someone is being asked to review. Search results, not the
+/// pull endpoint: the queue is every repo on the install, not the ones this
+/// app has checked out.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ReviewRequest {
+    pub repo: String,
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    pub author: String,
+    pub draft: bool,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GhTeam {
+    pub org: String,
+    pub slug: String,
+    pub name: String,
+}
+
+/// Reviews requested of the signed-in user, excluding ones they opened.
+///
+/// A pull request you authored is not waiting for your review, even if you
+/// are also on the requested list.
+pub(crate) fn mine_review_query() -> &'static str {
+    "is:pr is:open review-requested:@me -author:@me"
+}
+
+/// Reviews requested of a team, excluding ones the signed-in user opened.
+pub(crate) fn team_review_query(org: &str, slug: &str) -> String {
+    format!("is:pr is:open team-review-requested:{org}/{slug} -author:@me")
+}
+
+/// What to store for the review team. Blank and a lone `@` are "no team".
+pub(crate) fn normalize_review_team(raw: &str) -> Option<String> {
+    let t = raw.trim().trim_start_matches('@').trim();
+    if t.is_empty() {
+        None
+    } else {
+        Some(t.to_string())
+    }
+}
+
+/// `@fe` matched against the user's teams, or `org/fe` taken as given.
+pub(crate) fn pick_team(raw: &str, teams: &[GhTeam]) -> std::result::Result<GhTeam, String> {
+    let raw = raw.trim().trim_start_matches('@').trim();
+    if raw.is_empty() {
+        return Err("a review team needs a name".into());
+    }
+    if let Some((org, slug)) = raw.split_once('/') {
+        let org = org.trim().trim_start_matches('@');
+        let slug = slug.trim().trim_start_matches('@');
+        if org.is_empty() || slug.is_empty() || slug.contains('/') {
+            return Err("a review team looks like @fe or org/fe".into());
+        }
+        let name = teams
+            .iter()
+            .find(|t| t.org.eq_ignore_ascii_case(org) && t.slug.eq_ignore_ascii_case(slug))
+            .map(|t| t.name.clone())
+            .unwrap_or_else(|| slug.to_string());
+        return Ok(GhTeam {
+            org: org.to_string(),
+            slug: slug.to_string(),
+            name,
+        });
+    }
+    if raw.contains(char::is_whitespace) {
+        return Err("a review team looks like @fe or org/fe".into());
+    }
+    let hits: Vec<&GhTeam> = teams
+        .iter()
+        .filter(|t| t.slug.eq_ignore_ascii_case(raw))
+        .collect();
+    match hits.as_slice() {
+        [] => Err(format!("no team @{raw} on this account")),
+        [one] => Ok((*one).clone()),
+        many => Err(format!(
+            "@{raw} is in more than one org ({}); set it as org/{raw}",
+            many.iter()
+                .map(|t| t.org.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
+}
+
+/// Drop team rows that are already in the personal queue.
+///
+/// Requested of you and of the team at once would sit in both columns. The
+/// personal one is the one that names you, so the team column keeps only what
+/// you would otherwise miss.
+pub(crate) fn drop_already_listed(team: &mut Vec<ReviewRequest>, mine: &[ReviewRequest]) {
+    team.retain(|pr| !mine.iter().any(|m| same_pr(m, pr)));
+}
+
+fn same_pr(a: &ReviewRequest, b: &ReviewRequest) -> bool {
+    if !a.repo.is_empty() && a.repo == b.repo && a.number == b.number {
+        return true;
+    }
+    a.url == b.url
+}
+
+pub(crate) fn parse_search_page(v: &Value) -> (Vec<ReviewRequest>, bool) {
+    let items = v.get("items").and_then(|i| i.as_array());
+    // Compare against what GitHub returned, not what we could parse. A hit we
+    // drop for having no number is not a further page.
+    let returned = items.map(|a| a.len()).unwrap_or(0);
+    let prs = items
+        .map(|a| a.iter().filter_map(to_review_request).collect())
+        .unwrap_or_default();
+    let total = v
+        .get("total_count")
+        .and_then(|n| n.as_u64())
+        .unwrap_or(returned as u64);
+    let incomplete = v
+        .get("incomplete_results")
+        .and_then(|b| b.as_bool())
+        .unwrap_or(false);
+    let more = incomplete || total > returned as u64;
+    (prs, more)
+}
+
+fn to_review_request(v: &Value) -> Option<ReviewRequest> {
+    let number = v
+        .get("number")
+        .and_then(|n| n.as_u64())
+        .filter(|n| *n > 0)?;
+    let url = v
+        .pointer("/pull_request/html_url")
+        .and_then(|u| u.as_str())
+        .filter(|u| !u.is_empty())
+        .or_else(|| {
+            v.get("html_url")
+                .and_then(|u| u.as_str())
+                .filter(|u| !u.is_empty())
+        })?;
+    Some(ReviewRequest {
+        repo: repo_slug(
+            v.get("repository_url")
+                .and_then(|u| u.as_str())
+                .unwrap_or(""),
+        ),
+        number,
+        title: s(v, "title"),
+        url: url.to_string(),
+        author: v
+            .pointer("/user/login")
+            .and_then(|l| l.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        draft: v.get("draft").and_then(|d| d.as_bool()).unwrap_or(false),
+        updated_at: s(v, "updated_at"),
+    })
+}
+
+/// `https://ghe.example.com/api/v3/repos/acme/web` → `acme/web`.
+fn repo_slug(repository_url: &str) -> String {
+    let Some(rest) = repository_url.split("/repos/").nth(1) else {
+        return String::new();
+    };
+    let mut parts = rest.split('/').filter(|p| !p.is_empty());
+    match (parts.next(), parts.next()) {
+        (Some(owner), Some(name)) => format!("{owner}/{name}"),
+        _ => String::new(),
+    }
+}
+
+fn parse_team(v: &Value) -> Option<GhTeam> {
+    let slug = v
+        .get("slug")
+        .and_then(|s| s.as_str())
+        .unwrap_or("")
+        .to_string();
+    let org = v
+        .pointer("/organization/login")
+        .and_then(|s| s.as_str())
+        .unwrap_or("")
+        .to_string();
+    if slug.is_empty() || org.is_empty() {
+        return None;
+    }
+    let name = v
+        .get("name")
+        .and_then(|s| s.as_str())
+        .unwrap_or(&slug)
+        .to_string();
+    Some(GhTeam { org, slug, name })
 }
 
 fn to_pr(v: &Value) -> PullRequest {
@@ -345,12 +609,16 @@ fn n(v: &Value, key: &str) -> u64 {
 }
 
 fn s(v: &Value, key: &str) -> String {
-    v.get(key).and_then(|x| x.as_str()).unwrap_or_default().to_string()
+    v.get(key)
+        .and_then(|x| x.as_str())
+        .unwrap_or_default()
+        .to_string()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn review(author: &str, state: &str) -> Review {
         Review {
@@ -373,11 +641,17 @@ mod tests {
         // direction: coming back to approve clears the block, and coming back
         // to block clears the approval.
         assert_eq!(
-            verdict(&[review("ana", "CHANGES_REQUESTED"), review("ana", "APPROVED")]),
+            verdict(&[
+                review("ana", "CHANGES_REQUESTED"),
+                review("ana", "APPROVED")
+            ]),
             "approved"
         );
         assert_eq!(
-            verdict(&[review("ana", "APPROVED"), review("ana", "CHANGES_REQUESTED")]),
+            verdict(&[
+                review("ana", "APPROVED"),
+                review("ana", "CHANGES_REQUESTED")
+            ]),
             "changes_requested"
         );
     }
@@ -401,6 +675,127 @@ mod tests {
             "approved"
         );
         assert_eq!(verdict(&[review("ana", "COMMENTED")]), "commented");
+    }
+
+    #[test]
+    fn a_search_hit_from_enterprise_keeps_the_repo() {
+        let v = json!({
+            "total_count": 2,
+            "incomplete_results": false,
+            "items": [{
+                "number": 14,
+                "title": "Fix the race",
+                "draft": true,
+                "html_url": "https://ghe.example.com/acme/web/issues/14",
+                "updated_at": "2026-09-23T08:00:00Z",
+                "user": { "login": "ada" },
+                "repository_url": "https://ghe.example.com/api/v3/repos/acme/web",
+                "pull_request": { "html_url": "https://ghe.example.com/acme/web/pull/14" }
+            }, {
+                "number": 0,
+                "title": "not a pull"
+            }]
+        });
+        let (prs, more) = parse_search_page(&v);
+        assert!(!more);
+        assert_eq!(prs.len(), 1);
+        assert_eq!(prs[0].repo, "acme/web");
+        assert_eq!(prs[0].url, "https://ghe.example.com/acme/web/pull/14");
+        assert!(prs[0].draft);
+        assert_eq!(prs[0].author, "ada");
+    }
+
+    #[test]
+    fn a_short_page_with_a_higher_total_is_not_the_whole_queue() {
+        let v = json!({
+            "total_count": 4,
+            "items": [{
+                "number": 1,
+                "title": "One",
+                "html_url": "https://github.com/acme/web/pull/1",
+                "repository_url": "https://api.github.com/repos/acme/web"
+            }]
+        });
+        let (prs, more) = parse_search_page(&v);
+        assert_eq!(prs.len(), 1);
+        assert!(more);
+    }
+
+    #[test]
+    fn a_bare_slug_matches_the_one_team_you_are_on() {
+        let teams = vec![
+            GhTeam {
+                org: "acme".into(),
+                slug: "fe".into(),
+                name: "Frontend".into(),
+            },
+            GhTeam {
+                org: "acme".into(),
+                slug: "be".into(),
+                name: "Backend".into(),
+            },
+        ];
+        let hit = pick_team("@fe", &teams).unwrap();
+        assert_eq!(hit.org, "acme");
+        assert_eq!(hit.slug, "fe");
+        assert_eq!(hit.name, "Frontend");
+        assert!(pick_team("missing", &teams).is_err());
+    }
+
+    #[test]
+    fn org_and_slug_need_no_lookup() {
+        let hit = pick_team("acme/fe", &[]).unwrap();
+        assert_eq!(hit.org, "acme");
+        assert_eq!(hit.slug, "fe");
+        assert_eq!(
+            team_review_query(&hit.org, &hit.slug),
+            "is:pr is:open team-review-requested:acme/fe -author:@me"
+        );
+    }
+
+    #[test]
+    fn the_same_slug_in_two_orgs_asks_which() {
+        let teams = vec![
+            GhTeam {
+                org: "acme".into(),
+                slug: "fe".into(),
+                name: "Frontend".into(),
+            },
+            GhTeam {
+                org: "other".into(),
+                slug: "fe".into(),
+                name: "FE".into(),
+            },
+        ];
+        let err = pick_team("fe", &teams).unwrap_err();
+        assert!(err.contains("acme"));
+        assert!(err.contains("other"));
+    }
+
+    #[test]
+    fn blank_is_no_team_and_a_personal_row_leaves_the_team_list() {
+        assert_eq!(normalize_review_team("  @fe "), Some("fe".into()));
+        assert_eq!(normalize_review_team(" @ "), None);
+        assert!(mine_review_query().contains("review-requested:@me"));
+        assert!(mine_review_query().contains("-author:@me"));
+
+        let mine = vec![req("acme/web", 3)];
+        let mut team = vec![req("acme/web", 3), req("acme/web", 9)];
+        drop_already_listed(&mut team, &mine);
+        assert_eq!(team.len(), 1);
+        assert_eq!(team[0].number, 9);
+    }
+
+    fn req(repo: &str, number: u64) -> ReviewRequest {
+        ReviewRequest {
+            repo: repo.into(),
+            number,
+            title: String::new(),
+            url: format!("https://github.com/{repo}/pull/{number}"),
+            author: String::new(),
+            draft: false,
+            updated_at: String::new(),
+        }
     }
 
     #[test]

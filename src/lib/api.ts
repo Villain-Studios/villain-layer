@@ -19,6 +19,7 @@ import type {
   RepoSuggestion,
   Resumable,
   ReviewComment,
+  ReviewQueue,
   Settings,
   SlackConfig,
   Started,
@@ -187,8 +188,9 @@ export const api = {
   }),
 
   // github
-  githubConnect: (apiUrl: string, webUrl: string, token: string) =>
-    invoke<string>("github_connect", { apiUrl, webUrl, token }),
+  githubConnect: (apiUrl: string, webUrl: string, token: string, reviewTeam: string | null) =>
+    invoke<string>("github_connect", { apiUrl, webUrl, token, reviewTeam }),
+  githubReviewQueue: () => invoke<ReviewQueue>("github_review_queue"),
   githubTaskPrs: (taskId: string) => invoke<CheckoutPr[]>("github_task_prs", { taskId }),
   githubAllPrs: () => invoke<TaskPrs[]>("github_all_prs"),
   setCheckoutBase: (checkoutId: string, base: string) =>
@@ -214,6 +216,8 @@ export const api = {
   takeNotices: () => invoke<AppNotice[]>("take_notices"),
   setWorktreeRoot: (path: string | null) => invoke<void>("set_worktree_root", { path }),
   setUiPrefs: (ui: UiPrefs) => invoke<void>("set_ui_prefs", { ui }),
+  systemNotify: (title: string, body: string, view: "reviews" | "tickets") =>
+    invoke<void>("system_notify", { title, body, view }),
   disconnect: (which: "jira" | "github" | "slack") => invoke<void>("disconnect", { which }),
   cursorIdeInstalled: () => invoke<boolean>("cursor_ide_installed"),
   openInCursor: (path: string) => invoke<void>("open_in_cursor", { path }),

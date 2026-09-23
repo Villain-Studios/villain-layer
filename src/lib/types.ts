@@ -260,6 +260,35 @@ export interface JiraConfig {
 export interface GithubConfig {
   api_url: string;
   web_url: string;
+  /** `@fe` or `org/fe`. Null lists only reviews requested of you. */
+  review_team: string | null;
+}
+
+/** A pull request waiting on a person or a team. */
+export interface ReviewRequest {
+  repo: string;
+  number: number;
+  title: string;
+  url: string;
+  author: string;
+  draft: boolean;
+  updated_at: string;
+}
+
+export interface TeamReviews {
+  /** `org/slug`. */
+  slug: string;
+  name: string;
+  prs: ReviewRequest[];
+  more: boolean;
+  error: string | null;
+}
+
+export interface ReviewQueue {
+  mine: ReviewRequest[];
+  mine_more: boolean;
+  /** Null when no review team is configured. */
+  team: TeamReviews | null;
 }
 
 export interface SlackConfig {
@@ -276,6 +305,8 @@ export interface UiPrefs {
   restore_panes: boolean;
   trust_agent_dirs: boolean;
   sync_jira_status: boolean;
+  /** A banner for a new review or an assigned ticket, while the window is in the background. */
+  system_notifications: boolean;
   agents_read_panes: boolean;
 }
 

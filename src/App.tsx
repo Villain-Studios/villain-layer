@@ -3,6 +3,14 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api } from "./lib/api";
+import {
+  announceReviews,
+  announceTickets,
+  nextReviewKeys,
+  prepareNotifications,
+  unseenReviews,
+  reviewIdentity,
+} from "./lib/notify";
 import { CHAT_TASK_ID, selectedTask, taskTotals, useStore, type View } from "./store";
 import { Sidebar } from "./components/Sidebar";
 import { Terminals } from "./components/Terminals";
@@ -12,6 +20,7 @@ import { TicketsView } from "./components/TicketsView";
 import { AgentsView } from "./components/AgentsView";
 import { ChatView } from "./components/ChatView";
 import { ReposView } from "./components/ReposView";
+import { ReviewsView } from "./components/ReviewsView";
 import { Settings } from "./components/Settings";
 import { GearIcon, SidebarToggle } from "./components/ui";
 
@@ -35,6 +44,11 @@ export default function App() {
   const refreshAll = useStore((s) => s.refreshAll);
   const refreshPanes = useStore((s) => s.refreshPanes);
   const refreshPrs = useStore((s) => s.refreshPrs);
+  const refreshReviewQueue = useStore((s) => s.refreshReviewQueue);
+  const reviewQueue = useStore((s) => s.reviewQueue);
+  const issues = useStore((s) => s.issues);
+  const issuesLoaded = useStore((s) => s.issuesLoaded);
+  const notifyOn = useStore((s) => s.settings?.ui.system_notifications);
   const refreshTasks = useStore((s) => s.refreshTasks);
   const setAppActive = useStore((s) => s.setAppActive);
   const dismissToast = useStore((s) => s.dismissToast);
@@ -46,6 +60,12 @@ export default function App() {
   const seenPrs = useRef(
     new Map<string, { verdict: string; comments: number; merged: boolean }>(),
   );
+  /** Review-queue identities already shown. Null until the first snapshot. */
+  const seenReviews = useRef<Set<string> | null>(null);
+  /** The team list's first arrival is a snapshot, not news. */
+  const teamPrimed = useRef(false);
+  /** Ticket keys already shown. Null until the first successful fetch. */
+  const seenTickets = useRef<Set<string> | null>(null);
 
   useEffect(() => { void refreshAll().catch(fail); }, [refreshAll, fail]);
 
@@ -56,6 +76,7 @@ export default function App() {
     let tasksT: ReturnType<typeof setInterval> | undefined;
     let panesT: ReturnType<typeof setInterval> | undefined;
     let prsT: ReturnType<typeof setInterval> | undefined;
+    let reviewsT: ReturnType<typeof setInterval> | undefined;
     let idleT: ReturnType<typeof setInterval> | undefined;
     let unFocus: (() => void) | undefined;
     let alive = true;
@@ -72,7 +93,8 @@ export default function App() {
       if (tasksT !== undefined) clearInterval(tasksT);
       if (panesT !== undefined) clearInterval(panesT);
       if (prsT !== undefined) clearInterval(prsT);
-      tasksT = panesT = prsT = undefined;
+      if (reviewsT !== undefined) clearInterval(reviewsT);
+      tasksT = panesT = prsT = reviewsT = undefined;
     };
 
     const arm = () => {
@@ -86,6 +108,10 @@ export default function App() {
       panesT = setInterval(() => void refreshPanes({ poll: true }).catch(() => {}), panesMs);
       if (useStore.getState().settings?.github_connected) {
         prsT = setInterval(() => void refreshPrs(), quiet ? 180_000 : 90_000);
+        reviewsT = setInterval(
+          () => void refreshReviewQueue({ quiet: true }),
+          quiet ? 180_000 : 90_000,
+        );
       }
     };
 
@@ -100,6 +126,9 @@ export default function App() {
           lastInput = Date.now();
           void refreshTasks({ poll: true }).catch(() => {});
           void refreshPanes({ poll: true }).catch(() => {});
+          if (useStore.getState().settings?.github_connected) {
+            void refreshReviewQueue({ quiet: true });
+          }
         }
         arm();
       } else {
@@ -154,13 +183,35 @@ export default function App() {
       window.removeEventListener("pointerdown", onInput);
       window.removeEventListener("keydown", onInput);
     };
-  }, [refreshTasks, refreshPanes, refreshPrs, setAppActive, settings?.github_connected, view]);
+  }, [refreshTasks, refreshPanes, refreshPrs, refreshReviewQueue, setAppActive, settings?.github_connected, view]);
 
   // One sweep as soon as GitHub is available; the timer above takes it from
   // there. Kept out of the polling effect on purpose: that one re-runs on
   // every change of view, and a sweep per tab switch is four calls per open
   // pull request each time the Tickets tab is glanced at.
   useEffect(() => { void refreshPrs(); }, [refreshPrs, settings?.github_connected]);
+  useEffect(() => {
+    void refreshReviewQueue({ quiet: true });
+  }, [refreshReviewQueue, settings?.github_connected]);
+
+  // Reviews and tickets keep being asked about while the window is in the
+  // background. The other polls stop then — a git status of every worktree is
+  // what made an idle app feel busy — but a banner can only be news if we are
+  // still looking. Three minutes, and only the two lists a banner is about.
+  useEffect(() => {
+    if (notifyOn === false) return;
+    const t = setInterval(() => {
+      const s = useStore.getState();
+      if (s.settings?.github_connected) void s.refreshReviewQueue({ quiet: true });
+      if (s.settings?.jira_connected) void s.refreshIssues({ quiet: true });
+    }, 180_000);
+    return () => clearInterval(t);
+  }, [notifyOn]);
+
+  useEffect(() => {
+    if (!notifyOn) return;
+    void prepareNotifications().catch(() => {});
+  }, [notifyOn]);
 
   // An agent exiting is the moment worth telling someone about.
   useEffect(() => {
@@ -314,6 +365,59 @@ export default function App() {
     }
   }, [prs, tasks, toast]);
 
+  // A review request or an assigned ticket that was not in the previous list.
+  // The first snapshot is recorded and not announced: opening the app would
+  // otherwise banner every pull request and ticket already waiting.
+  useEffect(() => {
+    if (!reviewQueue) {
+      seenReviews.current = null;
+      teamPrimed.current = false;
+      return;
+    }
+    const prev = seenReviews.current;
+    let fresh = unseenReviews(reviewQueue, prev);
+    const team = reviewQueue.team;
+    const teamOk = !!(team && !team.error);
+    // No team configured: the next time one appears, that list is a snapshot.
+    if (!team) teamPrimed.current = false;
+    if (teamOk && !teamPrimed.current) {
+      const teamKeys = new Set(team.prs.map(reviewIdentity));
+      fresh = fresh.filter((pr) => !teamKeys.has(reviewIdentity(pr)));
+      teamPrimed.current = true;
+    }
+    seenReviews.current = nextReviewKeys(reviewQueue, prev);
+    if (!prev || fresh.length === 0) return;
+    if (useStore.getState().appActive || !useStore.getState().settings?.ui.system_notifications) return;
+    void announceReviews(fresh).catch(() => {});
+  }, [reviewQueue]);
+
+  useEffect(() => {
+    if (!issuesLoaded) {
+      seenTickets.current = null;
+      return;
+    }
+    const prev = seenTickets.current;
+    const keys = new Set(issues.map((i) => i.key));
+    seenTickets.current = keys;
+    if (!prev) return;
+    const fresh = issues.filter((i) => !prev.has(i.key));
+    if (fresh.length === 0) return;
+    if (useStore.getState().appActive || !useStore.getState().settings?.ui.system_notifications) return;
+    void announceTickets(fresh).catch(() => {});
+  }, [issues, issuesLoaded]);
+
+  useEffect(() => {
+    const p = listen<string>("system-notify-click", (e) => {
+      const view = e.payload;
+      if (view === "reviews" || view === "tickets") useStore.getState().setView(view);
+      const win = getCurrentWindow();
+      void win.unminimize().catch(() => {});
+      void win.show().catch(() => {});
+      void win.setFocus().catch(() => {});
+    });
+    return () => { void p.then((un) => un()); };
+  }, []);
+
   const totals = task ? taskTotals(task) : null;
   // What the Diff tab lists by default: files with uncommitted changes. The
   // sidebar's counts split the same work into staged, unstaged and untracked,
@@ -325,10 +429,13 @@ export default function App() {
   ).length;
 
   const chats = panes.filter((p) => p.task_id === CHAT_TASK_ID).length;
+  const reviewCount =
+    (reviewQueue?.mine.length ?? 0) + (reviewQueue?.team?.prs.length ?? 0);
 
   const tabs: { id: View; label: string; badge?: number }[] = [
     { id: "work", label: "Work", badge: running || undefined },
     { id: "tickets", label: "Tickets", badge: issueCount || undefined },
+    { id: "reviews", label: "Reviews", badge: reviewCount || undefined },
     { id: "chat", label: "Chat", badge: chats || undefined },
     { id: "repos", label: "Repos", badge: projectCount || undefined },
   ];
@@ -466,6 +573,7 @@ export default function App() {
         )}
 
         {view === "tickets" && <TicketsView />}
+        {view === "reviews" && <ReviewsView />}
         {view === "chat" && <ChatView />}
         {view === "repos" && <ReposView />}
       </div>

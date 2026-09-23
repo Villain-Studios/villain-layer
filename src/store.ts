@@ -8,12 +8,13 @@ import type {
   JiraIssueType,
   PaneInfo,
   Project,
+  ReviewQueue,
   Settings,
   TaskView,
 } from "./lib/types";
 
 export const TABS = ["terminals", "diff", "pr"] as const;
-export const VIEWS = ["work", "tickets", "chat", "repos"] as const;
+export const VIEWS = ["work", "tickets", "chat", "repos", "reviews"] as const;
 export type Tab = (typeof TABS)[number];
 export type View = (typeof VIEWS)[number];
 
@@ -33,10 +34,16 @@ interface State {
   agents: AgentStatus[];
   /** PR rows per task id, refreshed by the background watch. */
   prs: Record<string, CheckoutPr[]>;
+  /** Pull requests waiting on you, and on the configured review team. */
+  reviewQueue: ReviewQueue | null;
+  reviewQueueLoading: boolean;
+  reviewQueueError: string | null;
   settings: Settings | null;
   issues: JiraIssue[];
   issueTypes: JiraIssueType[];
   issuesLoading: boolean;
+  /** A fetch has completed, so the list — even an empty one — is a real snapshot. */
+  issuesLoaded: boolean;
   /** Jira had more than the app asked for, so the list below is not all of it. */
   issuesTruncated: boolean;
 
@@ -83,10 +90,13 @@ interface State {
   refreshTasks: (opts?: { poll?: boolean }) => Promise<void>;
   refreshPanes: (opts?: { poll?: boolean }) => Promise<void>;
   refreshPrs: () => Promise<void>;
+  /** `quiet` is a timer tick: no toast, and no spinner if a queue is already shown. */
+  refreshReviewQueue: (opts?: { quiet?: boolean }) => Promise<void>;
   /** Replace one task's PR rows, for a panel that fetched them itself. */
   setTaskPrs: (taskId: string, rows: CheckoutPr[]) => void;
   refreshSettings: () => Promise<void>;
-  refreshIssues: () => Promise<void>;
+  /** `quiet` is a timer tick: no toast, and no spinner over a list already shown. */
+  refreshIssues: (opts?: { quiet?: boolean }) => Promise<void>;
 }
 
 let toastSeq = 0;
@@ -100,6 +110,7 @@ let toastSeq = 0;
  * one land last, taking the store backwards.
  */
 let sweeping = false;
+let reviewsInflight: Promise<void> | null = null;
 
 /**
  * The task and pane calls currently out, so overlapping requests can be
@@ -231,11 +242,15 @@ export const useStore = create<State>((set, get) => {
   tasks: [],
   panes: [],
   prs: {},
+  reviewQueue: null,
+  reviewQueueLoading: false,
+  reviewQueueError: null,
   agents: [],
   settings: null,
   issues: [],
   issueTypes: [],
   issuesLoading: false,
+  issuesLoaded: false,
   issuesTruncated: false,
 
   // Where the app was left. Restored so reopening lands on the work in
@@ -370,14 +385,44 @@ export const useStore = create<State>((set, get) => {
     }
     // Disconnecting has to take the list with it, or the badge keeps counting
     // tickets from a site the app can no longer reach.
-    if (!settings.jira_connected && get().issues.length > 0) {
-      set({ issues: [], issueTypes: [], issuesTruncated: false });
+    if (!settings.jira_connected && (get().issues.length > 0 || get().issuesLoaded)) {
+      set({ issues: [], issueTypes: [], issuesTruncated: false, issuesLoaded: false });
+    }
+    if (settings.github_connected) {
+      void get().refreshReviewQueue({ quiet: true });
+    } else if (get().reviewQueue || get().reviewQueueError) {
+      set({ reviewQueue: null, reviewQueueError: null });
     }
   },
 
-  refreshIssues: async () => {
+  refreshReviewQueue: (opts) =>
+    coalesce(
+      { get: () => reviewsInflight, set: (p) => { reviewsInflight = p; } },
+      opts?.quiet ?? false,
+      async () => {
+        if (!get().settings?.github_connected) return;
+        // A timer tick should not flash the spinner over a list already on
+        // screen. The first load has nothing to keep, so it still shows one.
+        const spin = !opts?.quiet || get().reviewQueue === null;
+        if (spin) set({ reviewQueueLoading: true });
+        try {
+          set({ reviewQueue: await api.githubReviewQueue(), reviewQueueError: null });
+        } catch (e) {
+          // A timer tick stays quiet — the view shows the message — but a
+          // Refresh you pressed should also say so up top.
+          set({ reviewQueueError: errMessage(e) });
+          if (!opts?.quiet) get().fail(e);
+        } finally {
+          if (spin) set({ reviewQueueLoading: false });
+        }
+      },
+    ),
+
+  refreshIssues: async (opts) => {
     if (!get().settings?.jira_connected) return;
-    set({ issuesLoading: true });
+    // A timer tick should not flash the spinner over a list already on screen.
+    const spin = !opts?.quiet || !get().issuesLoaded;
+    if (spin) set({ issuesLoading: true });
     try {
       const [page, issueTypes] = await Promise.all([
         api.jiraIssues(),
@@ -385,11 +430,11 @@ export const useStore = create<State>((set, get) => {
         // must not stop the issues themselves from showing.
         api.jiraIssueTypes().catch(() => get().issueTypes),
       ]);
-      set({ issues: page.issues, issuesTruncated: page.more, issueTypes });
+      set({ issues: page.issues, issuesTruncated: page.more, issueTypes, issuesLoaded: true });
     } catch (e) {
-      get().fail(e);
+      if (!opts?.quiet) get().fail(e);
     } finally {
-      set({ issuesLoading: false });
+      if (spin) set({ issuesLoading: false });
     }
   },
   };

@@ -911,6 +911,69 @@ textarea { resize: vertical; font-family: var(--mono); }
 .wide-head h2 { margin: 0; font-size: 16px; font-weight: 600; }
 .wide-head .sub { color: var(--dim); font-size: 13px; }
 
+.review-list {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 12px;
+  overflow: hidden;
+  background: var(--bg);
+}
+.review-list-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  white-space: normal;
+  padding: 10px 13px;
+  background: var(--panel-2);
+  cursor: pointer;
+}
+.review-list-head:hover { background: var(--panel-2); }
+.review-list-head .title { font-weight: 600; font-size: 13.5px; }
+.review-list-head .count {
+  color: var(--dimmer);
+  font-size: 12px;
+  font-family: var(--mono);
+}
+.review-list-body { padding: 10px 12px 2px; }
+.review-card {
+  display: block;
+  width: 100%;
+  text-align: left;
+  white-space: normal;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 11px 13px;
+  margin-bottom: 8px;
+  cursor: pointer;
+}
+.review-card:hover { background: var(--panel); border-color: var(--accent-dim); }
+.review-card .top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 5px;
+}
+.review-card .repo, .review-card .num {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--dim);
+}
+.review-card .num { color: var(--accent); }
+.review-card .when { color: var(--dimmer); font-size: 12px; }
+.review-card .title { font-size: 13.5px; line-height: 1.45; }
+.review-card .by { color: var(--dim); font-size: 12px; margin-top: 4px; }
+.review-note {
+  margin: 0 0 10px;
+  color: var(--dim);
+  font-size: 13px;
+  line-height: 1.5;
+  max-width: 460px;
+}
+.review-note.warn { color: var(--amber); }
+
 .agent-card {
   display: flex;
   align-items: center;

@@ -60,7 +60,10 @@ pub(crate) fn slack_client(state: &AppState) -> Result<(Slack, SlackConfig)> {
 /// Delete messages the app posted. With no `links`, deletes everything it has
 /// recorded; otherwise deletes the Slack permalinks given, which is the only
 /// way to reach messages posted before the app started recording them.
-#[tauri::command]
+///
+/// These three are the MCP server's `slack_delete`, `slack_diagnose` and
+/// `slack_cleanup`. Nothing in the UI calls them, so they are not registered
+/// as commands.
 pub async fn slack_delete_posted(
     state: State<'_, AppState>,
     links: Option<Vec<String>>,
@@ -118,7 +121,6 @@ pub async fn slack_delete_posted(
 }
 
 /// What the app can see and do in Slack, for when a cleanup is refused.
-#[tauri::command]
 pub async fn slack_diagnose(state: State<'_, AppState>) -> Result<Value> {
     let (client, cfg) = slack_client(&state)?;
     let (bot_id, scopes) = client.scopes().await?;
@@ -132,7 +134,6 @@ pub async fn slack_diagnose(state: State<'_, AppState>) -> Result<Value> {
 
 /// Find and delete every message this app posted to its channel, including
 /// ones sent before the app started recording them.
-#[tauri::command]
 pub async fn slack_cleanup(state: State<'_, AppState>, dry_run: bool) -> Result<Value> {
     let (client, cfg) = slack_client(&state)?;
     let (bot_id, scopes) = client.scopes().await?;

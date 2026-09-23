@@ -1,20 +1,10 @@
 import { useState, type MouseEvent, type ReactNode } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { copyText } from "../lib/clipboard";
+import { ago } from "../lib/time";
 import { useStore } from "../store";
 import type { ReviewRequest, TeamReviews } from "../lib/types";
 import { ContextMenu, Spinner, type MenuItem } from "./ui";
-
-/** How long ago GitHub last touched the pull request, in a word. */
-function ago(iso: string): string {
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return "";
-  const s = Math.max(0, (Date.now() - t) / 1000);
-  if (s < 60) return "just now";
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  return `${Math.floor(s / 86400)}d ago`;
-}
 
 /** `@fe` when that is all we know; the team's own name when GitHub sent one. */
 function teamLabel(team: TeamReviews): string {

@@ -215,20 +215,77 @@ pub fn fast_forward(clone: &Path, store: &Path, branch: &str) -> Result<Forwarde
     Ok(Forwarded::Moved(moved))
 }
 
-/// How a team seems to bring its base into branches, from how pull
-/// requests land on the base: the last 40 commits along its first parents,
-/// in the app's copy. Merge commits, or squashed pull requests (`(#12)`,
-/// `(!12)`), are a team for whom a merge in the branch leaves no mark on
-/// the base: merge, which rewrites nothing. A straight line of commits as
-/// they were written is a team that rebases. Too little history to say is
-/// None. A guess, said as one where it is shown, and never over a choice.
+/// How a team seems to bring its base into branches (UPD-7), and why. A
+/// guess, said as one where it is shown, and never over a choice. None when
+/// the repository gives nothing to go on.
 pub fn update_style(store: &Path, base: &str) -> Option<(UpdateBy, String)> {
     check_names("HEAD", base).ok()?;
-    let out = run(
+    let theirs = format!("refs/remotes/origin/{base}");
+    from_branches(store, &theirs, base).or_else(|| from_landings(store, &theirs, base))
+}
+
+/// The clearest sign: how the team's recent branches on origin took the
+/// base in. A merge of the base on a branch is a team that merges. A branch
+/// with none, whose commits were rewritten after they were written (the
+/// committer date an hour or more past the author date), is one that
+/// rebases. A branch made mostly of merges is a release branch the base is
+/// merged into, and says nothing about either.
+fn from_branches(store: &Path, theirs: &str, base: &str) -> Option<(UpdateBy, String)> {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_secs() as i64;
+    let refs = run(
         store,
-        &["log", "--first-parent", "-n", "40", "--format=%P%x00%s", &format!("refs/remotes/origin/{base}")],
+        &["for-each-ref", "--sort=-committerdate", "--count=40", "--format=%(refname)%00%(committerdate:unix)", "refs/remotes/origin"],
     )
     .ok()?;
+    let (mut merged, mut rebased) = (0, 0);
+    for line in refs.lines() {
+        let Some((name, when)) = line.split_once('\0') else { continue };
+        if name == theirs || name.ends_with("/HEAD") {
+            continue;
+        }
+        // Sorted newest first: the rest are older habits.
+        if now - when.parse::<i64>().unwrap_or(0) > 90 * 86_400 {
+            break;
+        }
+        let Ok(log) = run(store, &["log", "--format=%P%x00%at%x00%ct", &format!("{theirs}..{name}")]) else {
+            continue;
+        };
+        let commits: Vec<(Vec<&str>, i64, i64)> = log
+            .lines()
+            .filter_map(|l| {
+                let mut f = l.split('\0');
+                let parents = f.next()?.split_whitespace().collect();
+                Some((parents, f.next()?.parse().ok()?, f.next()?.parse().ok()?))
+            })
+            .collect();
+        let merges: Vec<&Vec<&str>> = commits.iter().map(|c| &c.0).filter(|p| p.len() > 1).collect();
+        if commits.is_empty() || merges.len() * 2 > commits.len() {
+            continue;
+        }
+        if merges.iter().any(|p| p[1..].iter().any(|parent| is_ancestor(store, parent, theirs))) {
+            merged += 1;
+        } else if commits.iter().any(|(p, authored, committed)| p.len() == 1 && committed - authored >= 3600) {
+            rebased += 1;
+        }
+    }
+    if merged + rebased < 3 || merged == rebased {
+        return None;
+    }
+    Some(if merged > rebased {
+        (UpdateBy::Merge, format!("{merged} of its recent branches merged {base} in, {rebased} were rebased onto it"))
+    } else {
+        (UpdateBy::Rebase, format!("{rebased} of its recent branches were rebased onto {base}, {merged} merged it in"))
+    })
+}
+
+/// Failing that, how pull requests land on the base: its last 40 commits
+/// along the first parent. Merge commits are a team that does not mind
+/// them; a straight line of commits as they were written is one that
+/// rebases. Squashed pull requests (`(#12)`) say nothing about how the
+/// branch was kept up to date. Taking them for "merge" guessed wrong for
+/// two teams that rebase and squash.
+fn from_landings(store: &Path, theirs: &str, base: &str) -> Option<(UpdateBy, String)> {
+    let out = run(store, &["log", "--first-parent", "-n", "40", "--format=%P%x00%s", theirs]).ok()?;
     let commits: Vec<(usize, &str)> = out
         .lines()
         .filter_map(|l| l.split_once('\0'))
@@ -237,24 +294,24 @@ pub fn update_style(store: &Path, base: &str) -> Option<(UpdateBy, String)> {
     if commits.len() < 5 {
         return None;
     }
+    let n = commits.len();
     let merges = commits.iter().filter(|(parents, _)| *parents > 1).count();
     let squashed = commits
         .iter()
         .filter(|(_, subject)| {
-            let Some(open) = subject.strip_suffix(')').and_then(|s| s.rfind(['#', '!']).map(|i| &s[i + 1..])) else {
+            let Some(number) = subject.strip_suffix(')').and_then(|s| s.rfind(['#', '!']).map(|i| &s[i + 1..])) else {
                 return false;
             };
-            !open.is_empty() && open.chars().all(|c| c.is_ascii_digit())
+            !number.is_empty() && number.chars().all(|c| c.is_ascii_digit())
         })
         .count();
-    let n = commits.len();
-    Some(if merges * 3 >= n {
-        (UpdateBy::Merge, format!("pull requests land on {base} as merge commits"))
+    if merges * 3 >= n {
+        Some((UpdateBy::Merge, format!("pull requests land on {base} as merge commits")))
     } else if squashed * 2 >= n {
-        (UpdateBy::Merge, format!("pull requests are squashed into {base}, so a merge in the branch leaves no trace"))
+        None
     } else {
-        (UpdateBy::Rebase, format!("{base} is a straight line of commits: branches are rebased onto it"))
-    })
+        Some((UpdateBy::Rebase, format!("{base} is a straight line of commits as they were written: pull requests are rebased onto it")))
+    }
 }
 
 /// Every local branch, with its tip.
@@ -435,46 +492,82 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
-    /// Lands six pull requests on the remote's main from `mate`, each one
-    /// the way `land` says.
-    fn history(mate: &Path, store: &Path, land: &str) -> Option<UpdateBy> {
-        for n in 1..=6 {
-            let file = format!("pr{n}.txt");
-            match land {
-                "merge" => {
-                    run(mate, &["switch", "-q", "-c", &format!("pr{n}")]).unwrap();
-                    std::fs::write(mate.join(&file), "x\n").unwrap();
-                    run(mate, &["add", "-A"]).unwrap();
-                    run(mate, &["commit", "-qm", &file]).unwrap();
-                    run(mate, &["switch", "-q", "main"]).unwrap();
-                    run(mate, &["merge", "-q", "--no-ff", "-m", &format!("Merge pull request #{n}"), &format!("pr{n}")]).unwrap();
-                }
-                "squash" => {
-                    std::fs::write(mate.join(&file), "x\n").unwrap();
-                    run(mate, &["add", "-A"]).unwrap();
-                    run(mate, &["commit", "-qm", &format!("Add {file} (#{n})")]).unwrap();
-                }
-                _ => {
-                    std::fs::write(mate.join(&file), "x\n").unwrap();
-                    run(mate, &["add", "-A"]).unwrap();
-                    run(mate, &["commit", "-qm", &format!("Add {file}")]).unwrap();
-                }
+    fn commit_in(dir: &Path, file: &str, message: &str, date: Option<&str>) {
+        std::fs::write(dir.join(file), format!("{file}\n")).unwrap();
+        run(dir, &["add", "-A"]).unwrap();
+        match date {
+            Some(d) => run(dir, &["commit", "-qm", message, &format!("--date={d}")]).unwrap(),
+            None => run(dir, &["commit", "-qm", message]).unwrap(),
+        };
+    }
+
+    /// Three branches from `mate`, each brought up to date with a main that
+    /// moved on, the way `habit` says, plus a release branch main is merged
+    /// into, which must count for nothing.
+    fn branches(mate: &Path, store: &Path, habit: &str) -> Option<UpdateBy> {
+        run(mate, &["switch", "-q", "-c", "release"]).unwrap();
+        run(mate, &["switch", "-q", "main"]).unwrap();
+        for n in 1..=3 {
+            let branch = format!("ACME-{n}");
+            run(mate, &["switch", "-q", "-c", &branch]).unwrap();
+            // Written a while ago; a rebase rewrites the committer date.
+            commit_in(mate, &format!("work{n}.txt"), "work", Some("3 hours ago"));
+            if habit == "merge" {
+                run(mate, &["commit", "-q", "--amend", "--no-edit", "--reset-author"]).unwrap();
             }
+            run(mate, &["switch", "-q", "main"]).unwrap();
+            commit_in(mate, &format!("base{n}.txt"), "base moves", None);
+            run(mate, &["switch", "-q", &branch]).unwrap();
+            match habit {
+                "merge" => run(mate, &["merge", "-q", "--no-ff", "-m", "Merge main", "main"]).unwrap(),
+                _ => run(mate, &["rebase", "-q", "main"]).unwrap(),
+            };
+            run(mate, &["push", "-q", "origin", &branch]).unwrap();
+            run(mate, &["switch", "-q", "release"]).unwrap();
+            run(mate, &["merge", "-q", "--no-ff", "-m", "Release", "main"]).unwrap();
+            run(mate, &["switch", "-q", "main"]).unwrap();
         }
-        run(mate, &["push", "-q", "origin", "HEAD:main"]).unwrap();
+        run(mate, &["push", "-q", "origin", "main", "release"]).unwrap();
         fetch_store(store).unwrap();
-        update_style(store, "main").map(|(by, _)| by)
+        let (by, why) = update_style(store, "main")?;
+        let counted = if habit == "merge" { "3 of its recent branches merged main in, 0" } else { "3 of its recent branches were rebased onto main, 0" };
+        assert!(why.starts_with(counted), "the release branch counts for nothing: {why}");
+        Some(by)
     }
 
     #[test]
-    fn a_repo_is_guessed_to_update_the_way_its_pull_requests_land() {
-        for (land, expected) in [("merge", UpdateBy::Merge), ("squash", UpdateBy::Merge), ("rebase", UpdateBy::Rebase)] {
+    fn a_repo_is_guessed_to_update_the_way_its_branches_took_the_base_in() {
+        for (habit, expected) in [("merge", UpdateBy::Merge), ("rebase", UpdateBy::Rebase)] {
             let root = sandbox();
             let (_clone, mate, store) = scene(&root);
             assert_eq!(update_style(&store, "main"), None, "one commit is too little to go on");
-            assert_eq!(history(&mate, &store, land), Some(expected), "pull requests landed by {land}");
+            assert_eq!(branches(&mate, &store, habit), Some(expected), "branches kept up to date by {habit}");
             std::fs::remove_dir_all(&root).ok();
         }
+    }
+
+    #[test]
+    fn squashed_pull_requests_say_nothing_about_how_branches_are_updated() {
+        let root = sandbox();
+        let (_clone, mate, store) = scene(&root);
+        for n in 1..=6 {
+            commit_in(&mate, &format!("pr{n}.txt"), &format!("Add pr{n} (#{n})"), None);
+        }
+        run(&mate, &["push", "-q", "origin", "HEAD:main"]).unwrap();
+        fetch_store(&store).unwrap();
+        assert_eq!(update_style(&store, "main"), None, "not taken for merge, as it once was");
+
+        // Pull requests landed as merge commits do say something.
+        for n in 7..=12 {
+            run(&mate, &["switch", "-q", "-c", &format!("pr{n}")]).unwrap();
+            commit_in(&mate, &format!("pr{n}.txt"), "work", None);
+            run(&mate, &["switch", "-q", "main"]).unwrap();
+            run(&mate, &["merge", "-q", "--no-ff", "-m", &format!("Merge pull request #{n}"), &format!("pr{n}")]).unwrap();
+        }
+        run(&mate, &["push", "-q", "origin", "HEAD:main"]).unwrap();
+        fetch_store(&store).unwrap();
+        assert_eq!(update_style(&store, "main").map(|(by, _)| by), Some(UpdateBy::Merge));
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]

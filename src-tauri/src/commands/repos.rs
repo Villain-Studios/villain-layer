@@ -83,7 +83,9 @@ pub async fn repo_health(app: AppHandle) -> Result<Vec<RepoHealth>> {
         let projects = state.config.read().projects;
         let registered: HashSet<PathBuf> = projects.iter().map(|p| canon(&p.path)).collect();
         let home = std::env::var_os("HOME").map(PathBuf::from);
-        Ok(in_parallel(&projects, |p| health(p, &registered, home.as_deref())))
+        let mut rows = in_parallel(&projects, |p| health(p, &registered, home.as_deref()));
+        follow_group(&projects, &mut rows);
+        Ok(rows)
     })
     .await
 }
@@ -137,6 +139,35 @@ pub fn set_project_update_by(
             p.update_by = by;
         }
     })
+}
+
+/// A repo with too little history of its own goes the way its group does,
+/// since a group is usually one team: admin, with one recent branch, is
+/// guessed from web beside it. Only repos with evidence of their own count,
+/// a choice or their own history, so one guess cannot spread through a
+/// group by itself.
+fn follow_group(projects: &[Project], rows: &mut [RepoHealth]) {
+    let own: Vec<(&str, git::UpdateBy, &str)> = projects
+        .iter()
+        .filter_map(|p| {
+            let by = p.update_by.or_else(|| rows.iter().find(|r| r.project_id == p.id)?.update_guess)?;
+            Some((p.group.as_deref()?, by, p.name.as_str()))
+        })
+        .collect();
+    for row in rows.iter_mut().filter(|r| r.update_guess.is_none()) {
+        let Some(p) = projects.iter().find(|p| p.id == row.project_id) else { continue };
+        let Some(group) = p.group.as_deref() else { continue };
+        let peers: Vec<_> = own.iter().filter(|(g, _, name)| *g == group && *name != p.name).collect();
+        let rebase = peers.iter().filter(|(_, by, _)| *by == git::UpdateBy::Rebase).count();
+        let merge = peers.len() - rebase;
+        if rebase == merge {
+            continue;
+        }
+        let (by, word) = if rebase > merge { (git::UpdateBy::Rebase, "rebase") } else { (git::UpdateBy::Merge, "merge") };
+        let names: Vec<&str> = peers.iter().filter(|(_, b, _)| *b == by).map(|(_, _, n)| *n).take(3).collect();
+        row.update_guess = Some(by);
+        row.update_reason = Some(format!("the other repos in {group} {word} ({})", names.join(", ")));
+    }
 }
 
 /// A folder that is probably `project`'s clone, moved: the same folder
@@ -355,6 +386,51 @@ pub(super) mod tests {
             status_cache: Default::default(),
             news: Default::default(),
         }
+    }
+
+    #[test]
+    fn a_repo_with_nothing_to_go_on_updates_the_way_its_group_does() {
+        let (_root, cfg) = setup();
+        let repo = |id: &str, group: Option<&str>, by: Option<git::UpdateBy>| Project {
+            id: id.into(),
+            name: id.into(),
+            group: group.map(String::from),
+            update_by: by,
+            ..cfg.projects[0].clone()
+        };
+        let row = |id: &str, guess: Option<git::UpdateBy>| RepoHealth {
+            project_id: id.into(),
+            clone: "ok",
+            origin: None,
+            store: None,
+            synced_at: None,
+            behind: None,
+            ahead: None,
+            found: None,
+            update_guess: guess,
+            update_reason: guess.map(|_| "its own history".into()),
+        };
+        let rebase = Some(git::UpdateBy::Rebase);
+        let projects = [
+            repo("web", Some("frontend"), None),
+            repo("admin", Some("frontend"), None),
+            repo("design-system", Some("frontend"), rebase),
+            repo("api", Some("backend"), None),
+            repo("scratch", None, None),
+        ];
+        let mut rows = [
+            row("web", rebase),
+            row("admin", None),
+            row("design-system", None),
+            row("api", None),
+            row("scratch", None),
+        ];
+        follow_group(&projects, &mut rows);
+        assert_eq!(rows[1].update_guess, rebase);
+        assert_eq!(rows[1].update_reason.as_deref(), Some("the other repos in frontend rebase (web, design-system)"));
+        assert_eq!(rows[3].update_guess, None, "alone in its group, with nothing to go on");
+        assert_eq!(rows[4].update_guess, None, "in no group");
+        std::fs::remove_dir_all(&_root).ok();
     }
 
     #[test]

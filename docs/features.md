@@ -348,12 +348,23 @@ each repo its own team's way.
   worktree is never left half updated.
 - **UPD-6** The branch point moves to what was merged in, or rebased onto.
 - **UPD-7** Each repo MUST start on its own way of updating: what it is set
-  to in Repos, or the way it was last updated; else a guess from its
-  default branch's last 40 first-parent commits in the app's copy (merge
-  commits, or squashed pull requests: merge; a straight line of commits:
-  rebase); else merge. The guess is said to be one, with its reason, and
-  never overrides a choice. One app-wide mode, the last used, was wrong as
-  soon as a task spanned a team that merges and one that rebases.
+  to in Repos, or the way it was last updated; else a guess, in the app's
+  copy, from the first of these that says anything:
+  - how its recent branches on origin (the last 90 days) took the base in:
+    a merge of the base, or commits rewritten with none, whichever is
+    more common over three or more branches. A branch made mostly of
+    merges is a release branch and does not count;
+  - how pull requests land on the default branch: merge commits mean
+    merge, a straight line of commits as written means rebase. Squashed
+    pull requests say nothing about how the branch was kept up to date:
+    taken for "merge", they guessed wrong for two frontend repos that
+    rebase;
+  - the way the other repos in its group go, counting only those with a
+    choice or a guess of their own, since a group is usually one team;
+
+  else merge. The guess is said to be one, with its reason, and never
+  overrides a choice. One app-wide mode, the last used, was wrong as soon
+  as a task spanned a team that merges and one that rebases.
 
 Code: `commands/diff.rs` (`update_from_base`), `git.rs`,
 `git/upkeep.rs` (`update_style`), `UpdateFromBase.tsx`.

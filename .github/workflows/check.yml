@@ -1,0 +1,26 @@
+# `bun run check`, the same as before a commit: the guard, tsc, the frontend
+# build, clippy and the Rust tests. macOS, because the app and its PTY tests
+# are macOS-only.
+name: check
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: bun install --frozen-lockfile
+      # The git tests commit in temp repos, and need an identity to do it.
+      - run: git config --global user.name ci && git config --global user.email ci@localhost
+      - run: bun run check

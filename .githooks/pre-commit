@@ -1,0 +1,7 @@
+#!/bin/sh
+# The fast half of `bun run check`: the guard and the type check, a few
+# seconds. The Rust half runs in CI and before a pull request.
+# Enable once per clone: git config core.hooksPath .githooks
+set -e
+bun scripts/guard.ts
+bunx tsc --noEmit

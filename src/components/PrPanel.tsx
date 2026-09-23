@@ -8,6 +8,7 @@ import { reviewComments, taskReview, useStore, type TaskReview } from "../store"
 import type { CheckoutPr, CheckRun, Review, TaskView } from "../lib/types";
 import { Combo, Field, Modal, Spinner } from "./ui";
 import { PrFeedback } from "./PrFeedback";
+import { FinishTask } from "./FinishTask";
 
 /**
  * The latest review from each reviewer, which is the one GitHub itself shows.
@@ -138,6 +139,7 @@ export function PrPanel({
   /** Whether the "open a pull request" dialog is up. */
   const [creating, setCreating] = useState(false);
   const [feedback, setFeedback] = useState(false);
+  const [finishing, setFinishing] = useState(false);
   /** Which PR cards are expanded, when there are enough to be worth folding. */
   const [cards, setCards] = useState<Record<string, boolean>>({});
   const [showPast, setShowPast] = useState(false);
@@ -446,6 +448,23 @@ export function PrPanel({
         )}
       </div>
 
+      {review === "merged" && (
+        <div className="card row">
+          <span className="dot" style={{ background: "var(--green)" }} />
+          <span className="muted" style={{ flex: 1, lineHeight: 1.5 }}>
+            Every pull request has merged
+            {pending.length > 0
+              ? `, but ${pending.map((r) => r.repo).join(", ")} ${
+                  pending.length === 1 ? "has" : "have"
+                } work since. Finishing keeps ${pending.length === 1 ? "that branch" : "those branches"}.`
+              : "."}
+          </span>
+          <button className="btn btn-sm btn-primary" onClick={() => setFinishing(true)}>
+            Finish task…
+          </button>
+        </div>
+      )}
+
       {loaded && entries === 0 && (
         <div className="card">
           <div className="muted" style={{ lineHeight: 1.6, marginBottom: 12 }}>
@@ -633,6 +652,7 @@ export function PrPanel({
       )}
 
       {feedback && <PrFeedback task={task} onClose={() => setFeedback(false)} />}
+      {finishing && <FinishTask task={task} onClose={() => setFinishing(false)} />}
 
       {creating && (
         <Modal

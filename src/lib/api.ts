@@ -8,6 +8,7 @@ import type {
   CreateField,
   DiffScope,
   FeedbackItem,
+  Finished,
   FoundRepo,
   JiraIssue,
   JiraIssueType,
@@ -62,6 +63,10 @@ export const api = {
   }) => invoke<Task>("create_task", { req }),
   deleteTask: (id: string, force = false) =>
     invoke<RepoResult[]>("delete_task", { id, force }),
+  /** Worktrees, then local branches, then the ticket — each only if the last went. */
+  /** `landed`: each checkout's merged PR head. A branch it does not contain is kept. */
+  finishTask: (taskId: string, transitionId: string | null, landed: Record<string, string>) =>
+    invoke<Finished>("finish_task", { taskId, transitionId, landed }),
   addCheckout: (taskId: string, projectId: string) =>
     invoke<AddedRepo>("add_checkout", { taskId, projectId }),
   removeCheckout: (checkoutId: string, force = false) =>

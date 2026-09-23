@@ -255,6 +255,11 @@ pub fn add_worktree_fetched(
     }
 }
 
+/// Whether `a` is `b` or behind it. False when either is unknown here.
+pub fn is_ancestor(dir: &Path, a: &str, b: &str) -> bool {
+    !a.starts_with('-') && !b.starts_with('-') && run(dir, &["merge-base", "--is-ancestor", a, b]).is_ok()
+}
+
 /// Delete a local branch, for undoing one this app just created.
 pub fn delete_branch(repo: &Path, branch: &str) -> Result<()> {
     run(repo, &["branch", "-D", "--", branch]).map(|_| ())
@@ -1280,5 +1285,28 @@ mod tests {
         std::fs::write(wt.join("notes.txt"), "scratch\n").unwrap();
         assert_eq!(update_from_base(&wt, "main").unwrap().0, Updated::Merged { commits: 1 });
         std::fs::remove_dir_all(root).ok();
+    }
+    /// Finishing a task: the worktree goes first, because git will not delete
+    /// a branch that is checked out anywhere.
+    #[test]
+    fn a_branch_deletes_once_its_worktree_is_gone() {
+        let repo = fixture();
+        let wt = repo.parent().unwrap().join("wt");
+        add_worktree(&repo, &wt, "acme-5-done", "main").unwrap();
+        std::fs::write(wt.join("x.txt"), "x\n").unwrap();
+        commit_all(&wt, "work that was squash-merged elsewhere").unwrap();
+
+        let landed = run(&wt, &["rev-parse", "HEAD"]).unwrap().trim().to_string();
+        assert!(is_ancestor(&repo, "refs/heads/acme-5-done", &landed));
+        std::fs::write(wt.join("y.txt"), "after the merge\n").unwrap();
+        commit_all(&wt, "work after the PR landed").unwrap();
+        assert!(!is_ancestor(&repo, "refs/heads/acme-5-done", &landed));
+        assert!(!is_ancestor(&repo, "refs/heads/acme-5-done", "0000000000000000000000000000000000000000"));
+
+        assert!(delete_branch(&repo, "acme-5-done").is_err());
+        remove_worktree(&repo, &wt.to_string_lossy(), false).unwrap();
+        delete_branch(&repo, "acme-5-done").unwrap();
+        assert!(!branch_exists(&repo, "acme-5-done"));
+        std::fs::remove_dir_all(repo.parent().unwrap()).ok();
     }
 }

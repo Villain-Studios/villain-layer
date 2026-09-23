@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
 use crate::config::{Checkout, ConfigStore, Project, Task};
 use crate::error::{Error, Result};
@@ -721,6 +721,114 @@ fn remove_checkout_inner(state: &AppState, checkout_id: String, force: bool) -> 
         let _ = write_task_context(state, &task);
     }
     Ok(())
+}
+
+/// What finishing a task did.
+#[derive(Debug, Serialize)]
+pub struct Finished {
+    /// One row per worktree. Any that failed means the task was kept, and
+    /// nothing after it was done.
+    pub repos: Vec<RepoResult>,
+    /// One row per local branch.
+    pub branches: Vec<RepoResult>,
+    pub ticket_moved: bool,
+    pub ticket_error: Option<String>,
+}
+
+/// Clear away a task whose work has landed: its agents, its worktrees, its
+/// local branches, and — when a transition is given — its ticket.
+///
+/// In that order, and each only if the one before went. A worktree git will
+/// not remove holds work nobody has seen yet, which keeps the task; and a
+/// ticket marked done over work still on disk would be saying something
+/// untrue.
+///
+/// Local branches only: the pull requests and what they landed are on
+/// GitHub, and the remote branch is the repository's business — many delete
+/// it on merge themselves. `landed` is each checkout's merged PR head; a
+/// branch is deleted only when that head contains it.
+#[tauri::command]
+pub async fn finish_task(
+    app: AppHandle,
+    task_id: String,
+    transition_id: Option<String>,
+    landed: std::collections::HashMap<String, String>,
+) -> Result<Finished> {
+    let task = app.state::<AppState>().config.task(&task_id)?;
+    let (repos, branches) = {
+        let (task_id, branch) = (task_id.clone(), task.branch.clone());
+        super::blocking(app.clone(), move |state| {
+            // Where each branch lives, read before the task's record is gone.
+            let homes: Vec<(String, String, PathBuf, String)> = state
+                .config
+                .checkouts_of(&task_id)
+                .into_iter()
+                .filter_map(|c| {
+                    let p = state.config.project(&c.project_id).ok()?;
+                    Some((c.id, p.name, PathBuf::from(p.path), c.base))
+                })
+                .collect();
+            let repos = delete_task_inner(state, task_id, false)?;
+            if repos.iter().any(|r| !r.ok) {
+                return Ok((repos, Vec::new()));
+            }
+            let branches = homes
+                .into_iter()
+                .map(|(checkout_id, repo, path, base)| {
+                    let local = format!("refs/heads/{branch}");
+                    // Only a branch its merged PR contains, or one with nothing
+                    // of its own. "Merged" is said of the task once every PR
+                    // has landed, and a commit made after one did — or in a
+                    // repo that never had a PR — lives on this branch alone;
+                    // deleting it deleted the work.
+                    let covered = landed
+                        .get(&checkout_id)
+                        .is_some_and(|sha| git::is_ancestor(&path, &local, sha))
+                        || git::is_ancestor(&path, &local, &format!("refs/remotes/origin/{base}"));
+                    let (ok, detail) = if !git::branch_exists(&path, &branch) {
+                        (true, "already gone".to_string())
+                    } else if !covered {
+                        (
+                            false,
+                            if landed.contains_key(&checkout_id) {
+                                "kept: it has commits its merged pull request does not".to_string()
+                            } else {
+                                "kept: no merged pull request covers it".to_string()
+                            },
+                        )
+                    } else {
+                        // -D, not -d: a squash or rebase merge lands different
+                        // commits, so git never sees this branch as merged.
+                        match git::delete_branch(&path, &branch) {
+                            Ok(()) => (true, "deleted".to_string()),
+                            Err(e) => (false, e.to_string()),
+                        }
+                    };
+                    RepoResult { checkout_id, repo, ok, detail }
+                })
+                .collect();
+            Ok((repos, branches))
+        })
+        .await?
+    };
+
+    let mut finished = Finished { repos, branches, ticket_moved: false, ticket_error: None };
+    if finished.repos.iter().any(|r| !r.ok) {
+        return Ok(finished);
+    }
+    if let (Some(id), Some(key)) = (transition_id, task.issue_key.as_deref()) {
+        let state = app.state::<AppState>();
+        let moved = match super::jira::jira_client(&state) {
+            Ok((client, _)) => client.transition(key, &id).await,
+            Err(e) => Err(e),
+        };
+        match moved {
+            Ok(()) => finished.ticket_moved = true,
+            // The task is already gone, so this is the only place it can be said.
+            Err(e) => finished.ticket_error = Some(e.to_string()),
+        }
+    }
+    Ok(finished)
 }
 
 /// Delete a task and every worktree it owns.

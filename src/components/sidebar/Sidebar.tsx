@@ -7,6 +7,7 @@ import type { TaskView } from "../../lib/types";
 import { BusyOverlay, Confirm, ContextMenu, Field, Modal, Spinner, type MenuItem } from "../ui";
 import { RepoPicker } from "../RepoPicker";
 import { CreateTaskDialog } from "./CreateTaskDialog";
+import { FinishTask } from "../FinishTask";
 
 /** What a task out for review is waiting on, in a word. */
 const REVIEW_WORD: Partial<Record<TaskReview, { text: string; color: string }>> = {
@@ -50,6 +51,7 @@ export function Sidebar() {
     run: () => void | Promise<unknown>;
   } | null>(null);
   const [deleting, setDeleting] = useState<{ id: string; name: string } | null>(null);
+  const [finishing, setFinishing] = useState<TaskView | null>(null);
 
   function askDeleteTask(task: TaskView) {
     if (deleting) return;
@@ -243,10 +245,18 @@ export function Sidebar() {
         onSelect: () => setAddingRepoTo(task),
       });
     }
+    const landed = taskReview(prs[task.id] ?? []) === "merged";
+    if (landed) {
+      items.push({
+        label: "Finish task…",
+        separated: available(task).length === 0,
+        onSelect: () => setFinishing(task),
+      });
+    }
     items.push({
       label: "Delete task…",
       danger: true,
-      separated: available(task).length === 0,
+      separated: available(task).length === 0 && !landed,
       onSelect: () => askDeleteTask(task),
     });
     return items;
@@ -490,6 +500,8 @@ export function Sidebar() {
           onCancel={() => setConfirming(null)}
         />
       )}
+
+      {finishing && <FinishTask task={finishing} onClose={() => setFinishing(null)} />}
 
       {deleting && (
         <BusyOverlay

@@ -128,6 +128,15 @@ export interface ChangedFile {
   repo: string;
 }
 
+/** What finishing a task did. */
+export interface Finished {
+  /** Any row not ok means the task was kept and nothing after was done. */
+  repos: RepoResult[];
+  branches: RepoResult[];
+  ticket_moved: boolean;
+  ticket_error: string | null;
+}
+
 /** What bringing one repository up to date with its base came to. */
 export interface RepoUpdate {
   checkout_id: string;
@@ -203,6 +212,8 @@ export interface JiraTransition {
   id: string;
   name: string;
   to_status: string;
+  /** "new", "indeterminate" or "done" — the same on every site, unlike the names. */
+  to_category: string;
 }
 
 export interface PullRequest {

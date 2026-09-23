@@ -159,6 +159,7 @@ pub fn run() {
             commands::list_tasks,
             commands::create_task,
             commands::delete_task,
+            commands::finish_task,
             commands::add_checkout,
             commands::remove_checkout,
             commands::suggest_repos,

@@ -144,6 +144,15 @@ macOS may suspend. Settings → Appearance → Notifications turns it off.
    are left out, and threads you replied to last, bots and anything already
    sent start unpicked. Nothing is posted to GitHub.
 
+7. **Finish.** Once every PR has merged the task moves to *Done*, and *Finish
+   task* (on the Pull requests tab, or right-click the task) puts it away: its
+   terminals stop, its worktrees and folder go, the local branch is deleted in
+   each repo, and the ticket moves to a status in Jira's *done* category —
+   picked by category, so whatever the board calls it. Each step only runs if
+   the one before went: a worktree git will not remove keeps the task, and the
+   ticket is not touched. A branch is deleted only when the merged PR's head
+   contains it, so a commit made after the merge keeps its branch.
+
 **Keeping up with the base.** *Update from base* in the task header fetches
 each repo's base and merges it into the task branch — a merge, like GitHub's
 own *Update branch*, so an open PR keeps its history and nothing needs a force

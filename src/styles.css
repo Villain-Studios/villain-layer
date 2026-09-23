@@ -529,6 +529,14 @@ textarea { resize: vertical; font-family: var(--mono); }
   cursor: text;
 }
 .fb-note { font-size: 12.5px; padding-top: 6px; }
+.finish-list {
+  margin: 0 0 14px;
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text);
+}
+.finish-list li { margin-bottom: 4px; }
 .fb-files {
   margin-top: 3px;
   font-family: var(--mono);

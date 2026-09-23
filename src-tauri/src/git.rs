@@ -868,20 +868,26 @@ pub enum Updated {
 
 /// Which update, if any, is half done in this worktree.
 pub fn in_progress(dir: &Path) -> Option<UpdateBy> {
-    if run(dir, &["rev-parse", "-q", "--verify", "MERGE_HEAD"]).is_ok() {
-        return Some(UpdateBy::Merge);
+    // A merge leaves MERGE_HEAD; a rebase keeps its state in a directory.
+    // `--git-path` finds both in a worktree, whose git dir is not `.git`
+    // beside it — all three in one call, since every commit and push asks.
+    let out = run(
+        dir,
+        &["rev-parse", "--git-path", "MERGE_HEAD", "--git-path", "rebase-merge", "--git-path", "rebase-apply"],
+    )
+    .ok()?;
+    let paths: Vec<PathBuf> = out
+        .lines()
+        .map(|p| {
+            let p = PathBuf::from(p.trim());
+            if p.is_absolute() { p } else { dir.join(p) }
+        })
+        .collect();
+    match paths.as_slice() {
+        [merge, ..] if merge.is_file() => Some(UpdateBy::Merge),
+        [_, rest @ ..] if rest.iter().any(|p| p.is_dir()) => Some(UpdateBy::Rebase),
+        _ => None,
     }
-    // A rebase keeps its state in a directory, not a ref. `--git-path` finds
-    // it in a worktree, whose git dir is not `.git` beside it.
-    let rebasing = ["rebase-merge", "rebase-apply"].iter().any(|name| {
-        run(dir, &["rev-parse", "--git-path", name])
-            .map(|p| {
-                let p = PathBuf::from(p.trim());
-                if p.is_absolute() { p } else { dir.join(p) }.is_dir()
-            })
-            .unwrap_or(false)
-    });
-    rebasing.then_some(UpdateBy::Rebase)
 }
 
 /// Files with unresolved conflicts, as they are named on disk.

@@ -282,29 +282,36 @@ pub async fn push_task(app: AppHandle, task_id: String) -> Result<Vec<RepoResult
 
 fn push_task_inner(state: &AppState, task_id: String) -> Result<Vec<RepoResult>> {
     let task = state.config.task(&task_id)?;
-    let mut results = Vec::new();
-
-    for checkout in state.config.checkouts_of(&task_id) {
-        let repo = state
+    // Every repository at once: each is a round trip to the remote, and
+    // nothing in one waits on another.
+    let results = std::thread::scope(|scope| {
+        let pushes: Vec<_> = state
             .config
-            .project(&checkout.project_id)
-            .map(|p| p.name)
-            .unwrap_or_else(|_| "(unknown)".into());
-        let lease = checkout.push_lease.as_deref();
-        let (ok, detail) = match git::push(&PathBuf::from(&checkout.path), &task.branch, lease) {
-            Ok(replaced) => {
-                pushed(state, &checkout.id);
-                (true, if replaced { "pushed, replacing the pre-rebase branch" } else { "pushed" }.into())
-            }
-            Err(e) => (false, e.to_string()),
-        };
-        results.push(RepoResult {
-            checkout_id: checkout.id,
-            repo,
-            ok,
-            detail,
-        });
-    }
+            .checkouts_of(&task_id)
+            .into_iter()
+            .map(|checkout| {
+                let branch = &task.branch;
+                scope.spawn(move || {
+                    let repo = state
+                        .config
+                        .project(&checkout.project_id)
+                        .map(|p| p.name)
+                        .unwrap_or_else(|_| "(unknown)".into());
+                    let lease = checkout.push_lease.as_deref();
+                    let (ok, detail) = match git::push(&PathBuf::from(&checkout.path), branch, lease) {
+                        Ok(replaced) => {
+                            pushed(state, &checkout.id);
+                            let how = if replaced { "pushed, replacing the pre-rebase branch" } else { "pushed" };
+                            (true, how.to_string())
+                        }
+                        Err(e) => (false, e.to_string()),
+                    };
+                    RepoResult { checkout_id: checkout.id, repo, ok, detail }
+                })
+            })
+            .collect();
+        pushes.into_iter().filter_map(|h| h.join().ok()).collect()
+    });
     Ok(results)
 }
 

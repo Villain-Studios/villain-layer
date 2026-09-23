@@ -46,6 +46,12 @@ const OUTPUT_COALESCE: Duration = Duration::from_millis(33);
 /// for them to leave together rather than drawing the top half first.
 const OUTPUT_GATHER: Duration = Duration::from_millis(4);
 
+/// How long after a keystroke output still counts as its echo.
+///
+/// A shell echoes at once; a TUI renders the change on its own schedule, a
+/// frame or two later. Past this, output is the program's own again.
+const ECHO_WINDOW: Duration = Duration::from_millis(250);
+
 /// How much of the end of the output is searched for trust and limit phrases.
 const NOTICE_TAIL: usize = 4096;
 
@@ -283,6 +289,18 @@ struct Pane {
     /// When the last event went out, so a burst is coalesced and a lone key
     /// is not.
     last_flush: Mutex<Instant>,
+    /// When a key was last sent that has not had its echo shipped yet.
+    typed: Mutex<Option<Instant>>,
+    /// Set when output arrives in answer to a key, to cut the flush thread's
+    /// wait short.
+    ///
+    /// The first event after a quiet spell already went out after
+    /// `OUTPUT_GATHER`, but a key pressed while the pane was busy — an agent's
+    /// spinner going, a watcher printing — waited out the rest of the frame
+    /// behind it: 20ms typical, 35ms often, on every key, in exactly the panes
+    /// people type into most. Measured by the `echo_latency` test.
+    urgent: Mutex<bool>,
+    wake: parking_lot::Condvar,
     /// Whether a terminal is on screen for this pane.
     ///
     /// Output for panes nobody can see used to cross the bridge anyway, at
@@ -389,7 +407,7 @@ impl PtyManager {
     /// The reader keeps appending to the output; this just starts the timer
     /// that will ship it. Doing that on a short sleep means a burst of TUI
     /// redraws becomes one event instead of one per read.
-    fn schedule_flush<R: Runtime>(app: &AppHandle<R>, pane: &Arc<Pane>, id: &str) {
+    fn schedule_flush<R: Runtime>(app: &AppHandle<R>, pane: &Arc<Pane>, id: &str, keyed: bool) {
         if !pane.watched.load(Ordering::Acquire) {
             return;
         }
@@ -401,7 +419,7 @@ impl PtyManager {
             return;
         }
         let quiet = pane.last_flush.lock().elapsed();
-        let mut wait = if quiet >= OUTPUT_COALESCE {
+        let mut wait = if keyed || quiet >= OUTPUT_COALESCE {
             OUTPUT_GATHER
         } else {
             OUTPUT_COALESCE - quiet
@@ -411,7 +429,19 @@ impl PtyManager {
         let id = id.to_string();
         std::thread::spawn(move || {
             loop {
-                std::thread::sleep(wait);
+                // Interruptible: an echo arriving meanwhile cuts it short,
+                // then waits `OUTPUT_GATHER` for the rest of its frame.
+                {
+                    let mut urgent = pane.urgent.lock();
+                    if !*urgent {
+                        let _ = pane.wake.wait_for(&mut urgent, wait);
+                    }
+                    if *urgent {
+                        *urgent = false;
+                        drop(urgent);
+                        std::thread::sleep(OUTPUT_GATHER);
+                    }
+                }
                 wait = OUTPUT_COALESCE;
                 // Hidden since this was scheduled: what is waiting stays in
                 // scrollback, and showing the pane again collects it.
@@ -560,6 +590,9 @@ impl PtyManager {
             output: Mutex::new(Output { scrollback: Vec::new(), total: 0, sent: 0 }),
             flush_scheduled: AtomicBool::new(false),
             last_flush: Mutex::new(Instant::now()),
+            typed: Mutex::new(None),
+            urgent: Mutex::new(false),
+            wake: parking_lot::Condvar::new(),
             // Nothing is on screen until the webview attaches, and attaching
             // collects whatever was printed before it did.
             watched: AtomicBool::new(false),
@@ -611,9 +644,23 @@ impl PtyManager {
                                     }
                                 }
                             }
+                            // The first output after a key is its echo, and
+                            // goes out without waiting for the frame. Only the
+                            // first: a key that starts a flood of output gets
+                            // one fast event, and the flood the usual pace.
+                            let keyed = {
+                                let mut typed = pane.typed.lock();
+                                let fresh = typed.is_some_and(|at| at.elapsed() < ECHO_WINDOW);
+                                *typed = None;
+                                fresh
+                            };
+                            if keyed {
+                                *pane.urgent.lock() = true;
+                                pane.wake.notify_one();
+                            }
                             // Scrollback always records. The webview only gets
                             // a feed while the pane is on screen.
-                            Self::schedule_flush(&app, &pane, &id);
+                            Self::schedule_flush(&app, &pane, &id, keyed);
                         }
                     }
                 }
@@ -661,8 +708,9 @@ impl PtyManager {
     }
 
     pub fn write(&self, id: &str, data: &str) -> Result<()> {
-        self.get(id)?
-            .input
+        let pane = self.get(id)?;
+        *pane.typed.lock() = Some(Instant::now());
+        pane.input
             .send(data.as_bytes().to_vec())
             .map_err(|_| Error::Pty("the terminal has closed".into()))
     }
@@ -985,6 +1033,75 @@ mod tests {
         assert_eq!(out.take_unsent(), None);
         out.push(b"de");
         assert_eq!(out.take_unsent(), Some((b"de".to_vec(), 5)));
+    }
+
+    /// How long a keystroke's echo takes to reach the webview, quiet and
+    /// beside a process printing every 20ms — an agent's spinner, a watcher.
+    /// A measurement, not a check: `cargo test --lib echo_latency -- --ignored
+    /// --nocapture`.
+    #[test]
+    #[ignore]
+    fn echo_latency() {
+        use tauri::Listener;
+        for (label, script) in [
+            ("quiet", "exec cat"),
+            ("beside a 20ms printer", "(while :; do printf .; sleep 0.02; done) & exec cat"),
+        ] {
+            let app = tauri::test::mock_app();
+            let ptys = PtyManager::default();
+            let (tx, rx) = std::sync::mpsc::channel::<(Instant, String)>();
+            app.listen_any("pty:output", move |e| {
+                let v: serde_json::Value = serde_json::from_str(e.payload()).unwrap();
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(v["data"].as_str().unwrap())
+                    .unwrap();
+                let _ = tx.send((Instant::now(), String::from_utf8_lossy(&bytes).to_string()));
+            });
+            let pane = ptys
+                .spawn(
+                    app.handle(),
+                    SpawnOptions {
+                        task_id: "t".into(),
+                        checkout_id: None,
+                        cwd: std::env::temp_dir().to_string_lossy().to_string(),
+                        kind: PaneKind::Agent,
+                        title: "t".into(),
+                        program: "/bin/sh".into(),
+                        args: vec!["-c".into(), script.into()],
+                        agent_id: None,
+                        rows: None,
+                        cols: None,
+                        initial_input: None,
+                    },
+                )
+                .unwrap();
+            ptys.attach(&pane.id, None).unwrap();
+            std::thread::sleep(Duration::from_millis(300));
+            let mut took = Vec::new();
+            for i in 0..40u8 {
+                let key = (b'a' + (i % 26)) as char;
+                while rx.try_recv().is_ok() {}
+                // Not in step with the printer, so the key lands anywhere in its cycle.
+                std::thread::sleep(Duration::from_millis(50 + (i as u64 * 7) % 40));
+                let sent = Instant::now();
+                ptys.write(&pane.id, &key.to_string()).unwrap();
+                loop {
+                    let (at, text) = rx.recv_timeout(Duration::from_secs(2)).expect("no echo");
+                    if text.contains(key) {
+                        took.push(at.duration_since(sent).as_secs_f64() * 1000.0);
+                        break;
+                    }
+                }
+            }
+            ptys.shutdown(Duration::from_millis(500));
+            took.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            println!(
+                "{label}: median {:.1}ms  p90 {:.1}ms  max {:.1}ms",
+                took[took.len() / 2],
+                took[took.len() * 9 / 10],
+                took[took.len() - 1]
+            );
+        }
     }
 
     /// The whole path through real processes: a pane is fed from its first

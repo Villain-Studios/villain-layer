@@ -91,10 +91,21 @@ the repo count, running agents, uncommitted changes and the review verdict.
   pane are asked every poll. The rest reuse a cached status for up to 90
   seconds, so a poll is not one git process per worktree ever made.
 
+- **TASK-11** A checkout whose folder exists but git cannot read MUST say
+  so, with the reason, in the task header, the sidebar and the Diff tab.
+  It is never shown as clean or empty. The common cause is the repository
+  being deleted or cloned again, which takes `.git/worktrees/` and the
+  local branches with it; the files stay in the task folder.
+
 Code: `commands/tasks.rs`, `sidebar/`, `FinishTask.tsx`,
 `CreateTaskDialog.tsx`.
 
 Known gaps:
+- An unlinked worktree (TASK-11) is reported, not repaired. Re-linking is
+  by hand: create the branch at the commit the folder matches,
+  `git worktree add --no-checkout` it somewhere temporary, point the new
+  registration and the folder's `.git` file at each other, then
+  `git reset` in the folder. Its files are never touched.
 - Finishing moves the ticket even when a branch was kept because it was
   not contained. The dialog says so.
 - `worktree remove` deletes gitignored files (`.env`, build output) with

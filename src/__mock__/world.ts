@@ -123,12 +123,12 @@ const tasks: TaskView[] = [
     checkouts: [
       {
         id: "c-login-api", task_id: "t-login", project_id: "p-api", project_name: "api",
-        path: "/Users/you/.villain-worktrees/ACME-123/api", base: "main", exists: true, changed: 2,
+        path: "/Users/you/.villain-worktrees/ACME-123/api", base: "main", exists: true, broken: null, changed: 2,
         status: { ...clean, branch: "ACME-123", ahead: 2, behind: 3, unstaged: 1, untracked: 1, dirty_files: 2 },
       },
       {
         id: "c-login-web", task_id: "t-login", project_id: "p-web", project_name: "web",
-        path: "/Users/you/.villain-worktrees/ACME-123/web", base: "main", exists: true, changed: 0,
+        path: "/Users/you/.villain-worktrees/ACME-123/web", base: "main", exists: true, broken: null, changed: 0,
         status: { ...clean, branch: "ACME-123", ahead: 1 },
       },
     ],
@@ -145,7 +145,7 @@ const tasks: TaskView[] = [
     checkouts: [
       {
         id: "c-audit-web", task_id: "t-audit", project_id: "p-web", project_name: "web",
-        path: "/Users/you/.villain-worktrees/ACME-130/web", base: "main", exists: true, changed: 0,
+        path: "/Users/you/.villain-worktrees/ACME-130/web", base: "main", exists: true, broken: null, changed: 0,
         status: { ...clean, branch: "ACME-130" },
       },
     ],
@@ -307,4 +307,16 @@ function empty(): World {
   };
 }
 
-export const SCENARIOS: Record<string, () => World> = { busy, empty };
+/** Busy, with ACME-123's worktrees cut off from their repositories (TASK-11). */
+function unlinked(): World {
+  const w = busy();
+  for (const c of w.tasks[0].checkouts) {
+    c.broken = `Git no longer knows this worktree: /Users/you/code/${c.project_name}/.git/worktrees/${c.project_name} is gone, usually because the repository was deleted or cloned again`;
+    c.status = null;
+    c.changed = 0;
+  }
+  w.changed = [];
+  return w;
+}
+
+export const SCENARIOS: Record<string, () => World> = { busy, empty, unlinked };

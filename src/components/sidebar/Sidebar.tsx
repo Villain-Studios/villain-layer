@@ -417,7 +417,7 @@ export function Sidebar() {
                   ) : (
                   <span
                     className={`dot ${
-                      totals.missing || stuck ? "gone" : waiting ? "idle" : busy ? "live" : ""
+                      totals.missing || totals.unlinked || stuck ? "gone" : waiting ? "idle" : busy ? "live" : ""
                     }`}
                     title={waiting ? "An agent here needs you: it is asking, or it finished" : undefined}
                   />
@@ -450,7 +450,10 @@ export function Sidebar() {
                 const lose = d + (c.status?.staged ?? 0);
                 return (
                   <div key={c.id} className="repo-row">
-                    <span className={`dot ${c.exists ? "" : "gone"}`} />
+                    <span
+                      className={`dot ${c.exists && !c.broken ? "" : "gone"}`}
+                      title={c.broken ?? undefined}
+                    />
                     <span className="rname">{c.project_name}</span>
                     {d > 0 && <span style={{ color: "var(--amber)" }}>±{d}</span>}
                     <span

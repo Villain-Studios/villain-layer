@@ -48,6 +48,8 @@ export interface CheckoutView extends Checkout {
   project_name: string;
   status: WorktreeStatus | null;
   exists: boolean;
+  /** The folder is there but git cannot read it, and why — its repository forgot it, say. */
+  broken: string | null;
   /** Files with uncommitted changes — what the Diff tab lists by default. */
   changed: number;
 }

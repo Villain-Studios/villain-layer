@@ -24,6 +24,9 @@ pub struct CheckoutView {
     pub project_name: String,
     pub status: Option<git::WorktreeStatus>,
     pub exists: bool,
+    /// The folder is there but git cannot read it, and why. Without this a
+    /// worktree cut off from its repository showed as clean and empty.
+    pub broken: Option<String>,
     /// Files with uncommitted changes — what the Diff tab lists by default.
     /// The status counts split the same work by staged, unstaged and
     /// untracked; this is the number of files across all three.
@@ -74,17 +77,30 @@ const COLD_STATUS_TTL: std::time::Duration = std::time::Duration::from_secs(90);
 /// should not start forty at once.
 const STATUS_FANOUT: usize = 8;
 
-/// What `git status` says about one worktree, or that there is no worktree.
-pub(super) type Fresh = (Option<git::WorktreeStatus>, u32, bool);
+/// What `git status` says about one worktree, that there is no worktree, or
+/// why git cannot read the one that is there.
+#[derive(Clone, Default)]
+pub(super) struct Fresh {
+    pub status: Option<git::WorktreeStatus>,
+    pub changed: u32,
+    pub exists: bool,
+    pub broken: Option<String>,
+}
 
 fn fresh_status(dir: &Path) -> Fresh {
-    let exists = dir.is_dir();
-    let status = exists.then(|| git::status(dir).ok()).flatten();
-    // One `git status` already enumerated every dirty path. A second
-    // `diff`/`ls-files` pass per checkout on every poll is what made the app
-    // feel busy just for sitting open.
-    let changed = status.as_ref().map(|s| s.dirty_files).unwrap_or(0);
-    (status, changed, exists)
+    if !dir.is_dir() {
+        return Fresh::default();
+    }
+    if let Some(why) = git::unlinked(dir) {
+        return Fresh { exists: true, broken: Some(why), ..Fresh::default() };
+    }
+    match git::status(dir) {
+        // One `git status` already enumerated every dirty path. A second
+        // `diff`/`ls-files` pass per checkout on every poll is what made the
+        // app feel busy just for sitting open.
+        Ok(s) => Fresh { changed: s.dirty_files, status: Some(s), exists: true, broken: None },
+        Err(e) => Fresh { exists: true, broken: Some(e.to_string()), ..Fresh::default() },
+    }
 }
 
 /// `fresh_status` for several worktrees, in the same order as the input.
@@ -110,7 +126,7 @@ pub(super) fn fresh_statuses(dirs: &[PathBuf]) -> Vec<Fresh> {
             .collect();
         handles
             .into_iter()
-            .flat_map(|(len, h)| h.join().unwrap_or_else(|_| vec![(None, 0, false); len]))
+            .flat_map(|(len, h)| h.join().unwrap_or_else(|_| vec![Fresh::default(); len]))
             .collect()
     })
 }
@@ -173,6 +189,7 @@ pub(crate) fn list_tasks_inner(state: &AppState, focus: Option<String>) -> Vec<T
                         status: hit.status.clone(),
                         changed: hit.changed,
                         exists: hit.exists,
+                        broken: hit.broken.clone(),
                         checkout: checkout.clone(),
                     }),
                     None => {
@@ -185,6 +202,7 @@ pub(crate) fn list_tasks_inner(state: &AppState, focus: Option<String>) -> Vec<T
                             status: None,
                             changed: 0,
                             exists: false,
+                            broken: None,
                             checkout: checkout.clone(),
                         });
                     }
@@ -198,20 +216,22 @@ pub(crate) fn list_tasks_inner(state: &AppState, focus: Option<String>) -> Vec<T
     let statuses = fresh_statuses(&dirs);
 
     let mut cache = state.status_cache.lock();
-    for ((ti, ci, _), (status, changed, exists)) in cold.into_iter().zip(statuses) {
+    for ((ti, ci, _), fresh) in cold.into_iter().zip(statuses) {
         let view = &mut views[ti][ci];
         cache.insert(
             view.checkout.id.clone(),
             super::CachedStatus {
-                status: status.clone(),
-                changed,
-                exists,
+                status: fresh.status.clone(),
+                changed: fresh.changed,
+                exists: fresh.exists,
+                broken: fresh.broken.clone(),
                 at: std::time::Instant::now(),
             },
         );
-        view.status = status;
-        view.changed = changed;
-        view.exists = exists;
+        view.status = fresh.status;
+        view.changed = fresh.changed;
+        view.exists = fresh.exists;
+        view.broken = fresh.broken;
     }
     drop(cache);
 

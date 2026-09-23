@@ -750,25 +750,44 @@ export function DiffView({ task }: { task: TaskView }) {
     [lines, fileDrafts, composingLine],
   );
 
+  // A worktree git cannot read has no changes to list, which looked exactly
+  // like a clean one: "No changes yet" over seven task folders whose files
+  // were all still there.
+  const unlinked = task.checkouts.filter((c) => c.broken);
+  const unlinkedBanner = unlinked.length > 0 && (
+    <div className="limit-banner unlinked-banner">
+      <span>
+        <b>Git cannot read {unlinked.map((c) => c.project_name).join(", ")}</b>, so{" "}
+        {unlinked.length === 1 ? "its" : "their"} changes are not listed here. The files are
+        still in the task folder. {unlinked[0].broken}
+      </span>
+    </div>
+  );
+
   if (files.length === 0) {
     const where = multi ? "any of the task's repos" : "this worktree";
     return (
       <>
         {summaryBar}
+        {unlinkedBanner}
         <div className="empty">
           <h2>
-            {pin
-              ? "Nothing in this commit"
-              : scope === "uncommitted"
-                ? "Nothing uncommitted"
-                : "No changes yet"}
+            {unlinked.length === task.checkouts.length
+              ? "Nothing git can read"
+              : pin
+                ? "Nothing in this commit"
+                : scope === "uncommitted"
+                  ? "Nothing uncommitted"
+                  : "No changes yet"}
           </h2>
           <p>
-            {pin
-              ? "That commit did not touch any files (or they are no longer in this worktree)."
-              : scope === "uncommitted"
-                ? `The working tree is clean in ${where}. Switch to Whole branch to see what has been committed.`
-                : `Nothing differs from where this branch started in ${where}. Once an agent edits files they show up here.`}
+            {unlinked.length === task.checkouts.length
+              ? "This is not a clean worktree: git has lost track of it, usually because its repository was deleted or cloned again. The files are still in the task folder. Once the folder is linked to its repository again, its changes show up here."
+              : pin
+                ? "That commit did not touch any files (or they are no longer in this worktree)."
+                : scope === "uncommitted"
+                  ? `The working tree is clean in ${where}. Switch to Whole branch to see what has been committed.`
+                  : `Nothing differs from where this branch started in ${where}. Once an agent edits files they show up here.`}
           </p>
           <button className="btn" onClick={() => void load()}>Refresh</button>
         </div>
@@ -785,6 +804,7 @@ export function DiffView({ task }: { task: TaskView }) {
   return (
     <>
       {summaryBar}
+      {unlinkedBanner}
       <div className="diff">
         <div className="diff-files" style={{ width }}>
           {groups.map((g) => (

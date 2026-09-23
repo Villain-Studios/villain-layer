@@ -32,6 +32,7 @@ pub struct CachedStatus {
     pub status: Option<crate::git::WorktreeStatus>,
     pub changed: u32,
     pub exists: bool,
+    pub broken: Option<String>,
     pub at: Instant,
 }
 
@@ -363,15 +364,19 @@ mod tests {
 
         let out = fresh_statuses(&dirs);
         assert_eq!(out.len(), dirs.len());
-        for (i, ((status, changed, exists), want)) in out.iter().zip(&expect_dirty).enumerate() {
-            assert_eq!(*exists, dirs[i].is_dir(), "existence of {}", dirs[i].display());
+        for (i, (fresh, want)) in out.iter().zip(&expect_dirty).enumerate() {
+            assert_eq!(fresh.exists, dirs[i].is_dir(), "existence of {}", dirs[i].display());
             match want {
                 Some(n) => {
-                    assert!(status.is_some(), "no status for {}", dirs[i].display());
-                    assert_eq!(changed, n, "dirty count landed on the wrong repo at {i}");
+                    assert!(fresh.status.is_some(), "no status for {}", dirs[i].display());
+                    assert_eq!(&fresh.changed, n, "dirty count landed on the wrong repo at {i}");
+                    assert!(fresh.broken.is_none(), "a healthy repo reads as broken at {i}");
                 }
-                None => assert!(status.is_none(), "status for {}", dirs[i].display()),
+                None => assert!(fresh.status.is_none(), "status for {}", dirs[i].display()),
             }
+            // A folder git cannot read says so; a folder that is not there
+            // is "missing", not broken.
+            assert_eq!(fresh.broken.is_some(), fresh.exists && want.is_none(), "broken at {i}");
         }
 
         std::fs::remove_dir_all(&sandbox).ok();

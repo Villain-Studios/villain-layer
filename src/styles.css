@@ -1385,6 +1385,12 @@ textarea { resize: vertical; font-family: var(--mono); }
   flex: none;
 }
 .limit-banner b { color: var(--text); }
+/* A worktree cut off from its repository: red, since nothing here works until it is re-linked. */
+.unlinked-banner {
+  color: var(--red);
+  background: rgba(248, 113, 113, 0.08);
+  border-bottom-color: #4a2a2a;
+}
 
 /* The Jira half of the new-task dialog, set apart so the form reads as two
    steps rather than one long column of fields. */

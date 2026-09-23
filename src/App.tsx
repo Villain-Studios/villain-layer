@@ -491,8 +491,8 @@ function TaskMain({ task }: { task: TaskView }) {
             <span
               key={c.id}
               className="chip"
-              title={c.path}
-              style={!c.exists ? { color: "var(--red)" } : undefined}
+              title={c.broken ?? c.path}
+              style={!c.exists || c.broken ? { color: "var(--red)" } : undefined}
             >
               {c.project_name}
             </span>
@@ -500,6 +500,14 @@ function TaskMain({ task }: { task: TaskView }) {
         </div>
         <div className="spacer" />
         <div className="chips">
+          {totals.unlinked > 0 && (
+            <span
+              className="chip del"
+              title={task.checkouts.filter((c) => c.broken).map((c) => `${c.project_name}: ${c.broken}`).join("\n")}
+            >
+              {totals.unlinked} worktree{totals.unlinked === 1 ? "" : "s"} unlinked
+            </span>
+          )}
           {totals.missing > 0 && (
             <span className="chip warn">
               {totals.missing} worktree{totals.missing === 1 ? "" : "s"} missing

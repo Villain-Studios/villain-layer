@@ -64,7 +64,7 @@ harness is already served. Don't start a second server.
 
 | Parameter | Values | Default |
 |---|---|---|
-| `scenario` | `busy` (everything connected, agents in every state), `empty` (first launch) | `busy` |
+| `scenario` | `busy` (everything connected, agents in every state), `empty` (first launch), `unlinked` (a task whose worktrees lost their repository) | `busy` |
 | `view` | `work`, `tickets`, `reviews`, `chat`, `repos` | `work` |
 | `task` | a task id from `src/__mock__/world.ts` (`t-login`, `t-audit`) | none, which is the All agents overview |
 | `tab` | `terminals`, `diff`, `pr` | `terminals` |

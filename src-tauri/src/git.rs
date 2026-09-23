@@ -56,6 +56,25 @@ fn run(dir: &Path, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
+/// Why a worktree folder that is still on disk is not one git can use, when
+/// the link its `.git` file names is gone.
+///
+/// Deleting or re-cloning the main repository takes its `.git/worktrees/`
+/// with it. Every git command in the folder then fails with "not a git
+/// repository", and the Diff view read that as "No changes yet": seven task
+/// folders looked empty while all their files were still there. No
+/// subprocess, so it can run on every poll.
+pub fn unlinked(dir: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(dir.join(".git")).ok()?;
+    let target = dir.join(text.strip_prefix("gitdir:")?.trim());
+    (!target.exists()).then(|| {
+        format!(
+            "Git no longer knows this worktree: {} is gone, usually because the repository was deleted or cloned again",
+            target.display()
+        )
+    })
+}
+
 /// For other modules' test fixtures, which need a real repository to stand on.
 #[cfg(test)]
 pub fn run_for_tests(dir: &Path, args: &[&str]) -> Result<String> {
@@ -1418,6 +1437,23 @@ mod tests {
         assert!(!wt.exists());
         assert_eq!(list_worktrees(&repo).unwrap().len(), 1);
 
+        std::fs::remove_dir_all(repo.parent().unwrap()).ok();
+    }
+
+    /// The repository re-cloned under its worktrees: the folders stay, their
+    /// link does not, and nothing in git will say why.
+    #[test]
+    fn a_worktree_whose_repository_forgot_it_says_so() {
+        let repo = fixture();
+        let wt = repo.parent().unwrap().join("wt");
+        add_worktree(&repo, &wt, "feature/x", "main").unwrap();
+        assert_eq!(unlinked(&wt), None, "a healthy worktree");
+        assert_eq!(unlinked(&repo), None, "a plain clone has a .git folder, not a link");
+
+        std::fs::remove_dir_all(repo.join(".git/worktrees")).unwrap();
+        let why = unlinked(&wt).expect("the link is gone");
+        assert!(why.contains(".git/worktrees"), "names what is missing: {why}");
+        assert!(status(&wt).is_err(), "and git itself cannot read it");
         std::fs::remove_dir_all(repo.parent().unwrap()).ok();
     }
 

@@ -642,9 +642,10 @@ export function taskTotals(task: TaskView) {
       behind: acc.behind + (c.status?.behind ?? 0),
       conflicted: acc.conflicted + (c.status?.conflicted ?? 0),
       missing: acc.missing + (c.exists ? 0 : 1),
+      unlinked: acc.unlinked + (c.broken ? 1 : 0),
       changed: acc.changed + c.changed,
     }),
-    { dirty: 0, staged: 0, ahead: 0, behind: 0, conflicted: 0, missing: 0, changed: 0 },
+    { dirty: 0, staged: 0, ahead: 0, behind: 0, conflicted: 0, missing: 0, unlinked: 0, changed: 0 },
   );
 }
 

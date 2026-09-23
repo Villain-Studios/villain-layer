@@ -730,6 +730,16 @@ async fn call(app: &AppHandle, name: &str, args: Value) -> Result<Value> {
                 .and_then(|l| l.as_array())
                 .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
                 .unwrap_or_default();
+            // An empty list means "everything recorded" to the command, so a
+            // missing or malformed `links` — with confirm given for two
+            // particular messages — deleted up to a hundred of them.
+            if links.is_empty() {
+                return Err(crate::error::Error::Other(
+                    "slack_delete needs `links`: the permalinks of the messages to delete. \
+                     Nothing was deleted."
+                        .into(),
+                ));
+            }
             Ok(serde_json::to_value(
                 commands::slack_delete_posted(state, Some(links)).await?,
             )?)
@@ -764,6 +774,15 @@ async fn call(app: &AppHandle, name: &str, args: Value) -> Result<Value> {
 
         "handoff_prompt" => {
             let pane_id = required(&args, "pane_id")?.to_string();
+            // It carries the pane's last 120 lines, so it answers to the same
+            // setting as `pane_output` — without this it was a way round it.
+            if !state.config.read().ui.agents_read_panes {
+                return Err(crate::error::Error::Other(
+                    "a handoff briefing includes terminal output, and reading terminal output \
+                     is switched off in the app's settings."
+                        .into(),
+                ));
+            }
             Ok(Value::String(commands::handoff_prompt(state, pane_id).await?))
         }
 
@@ -797,7 +816,24 @@ pub fn write_config(dir: &std::path::Path) -> Result<()> {
         return Ok(());
     };
     let path = dir.join(".mcp.json");
+    // Created 0600 rather than chmodded after: written with the default mode
+    // first, the token was readable by anyone on the machine until the chmod.
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&path)?;
+        file.write_all(&serde_json::to_vec_pretty(&config)?)?;
+    }
+    #[cfg(not(unix))]
     std::fs::write(&path, serde_json::to_vec_pretty(&config)?)?;
+    // `mode` applies only when the file is created; one left from an older
+    // run keeps whatever it had until this.
     lock_config_perms(&path)?;
     Ok(())
 }

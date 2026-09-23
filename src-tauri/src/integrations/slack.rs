@@ -49,7 +49,11 @@ impl Slack {
                 .post(&self.secret)
                 .json(&json!({ "text": text, "blocks": blocks }))
                 .send()
-                .await?;
+                .await
+                // A webhook's URL is its secret, and reqwest's errors end
+                // "for url (…)": a timeout put the whole thing in a toast, and
+                // through `slack_post` in an agent's transcript.
+                .map_err(|e| Error::from(e.without_url()))?;
             if !res.status().is_success() {
                 return Err(Error::Other(format!("Slack webhook {}", res.status())));
             }

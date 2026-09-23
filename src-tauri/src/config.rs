@@ -295,6 +295,15 @@ pub fn default_worktree_root() -> PathBuf {
 pub struct ConfigStore {
     path: PathBuf,
     inner: RwLock<AppConfig>,
+    /// Held from a change until it is on disk.
+    ///
+    /// The change used to be made under `inner` and written after letting go
+    /// of it, through one shared temp file. Commands run in parallel now — the
+    /// blocking pool, the restore thread, MCP calls — so two updates could
+    /// finish in the wrong order and leave the older copy on disk, or write
+    /// the temp file at once and leave it truncated: on the next launch that
+    /// reads as unreadable, and every task is gone from the app.
+    disk: parking_lot::Mutex<()>,
 }
 
 impl ConfigStore {
@@ -333,6 +342,7 @@ impl ConfigStore {
         let store = Self {
             path,
             inner: RwLock::new(inner),
+            disk: parking_lot::Mutex::new(()),
         };
         if changed {
             let snapshot = store.read();
@@ -346,7 +356,11 @@ impl ConfigStore {
     }
 
     /// Mutate the config and write it back to disk atomically.
+    ///
+    /// Readers are not held up by the write: `inner` is released before it,
+    /// and only other updates wait on `disk`.
     pub fn update<T>(&self, f: impl FnOnce(&mut AppConfig) -> T) -> Result<T> {
+        let _disk = self.disk.lock();
         let (out, snapshot) = {
             let mut guard = self.inner.write();
             let out = f(&mut guard);
@@ -357,8 +371,22 @@ impl ConfigStore {
     }
 
     fn persist(&self, cfg: &AppConfig) -> Result<()> {
+        use std::io::Write;
         let tmp = self.path.with_extension("json.tmp");
-        std::fs::write(&tmp, serde_json::to_vec_pretty(cfg)?)?;
+        let mut file = std::fs::File::create(&tmp)?;
+        file.write_all(&serde_json::to_vec_pretty(cfg)?)?;
+        // On disk before it replaces the old one, or a crash straight after
+        // the rename can leave a config with nothing in it. Plain fsync, not
+        // `sync_all`: on macOS that is F_FULLFSYNC, a drive-cache flush that
+        // costs tens of milliseconds, and some writes come from the main
+        // thread — every step of a settings slider is one.
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            // SAFETY: the descriptor belongs to `file`, which is open here.
+            unsafe { libc::fsync(file.as_raw_fd()) };
+        }
+        drop(file);
         std::fs::rename(&tmp, &self.path)?;
         Ok(())
     }

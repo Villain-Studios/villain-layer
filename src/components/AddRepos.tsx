@@ -36,7 +36,9 @@ export function AddRepos({ onClose }: { onClose: () => void }) {
     });
     const paths = Array.isArray(chosen) ? chosen : typeof chosen === "string" ? [chosen] : [];
     if (paths.length === 0) return;
-    await register(paths);
+    // The group field belongs to a scan and is not shown for picked folders,
+    // so a group left from a scan and a Back filed these under it unseen.
+    await register(paths, null);
   }
 
   async function scan() {
@@ -54,7 +56,7 @@ export function AddRepos({ onClose }: { onClose: () => void }) {
       setFound(repos);
       setPicked(repos.filter((r) => !r.registered).map((r) => r.path));
       // A folder of repos is usually already a group: ~/code/backend -> backend.
-      const leaf = root.split("/").filter(Boolean).pop() ?? "";
+      const leaf = root.split(/[\\/]/).filter(Boolean).pop() ?? "";
       setGroup(leaf.toLowerCase());
       if (repos.length === 0) toast("info", `No git repositories found under ${root}`);
     } catch (e) {
@@ -64,10 +66,10 @@ export function AddRepos({ onClose }: { onClose: () => void }) {
     }
   }
 
-  async function register(paths: string[]) {
+  async function register(paths: string[], into: string | null = group.trim() || null) {
     setBusy(true);
     try {
-      const added = await api.addProjects(paths, group.trim() || null);
+      const added = await api.addProjects(paths, into);
       await refreshAll();
       toast("success", `Added ${added.length} repositor${added.length === 1 ? "y" : "ies"}`);
       onClose();

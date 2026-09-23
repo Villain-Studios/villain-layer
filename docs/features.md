@@ -223,7 +223,11 @@ ones that need you first.
   CLI can. At most 12 come back (`RESTORE_LIMIT`), and the user is told if
   some were not. Two agents in one folder never both resume the same
   conversation. A pane that fails to come back three launches in a row is
-  forgotten.
+  forgotten. Only a conversation the CLI would continue counts: Claude
+  Code's one-shot runs (`claude -p`, the app's own PR description drafts)
+  do not. Counted, a draft in the task folder had an agent restarted there,
+  where Claude found "No conversation found to continue", while its real
+  conversation was in the repo's folder.
 - **PANE-8** A terminal MUST keep 256KB of scrollback. One coming back on
   screen gets exactly what it missed, by byte position. Keystrokes echo
   immediately, even while the pane is printing heavily. Output is batched
@@ -414,7 +418,10 @@ finish a merged task.
 - **PR-7** Failing GitHub Actions checks MUST come with the end of the
   job's log, trimmed to the error.
 - **PR-8** Every task's PRs are refreshed every 90 seconds (180 when idle)
-  while the window is in front. The first sweep is silent. After it, a new
+  while the window is in front, timed from the last sweep: switching views,
+  going idle and coming back never put one off, and coming back to the
+  window when one is due runs it at once. (The timer used to restart on
+  each of those, and in ordinary use never fired.) The first sweep is silent. After it, a new
   approval, request for changes, new comment or merge is announced as a
   toast.
 - **PR-9** A late answer MUST NOT overwrite a newer one. A sweep that

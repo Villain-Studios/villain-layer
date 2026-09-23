@@ -758,7 +758,7 @@ pub fn resumable(cwd: &str) -> Vec<Resumable> {
             let mut newest: Option<i64> = None;
             let mut count = 0usize;
             for entry in std::fs::read_dir(&store).ok()?.flatten() {
-                if entry.path().extension().and_then(|e| e.to_str()) != Some(ext) {
+                if entry.path().extension().and_then(|e| e.to_str()) != Some(ext) || !continuable(&entry.path()) {
                     continue;
                 }
                 count += 1;
@@ -780,9 +780,46 @@ pub fn resumable(cwd: &str) -> Vec<Resumable> {
         .collect()
 }
 
+/// Whether a saved session is a conversation `--continue` picks up. Claude
+/// Code marks each entry with how it was started, and skips one-shot runs
+/// (`claude -p`, `entrypoint: sdk-cli`). The app's own PR description draft
+/// is one, run in the task folder: counted, it made the task folder look
+/// like where the conversation was, the agent was restarted there, and
+/// Claude said "No conversation found to continue" while the real one sat
+/// in the repo's folder. The first entry that says is enough; a transcript
+/// that never says is an older CLI's, and counts.
+fn continuable(path: &std::path::Path) -> bool {
+    use std::io::Read;
+    let mut head = Vec::with_capacity(16 * 1024);
+    if std::fs::File::open(path).and_then(|f| f.take(16 * 1024).read_to_end(&mut head)).is_err() {
+        return true;
+    }
+    let head = String::from_utf8_lossy(&head);
+    let Some(at) = head.find("\"entrypoint\":\"") else { return true };
+    !head[at + "\"entrypoint\":\"".len()..].starts_with("sdk")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_one_shot_run_is_not_a_conversation_to_resume() {
+        let dir = std::env::temp_dir().join(format!("vl-sessions-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let write = |name: &str, body: &str| {
+            let p = dir.join(name);
+            std::fs::write(&p, body).unwrap();
+            p
+        };
+        let draft = write("a.jsonl", "{\"type\":\"queue-operation\"}\n{\"entrypoint\":\"sdk-cli\",\"cwd\":\"/t\"}\n");
+        let chat = write("b.jsonl", "{\"type\":\"summary\"}\n{\"entrypoint\":\"cli\",\"cwd\":\"/t/api\"}\n");
+        let old = write("c.jsonl", "{\"type\":\"user\",\"cwd\":\"/t\"}\n");
+        assert!(!continuable(&draft), "a claude -p run");
+        assert!(continuable(&chat));
+        assert!(continuable(&old), "an older CLI that never said");
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn slugs_a_working_directory_the_way_the_clis_do() {

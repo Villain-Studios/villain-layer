@@ -251,16 +251,10 @@ fn commit_task_inner(
             continue;
         }
         // Uncommitted, not branch: a repo whose work is already committed has
-        // nothing to add, and git would refuse with "nothing to commit".
-        if git::changed_files(
-            &dir,
-            &checkout.base,
-            checkout.base_commit.as_deref(),
-            git::Scope::Uncommitted,
-        )
-            .map(|f| f.is_empty())
-            .unwrap_or(true)
-        {
+        // nothing to add, and git would refuse with "nothing to commit". Asked
+        // of `git status`, not the file list, which reads every untracked
+        // file to count its lines just to learn whether there are any.
+        if git::status(&dir).map(|s| s.dirty_files == 0).unwrap_or(true) {
             continue;
         }
 

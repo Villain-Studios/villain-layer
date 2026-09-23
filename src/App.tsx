@@ -221,7 +221,11 @@ function Watchers() {
   useEffect(() => {
     const p = listen<{ pane_id: string; code: number | null }>("pty:exit", async (e) => {
       await refreshPanes().catch(() => {});
-      await refreshTasks().catch(() => {});
+      // The tasks only for their counts, so a sweep already in flight will
+      // do. Asked for outright, each exit queued a git status of every hot
+      // worktree behind the last: deleting a task with four agents was four
+      // sweeps in a row.
+      await refreshTasks({ poll: true }).catch(() => {});
 
       // Read the pane *after* refreshing: an agent that dies on start-up can
       // exit before the spawn's own refresh lands, and looking at the stale

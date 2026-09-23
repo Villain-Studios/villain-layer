@@ -380,7 +380,9 @@ export const useStore = create<State>((set, get) => {
   refreshSettings: async () => {
     const settings = await api.getSettings();
     set({ settings });
-    if (settings.jira_connected && get().issues.length === 0) {
+    // Only until the first list lands: someone with nothing assigned has an
+    // empty list for good, and every settings change re-fetched 500 issues.
+    if (settings.jira_connected && !get().issuesLoaded && !get().issuesLoading) {
       void get().refreshIssues();
     }
     // Disconnecting has to take the list with it, or the badge keeps counting

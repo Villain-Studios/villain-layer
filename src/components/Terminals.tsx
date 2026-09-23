@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, errMessage } from "../lib/api";
 import { read, write } from "../lib/persist";
-import { markStopping, useStore } from "../store";
+import { markStopping, paneState, useStore } from "../store";
 import type { PaneInfo, Resumable, TaskView } from "../lib/types";
 import { TerminalPane } from "./Terminal";
 import { ContextMenu, Field, Modal, Spinner } from "./ui";
@@ -272,9 +272,7 @@ export function Terminals({ task }: { task: TaskView }) {
             className={`pane-tab${p.id === active ? " active" : ""}`}
             onClick={() => setActive(p.id)}
           >
-            <span
-              className={`dot ${p.notice && p.running ? "idle" : p.running ? "live" : "gone"}`}
-            />
+            <span className={`dot ${paneState(p).dot}`} title={paneState(p).label} />
             {p.title}
             {p.notice && (
               <span

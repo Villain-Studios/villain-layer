@@ -34,6 +34,10 @@ pub struct AgentDef {
     /// directory. Needed when the cwd is a git worktree, where dropping a
     /// generated `.mcp.json` would show up as an untracked change.
     pub mcp_config_flag: Option<&'static str>,
+    /// Flag for loading extra settings, which is how the app hands Claude Code
+    /// the hooks that report what it is doing. None for a CLI with no such
+    /// thing; the app then guesses from its output.
+    pub settings_flag: Option<&'static str>,
 }
 
 /// Accept Claude Code's workspace-trust dialog for a directory up front.
@@ -112,6 +116,78 @@ fn trust_in(config: &Path, dir: &Path) -> bool {
     true
 }
 
+/// The hooks that make Claude Code say what it is doing.
+///
+/// Its output cannot: it repaints its prompt every few seconds while it waits,
+/// so an agent two days idle read as working. Each hook posts the event Claude
+/// Code hands it to the app's own server, naming the pane from the environment
+/// the app started it with — so a `claude` started anywhere else, where those
+/// are unset, posts nothing.
+///
+/// PreToolUse is left out: it holds up every tool call until it returns, and
+/// PostToolUse says the same thing a moment later without making anything
+/// wait.
+pub fn claude_hook_settings() -> serde_json::Value {
+    let report = serde_json::json!([{
+        "matcher": "*",
+        "hooks": [{
+            "type": "command",
+            "command": "[ -n \"$VILLAIN_HOOK_URL\" ] && [ -n \"$VILLAIN_PANE\" ] && \
+                curl -s -m 2 -o /dev/null -X POST \
+                -H \"Authorization: Bearer $VILLAIN_HOOK_TOKEN\" \
+                -H 'Content-Type: application/json' \
+                --data-binary @- \"$VILLAIN_HOOK_URL/$VILLAIN_PANE\"; exit 0",
+            "timeout": 5
+        }]
+    }]);
+    let events = ["SessionStart", "UserPromptSubmit", "PostToolUse", "Notification", "Stop"];
+    serde_json::json!({
+        "hooks": events.iter().map(|e| (e.to_string(), report.clone())).collect::<serde_json::Map<_, _>>()
+    })
+}
+
+/// What a Claude Code hook event says the agent is doing now. None when it
+/// says nothing new.
+///
+/// `current` is what it said before: a notice that it is waiting for input is
+/// only news if it was thought to be working — Claude Code runs no Stop hook
+/// for a turn that was interrupted.
+pub fn claude_hook_activity(
+    payload: &serde_json::Value,
+    current: Option<crate::pty::Activity>,
+) -> Option<crate::pty::Activity> {
+    use crate::pty::Activity;
+    let event = payload.get("hook_event_name").and_then(|e| e.as_str())?;
+    match event {
+        // Started or resumed: sitting at its prompt with nothing new to show.
+        "SessionStart" => Some(Activity::Idle),
+        "UserPromptSubmit" | "PostToolUse" => Some(Activity::Working),
+        "Stop" => Some(Activity::Done),
+        "Notification" => {
+            let kind = payload.get("notification_type").and_then(|k| k.as_str());
+            let message = payload
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or_default()
+                .to_lowercase();
+            let asking = match kind {
+                Some(k) => matches!(k, "permission_prompt" | "elicitation_dialog"),
+                // Older releases say only in words.
+                None => message.contains("permission") || message.contains("approval"),
+            };
+            let waiting = kind == Some("idle_prompt") || message.contains("waiting for your input");
+            if asking {
+                Some(Activity::Asking)
+            } else if waiting && current == Some(Activity::Working) {
+                Some(Activity::Done)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
 /// How to find an agent's saved conversations for a working directory.
 #[derive(Debug, Clone, Copy)]
 pub enum SessionStore {
@@ -127,6 +203,7 @@ pub const AGENTS: &[AgentDef] = &[
         base_args: &[],
         prompt: PromptMode::Positional,
         mcp_config_flag: Some("--mcp-config"),
+        settings_flag: Some("--settings"),
         resume_args: Some(&["--continue"]),
         session_store: Some(SessionStore::SlugUnderHome {
             dir: ".claude/projects",
@@ -140,6 +217,7 @@ pub const AGENTS: &[AgentDef] = &[
         base_args: &[],
         prompt: PromptMode::Positional,
         mcp_config_flag: None,
+        settings_flag: None,
         resume_args: None,
         session_store: None,
     },
@@ -150,6 +228,7 @@ pub const AGENTS: &[AgentDef] = &[
         base_args: &[],
         prompt: PromptMode::Flag("-i"),
         mcp_config_flag: None,
+        settings_flag: None,
         resume_args: None,
         session_store: None,
     },
@@ -160,6 +239,7 @@ pub const AGENTS: &[AgentDef] = &[
         base_args: &[],
         prompt: PromptMode::Positional,
         mcp_config_flag: None,
+        settings_flag: None,
         resume_args: None,
         session_store: None,
     },
@@ -170,6 +250,7 @@ pub const AGENTS: &[AgentDef] = &[
         base_args: &[],
         prompt: PromptMode::Typed,
         mcp_config_flag: None,
+        settings_flag: None,
         resume_args: None,
         session_store: None,
     },
@@ -180,6 +261,7 @@ pub const AGENTS: &[AgentDef] = &[
         base_args: &[],
         prompt: PromptMode::Typed,
         mcp_config_flag: None,
+        settings_flag: None,
         resume_args: None,
         session_store: None,
     },
@@ -190,6 +272,7 @@ pub const AGENTS: &[AgentDef] = &[
         base_args: &[],
         prompt: PromptMode::Typed,
         mcp_config_flag: None,
+        settings_flag: None,
         resume_args: None,
         session_store: None,
     },
@@ -207,6 +290,7 @@ pub const AGENTS: &[AgentDef] = &[
         // this struct has no way to say that — so an agent whose cwd is a
         // worktree goes without, as it does for every other CLI here.
         mcp_config_flag: None,
+        settings_flag: None,
         // It has `--continue`, but that resumes the most recent session
         // anywhere rather than the most recent one *here*, and its transcripts
         // are filed under a UUID with no directory in the name. Neither half
@@ -425,5 +509,40 @@ mod tests {
     fn no_other_cli_keeps_its_state_in_that_file() {
         assert!(!pretrust("codex", Path::new("/work")));
         assert!(!pretrust("gemini", Path::new("/work")));
+    }
+
+    #[test]
+    fn claude_hooks_say_what_the_agent_is_doing() {
+        use crate::pty::Activity;
+        let ev = |v: serde_json::Value, now| claude_hook_activity(&v, now);
+        use serde_json::json as j;
+        assert_eq!(ev(j!({"hook_event_name": "UserPromptSubmit"}), None), Some(Activity::Working));
+        assert_eq!(ev(j!({"hook_event_name": "Stop"}), Some(Activity::Working)), Some(Activity::Done));
+        assert_eq!(ev(j!({"hook_event_name": "SessionStart", "source": "resume"}), None), Some(Activity::Idle));
+        assert_eq!(
+            ev(j!({"hook_event_name": "Notification", "notification_type": "permission_prompt", "message": "Claude needs your permission to use Bash"}), Some(Activity::Working)),
+            Some(Activity::Asking)
+        );
+        assert_eq!(
+            ev(j!({"hook_event_name": "Notification", "message": "Claude needs your permission to use Bash"}), None),
+            Some(Activity::Asking)
+        );
+        // Waiting for input is news only when it was thought to be working.
+        let idle = j!({"hook_event_name": "Notification", "notification_type": "idle_prompt", "message": "Claude is waiting for your input"});
+        assert_eq!(ev(idle.clone(), Some(Activity::Working)), Some(Activity::Done));
+        assert_eq!(ev(idle, Some(Activity::Idle)), None);
+        assert_eq!(ev(j!({"hook_event_name": "SubagentStop"}), None), None);
+        assert_eq!(ev(j!({}), None), None);
+    }
+
+    #[test]
+    fn every_hook_posts_for_its_pane_and_never_fails_the_turn() {
+        let v = claude_hook_settings();
+        for e in ["SessionStart", "UserPromptSubmit", "PostToolUse", "Notification", "Stop"] {
+            let cmd = v["hooks"][e][0]["hooks"][0]["command"].as_str().unwrap();
+            assert!(cmd.contains("$VILLAIN_HOOK_URL/$VILLAIN_PANE"), "{e}");
+            assert!(cmd.ends_with("exit 0"), "{e}");
+        }
+        assert!(v["hooks"].get("PreToolUse").is_none());
     }
 }

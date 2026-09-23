@@ -1,7 +1,7 @@
 import { useState } from "react";
 
 import { api } from "../lib/api";
-import { CHAT_TASK_ID, markStopping, paneState, useNow, useStore } from "../store";
+import { CHAT_TASK_ID, markStopping, needsYou, paneState, useNow, useStore } from "../store";
 import { SidebarToggle, Spinner } from "./ui";
 
 function ago(iso: string, now: number): string {
@@ -40,8 +40,12 @@ export function AgentsView() {
     }
   }
 
-  const working = panes.filter((p) => p.kind === "agent");
+  // What needs you first, so the dock's count is the top of this list.
+  const working = panes
+    .filter((p) => p.kind === "agent")
+    .sort((a, b) => Number(needsYou(b)) - Number(needsYou(a)));
   const live = working.filter((p) => p.running);
+  const waiting = working.filter(needsYou).length;
 
   return (
     <div className="wide">
@@ -49,7 +53,10 @@ export function AgentsView() {
         <SidebarToggle />
         <h2>Agents</h2>
         <span className="sub">
-          {live.length} running · {working.length - live.length} finished — pick a task
+          {waiting > 0 && (
+            <span style={{ color: "var(--amber)" }}>{waiting} need{waiting === 1 ? "s" : ""} you · </span>
+          )}
+          {live.length} running · {working.length - live.length} exited — pick a task
           on the left to work on one
         </span>
         <div className="spacer" />
@@ -69,7 +76,7 @@ export function AgentsView() {
       {working.map((pane) => {
         const task = tasks.find((t) => t.id === pane.task_id);
         const isChat = pane.task_id === CHAT_TASK_ID;
-        const st = paneState(pane, now);
+        const st = paneState(pane);
         const agent = agents.find((a) => a.id === pane.agent_id);
 
         return (
@@ -86,7 +93,7 @@ export function AgentsView() {
               </div>
               <div
                 className="where"
-                style={pane.notice ? { color: "var(--amber)" } : undefined}
+                style={pane.notice || needsYou(pane) ? { color: "var(--amber)" } : undefined}
               >
                 {st.label}
               </div>
@@ -101,7 +108,9 @@ export function AgentsView() {
               </div>
             </div>
 
-            <span className="when">{ago(pane.last_output_at, now)}</span>
+            <span className="when" title="Since it started doing what it is doing now">
+              {ago(pane.activity_since, now)}
+            </span>
 
             <button
               className="btn btn-sm"

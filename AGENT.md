@@ -102,6 +102,13 @@ live process kills it and takes its agents with it, and the same is true of
   until the merge said `--ff` itself. Anything the app relies on git doing,
   it spells out — `-c` for what has no flag, since an older git ignores a
   config key it does not know but refuses an option it does not.
+- **An agent's output does not say whether it is working.** Claude Code
+  repaints its prompt every few seconds while it sits idle, so "printed
+  recently" read a two-day-idle agent as working. Claude Code is started with
+  hooks (`agents::claude_hook_settings`, via `--settings`) that post to
+  `/hook/<pane>` on the app's server, and `pty::PaneMeta::state` believes
+  those over output. Output only decides for CLIs with no hooks, and not in
+  the moment after the app sent the pane something.
 - **A rebased branch is pushed with a lease, never `--force`.** The commit the
   remote branch was at is recorded on the checkout (`push_lease`) when it
   rebases and cleared by the next push. Any new push site goes through

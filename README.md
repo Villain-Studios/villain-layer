@@ -100,15 +100,24 @@ Five top-level views:
 
 Work flows Tickets → Work: an issue becomes a task.
 
-A task whose agent has printed nothing for 45 seconds is marked *idle — may need
-you*, in the sidebar and in the overview. That is usually a permission prompt
-waiting for an answer, or a turn that has finished.
+Every agent reads as *working*, *needs you* (asking permission, or finished and
+not yet looked at), or *idle* (finished and seen, or never given anything).
+Claude Code says which itself: it is started with hooks that post each prompt
+taken, tool run, permission asked and turn finished to the app's own server.
+Its output cannot be used for this — it repaints its prompt every few seconds
+while doing nothing, so an agent idle for two days read as working. Agents
+without hooks are judged by output, ignoring what arrives just after the app
+sent them something (a key's echo, the repaint after a resize or a focus
+change), and 45 seconds of real silence reads as finished.
 
-The same goes on the dock icon as a count, and while the window is in the
-background an agent that starts waiting — or exits without being asked to —
-gets a banner; clicking it opens its task. The backend watches for this rather
-than the webview, whose polls stop while the window is away and whose timers
-macOS may suspend. Settings → Appearance → Notifications turns it off.
+Finished stops counting once the pane has been on screen. What needs you is
+counted on the Work tab, on *All agents*, and on the dock icon — the same
+number in all three — and the overview lists those agents first. While the
+window is in the background an agent that starts needing you, or exits
+without being asked to, gets a banner; clicking it opens its task. The backend
+watches for this rather than the webview, whose polls stop while the window is
+away and whose timers macOS may suspend. Settings → Appearance → Notifications
+turns it off.
 
 ## The loop
 

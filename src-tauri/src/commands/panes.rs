@@ -152,6 +152,8 @@ pub(crate) fn open_shell(
             rows,
             cols,
             initial_input: None,
+            prompted: false,
+            env: Vec::new(),
         },
     )?;
     remember_pane(state, &pane);
@@ -274,6 +276,7 @@ pub(crate) fn start_agent(
     }
 
     pretrust_own_dir(state, &agent_id, &cwd);
+    let env = report_hooks(app, def, &mut args);
 
     let pane = state.ptys.spawn(
         app,
@@ -289,10 +292,44 @@ pub(crate) fn start_agent(
             rows,
             cols,
             initial_input,
+            prompted: prompt.is_some() && !resume,
+            env,
         },
     )?;
     remember_pane(state, &pane);
     Ok(pane)
+}
+
+/// Hand an agent the hooks that report what it is doing, for a CLI that takes
+/// them, and the environment they need to reach the app.
+///
+/// The settings go in a file of the app's own: they are the same for every
+/// pane, and the one part that differs — which pane — comes from the
+/// environment. The token travels that way too rather than on the command
+/// line, where any process on the machine can read it. Best effort: without
+/// the hooks the pane still works, and its state is guessed from output.
+fn report_hooks(app: &AppHandle, def: &agents::AgentDef, args: &mut Vec<String>) -> Vec<(String, String)> {
+    let (Some(flag), Some(url), Some(endpoint)) =
+        (def.settings_flag, crate::mcp::hook_url(), crate::mcp::endpoint())
+    else {
+        return Vec::new();
+    };
+    let Ok(dir) = app.path().app_config_dir() else {
+        return Vec::new();
+    };
+    let path = dir.join("claude-hooks.json");
+    let Ok(text) = serde_json::to_vec_pretty(&agents::claude_hook_settings()) else {
+        return Vec::new();
+    };
+    if std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&path, text)).is_err() {
+        return Vec::new();
+    }
+    args.push(flag.to_string());
+    args.push(path.to_string_lossy().to_string());
+    vec![
+        ("VILLAIN_HOOK_URL".into(), url),
+        ("VILLAIN_HOOK_TOKEN".into(), endpoint.token.clone()),
+    ]
 }
 
 /// Panes that belong to the standing chat rather than to any task.
@@ -551,7 +588,9 @@ pub(crate) fn open_chat(
             agent_id: Some(agent_id),
             rows: None,
             cols: None,
+            prompted: prompt.is_some() && !resume,
             initial_input,
+            env: Vec::new(),
         },
     )?;
     remember_pane(state, &pane);

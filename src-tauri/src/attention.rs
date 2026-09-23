@@ -1,23 +1,22 @@
 //! Agents waiting on you: the count on the dock icon, and a banner when one
 //! starts waiting while the window is in the background.
 //!
-//! Here rather than in the webview, which already works out "idle — may need
-//! you" for its own labels: the webview's polls stop while the window is away,
+//! Here rather than in the webview: its polls stop while the window is away,
 //! and macOS may suspend a hidden webview's timers altogether — so the one
 //! moment this exists for is the one the webview is least able to notice.
+//!
+//! "Waiting" is asking for something, or finished and not yet looked at. An
+//! agent finished and seen is only idle: counting those kept a number on the
+//! dock that nothing in the window explained.
 
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
-use chrono::{DateTime, Utc};
 use tauri::{AppHandle, Manager};
 
 use crate::commands::{banner, AppState, CHAT_TASK_ID};
-use crate::pty::{PaneInfo, PaneKind};
+use crate::pty::{Activity, PaneInfo, PaneKind};
 
-/// Silence past this reads as waiting. Matches `IDLE_AFTER_MS` in `store.ts`,
-/// so the banner and the label on the pane agree.
-const IDLE_AFTER: Duration = Duration::from_secs(45);
 const TICK: Duration = Duration::from_secs(5);
 /// Past this many at once, one banner rather than a stack of them.
 const BATCH: usize = 3;
@@ -29,7 +28,7 @@ const REPEAT_AFTER: Duration = Duration::from_secs(120);
 ///
 /// Only agents in tasks: a shell sits quietly by nature, and a chat agent is
 /// idle most of the time because that is what a standing chat is for.
-pub(crate) fn waiting(info: &PaneInfo, now: DateTime<Utc>) -> Option<&'static str> {
+pub(crate) fn waiting(info: &PaneInfo) -> Option<&'static str> {
     if info.kind != PaneKind::Agent || !info.running || info.task_id == CHAT_TASK_ID {
         return None;
     }
@@ -38,11 +37,11 @@ pub(crate) fn waiting(info: &PaneInfo, now: DateTime<Utc>) -> Option<&'static st
         Some("trust_prompt") => return Some("is asking whether to trust its folder"),
         _ => {}
     }
-    let quiet = now
-        .signed_duration_since(info.last_output_at)
-        .to_std()
-        .unwrap_or_default();
-    (quiet >= IDLE_AFTER).then_some("has gone quiet — it may need you")
+    match info.activity {
+        Activity::Asking => Some("is asking for your permission"),
+        Activity::Done => Some("has finished — your turn"),
+        Activity::Working | Activity::Idle => None,
+    }
 }
 
 /// What one pass found that is worth a banner.
@@ -65,7 +64,7 @@ struct Watch {
 
 impl Watch {
     /// One pass over the panes: the count for the badge, and what changed.
-    fn pass(&mut self, panes: &[(PaneInfo, bool)], now: DateTime<Utc>, at: Instant) -> (usize, Vec<News>) {
+    fn pass(&mut self, panes: &[(PaneInfo, bool)], at: Instant) -> (usize, Vec<News>) {
         let mut quiet = HashSet::new();
         let mut running = HashSet::new();
         let mut news = Vec::new();
@@ -74,7 +73,7 @@ impl Watch {
             if info.running {
                 running.insert(info.id.clone());
             }
-            if let Some(what) = waiting(info, now) {
+            if let Some(what) = waiting(info) {
                 quiet.insert(info.id.clone());
                 if self.waiting.as_ref().is_some_and(|w| !w.contains(&info.id)) {
                     news.push(News {
@@ -139,7 +138,7 @@ pub fn spawn(app: AppHandle) {
                 std::thread::sleep(TICK);
                 let state = app.state::<AppState>();
                 let on = state.config.read().ui.notify_waiting_agents;
-                let (count, news) = watch.pass(&state.ptys.attention(), Utc::now(), Instant::now());
+                let (count, news) = watch.pass(&state.ptys.attention(), Instant::now());
 
                 let Some(window) = app.get_webview_window("main") else {
                     continue;
@@ -198,7 +197,8 @@ fn banners(state: &AppState, news: &[News]) -> Vec<(String, String, String)> {
 mod tests {
     use super::*;
 
-    fn pane(id: &str, quiet_secs: i64, now: DateTime<Utc>) -> PaneInfo {
+    fn pane(id: &str, activity: Activity) -> PaneInfo {
+        let now = chrono::Utc::now();
         PaneInfo {
             id: id.into(),
             task_id: "t1".into(),
@@ -209,99 +209,92 @@ mod tests {
             cwd: "/tmp".into(),
             running: true,
             exit_code: None,
-            started_at: now - chrono::Duration::seconds(600),
-            last_output_at: now - chrono::Duration::seconds(quiet_secs),
+            started_at: now,
+            last_output_at: now,
             notice: None,
+            activity,
+            activity_since: now,
         }
     }
 
     #[test]
-    fn only_agents_in_tasks_can_be_waiting() {
-        let now = Utc::now();
-        assert!(waiting(&pane("a", 60, now), now).is_some());
-        assert!(waiting(&pane("a", 10, now), now).is_none());
+    fn only_asking_or_unseen_work_in_a_task_is_waiting() {
+        assert!(waiting(&pane("a", Activity::Asking)).is_some());
+        assert!(waiting(&pane("a", Activity::Done)).is_some());
+        // Finished and looked at: idle, not news.
+        assert!(waiting(&pane("a", Activity::Idle)).is_none());
+        assert!(waiting(&pane("a", Activity::Working)).is_none());
 
-        let mut shell = pane("s", 600, now);
+        let mut shell = pane("s", Activity::Done);
         shell.kind = PaneKind::Shell;
-        assert!(waiting(&shell, now).is_none());
-
-        let mut chat = pane("c", 600, now);
+        assert!(waiting(&shell).is_none());
+        let mut chat = pane("c", Activity::Done);
         chat.task_id = CHAT_TASK_ID.into();
-        assert!(waiting(&chat, now).is_none());
-
-        let mut exited = pane("x", 600, now);
+        assert!(waiting(&chat).is_none());
+        let mut exited = pane("x", Activity::Done);
         exited.running = false;
-        assert!(waiting(&exited, now).is_none());
+        assert!(waiting(&exited).is_none());
     }
 
     #[test]
-    fn a_notice_is_waiting_however_recent_the_output() {
-        let now = Utc::now();
-        let mut p = pane("a", 0, now);
+    fn a_notice_is_waiting_whatever_else_it_is_doing() {
+        let mut p = pane("a", Activity::Working);
         p.notice = Some("trust_prompt".into());
-        assert_eq!(waiting(&p, now), Some("is asking whether to trust its folder"));
+        assert_eq!(waiting(&p), Some("is asking whether to trust its folder"));
     }
 
     #[test]
     fn the_first_pass_records_without_announcing() {
-        let now = Utc::now();
-        let at = Instant::now();
         let mut w = Watch::default();
-        let (count, news) = w.pass(&[(pane("a", 60, now), false)], now, at);
+        let (count, news) = w.pass(&[(pane("a", Activity::Done), false)], Instant::now());
         assert_eq!(count, 1);
         assert!(news.is_empty());
     }
 
     #[test]
-    fn going_quiet_is_announced_once() {
-        let now = Utc::now();
+    fn finishing_is_announced_once() {
         let at = Instant::now();
         let mut w = Watch::default();
-        w.pass(&[(pane("a", 5, now), false)], now, at);
-
-        let later = now + chrono::Duration::seconds(50);
-        let (count, news) = w.pass(&[(pane("a", 55, later), false)], later, at + TICK);
+        w.pass(&[(pane("a", Activity::Working), false)], at);
+        let (count, news) = w.pass(&[(pane("a", Activity::Done), false)], at + TICK);
         assert_eq!(count, 1);
         assert_eq!(news.len(), 1);
-        assert_eq!(news[0].pane_id, "a");
-
-        // Still quiet on the next pass: not news again.
-        let (_, news) = w.pass(&[(pane("a", 60, later), false)], later, at + TICK * 2);
+        assert_eq!(news[0].what, "has finished — your turn");
+        let (_, news) = w.pass(&[(pane("a", Activity::Done), false)], at + TICK * 2);
         assert!(news.is_empty());
+        // Looked at: no longer counted.
+        let (count, _) = w.pass(&[(pane("a", Activity::Idle), false)], at + TICK * 3);
+        assert_eq!(count, 0);
     }
 
     #[test]
-    fn flickering_back_to_quiet_soon_after_is_not_announced_again() {
-        let now = Utc::now();
+    fn flickering_back_soon_after_is_not_announced_again() {
         let at = Instant::now();
         let mut w = Watch::default();
-        w.pass(&[(pane("a", 5, now), false)], now, at);
-        let (_, news) = w.pass(&[(pane("a", 50, now), false)], now, at + TICK);
+        w.pass(&[(pane("a", Activity::Working), false)], at);
+        let (_, news) = w.pass(&[(pane("a", Activity::Asking), false)], at + TICK);
         assert_eq!(news.len(), 1);
-        // Printed something, then quiet again a minute later.
-        w.pass(&[(pane("a", 1, now), false)], now, at + TICK * 2);
-        let (_, news) = w.pass(&[(pane("a", 50, now), false)], now, at + Duration::from_secs(60));
+        w.pass(&[(pane("a", Activity::Working), false)], at + TICK * 2);
+        let (_, news) = w.pass(&[(pane("a", Activity::Done), false)], at + Duration::from_secs(60));
         assert!(news.is_empty());
-        // Much later, it is worth saying again.
-        w.pass(&[(pane("a", 1, now), false)], now, at + Duration::from_secs(300));
-        let (_, news) = w.pass(&[(pane("a", 50, now), false)], now, at + Duration::from_secs(305));
+        w.pass(&[(pane("a", Activity::Working), false)], at + Duration::from_secs(300));
+        let (_, news) = w.pass(&[(pane("a", Activity::Done), false)], at + Duration::from_secs(305));
         assert_eq!(news.len(), 1);
     }
 
     #[test]
     fn an_exit_is_news_unless_it_was_asked_for() {
-        let now = Utc::now();
         let at = Instant::now();
         let mut w = Watch::default();
-        w.pass(&[(pane("a", 1, now), false), (pane("b", 1, now), false)], now, at);
+        w.pass(&[(pane("a", Activity::Working), false), (pane("b", Activity::Working), false)], at);
 
-        let mut a = pane("a", 1, now);
+        let mut a = pane("a", Activity::Idle);
         a.running = false;
         a.exit_code = Some(0);
-        let mut b = pane("b", 1, now);
+        let mut b = pane("b", Activity::Idle);
         b.running = false;
         b.exit_code = Some(143);
-        let (_, news) = w.pass(&[(a, false), (b, true)], now, at + TICK);
+        let (_, news) = w.pass(&[(a, false), (b, true)], at + TICK);
         assert_eq!(news.len(), 1);
         assert_eq!(news[0].pane_id, "a");
         assert_eq!(news[0].what, "finished");

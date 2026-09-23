@@ -11,7 +11,7 @@ import {
   unseenReviews,
   reviewIdentity,
 } from "./lib/notify";
-import { CHAT_TASK_ID, selectedTask, stoppedOnPurpose, taskTotals, useStore, type View } from "./store";
+import { CHAT_TASK_ID, needsYou, selectedTask, stoppedOnPurpose, taskTotals, useStore, type View } from "./store";
 import type { TaskView } from "./lib/types";
 import { Sidebar } from "./components/Sidebar";
 import { Terminals } from "./components/Terminals";
@@ -273,6 +273,13 @@ function Watchers() {
     return () => { void p.then((un) => un()); };
   }, [refreshPanes, refreshTasks]);
 
+  // An agent's own hooks said what it is doing now. Its row, its dot and the
+  // count on the Work tab follow straight away rather than at the next poll.
+  useEffect(() => {
+    const p = listen<string>("pty:activity", () => { void refreshPanes().catch(() => {}); });
+    return () => { void p.then((un) => un()); };
+  }, [refreshPanes]);
+
   // Hitting a usage limit is the one thing worth interrupting for: the agent
   // has stopped working and will not say so again.
   useEffect(() => {
@@ -452,6 +459,8 @@ function TopBar() {
     (s) => s.panes.filter((p) => p.kind === "agent" && p.running && p.task_id !== CHAT_TASK_ID).length,
   );
   const chats = useStore((s) => s.panes.filter((p) => p.task_id === CHAT_TASK_ID).length);
+  // The dock icon's number, with a place in the window that says what it is.
+  const waiting = useStore((s) => s.panes.filter(needsYou).length);
   const issueCount = useStore((s) => s.issues.length);
   const projectCount = useStore((s) => s.projects.length);
   const reviewCount = useStore(
@@ -480,6 +489,14 @@ function TopBar() {
           >
             {t.label}
             {t.badge !== undefined && <span className="badge">{t.badge}</span>}
+            {t.id === "work" && waiting > 0 && (
+              <span
+                className="badge warn"
+                title={`${waiting} agent${waiting === 1 ? " needs" : "s need"} you — asking for something, or finished and not looked at yet`}
+              >
+                {waiting} need{waiting === 1 ? "s" : ""} you
+              </span>
+            )}
           </button>
         ))}
       </div>

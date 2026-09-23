@@ -12,7 +12,7 @@
 use std::net::SocketAddr;
 use std::sync::OnceLock;
 
-use axum::extract::State as AxumState;
+use axum::extract::{Path, State as AxumState};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::post;
@@ -36,6 +36,11 @@ static ENDPOINT: OnceLock<Endpoint> = OnceLock::new();
 
 pub fn endpoint() -> Option<&'static Endpoint> {
     ENDPOINT.get()
+}
+
+/// Where an agent's hooks report what it is doing: `<this>/<pane id>`.
+pub fn hook_url() -> Option<String> {
+    endpoint().map(|e| format!("{}/hook", e.url.trim_end_matches("/mcp")))
 }
 
 /// The `.mcp.json` an agent reads from its working directory.
@@ -82,6 +87,7 @@ pub async fn serve(app: AppHandle) -> Result<Endpoint> {
     let ctx = Ctx { app, token };
     let router = Router::new()
         .route("/mcp", post(handle))
+        .route("/hook/{pane}", post(hook))
         .with_state(ctx);
 
     tauri::async_runtime::spawn(async move {
@@ -123,6 +129,30 @@ async fn handle(
         }),
     };
     (StatusCode::OK, Json(response)).into_response()
+}
+
+/// One of an agent's hooks, saying what it is doing.
+///
+/// Answers 204 whatever it made of the event: the hook has nothing to do with
+/// the answer, and anything else is printed into the agent's own transcript.
+async fn hook(
+    AxumState(ctx): AxumState<Ctx>,
+    Path(pane): Path<String>,
+    headers: HeaderMap,
+    body: Json<Value>,
+) -> impl IntoResponse {
+    if !bearer_ok(&headers, &ctx.token) {
+        return StatusCode::UNAUTHORIZED;
+    }
+    let state = ctx.app.state::<AppState>();
+    let now = state.ptys.reported(&pane);
+    if let Some(activity) = crate::agents::claude_hook_activity(&body.0, now) {
+        if let Ok(true) = state.ptys.report(&pane, activity) {
+            use tauri::Emitter;
+            let _ = ctx.app.emit("pty:activity", &pane);
+        }
+    }
+    StatusCode::NO_CONTENT
 }
 
 fn bearer_ok(headers: &HeaderMap, token: &str) -> bool {

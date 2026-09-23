@@ -197,12 +197,101 @@ pub struct PaneInfo {
     /// Something is waiting on the user: "usage_limit" or "trust_prompt".
     /// Read from the agent's own output, so best-effort.
     pub notice: Option<String>,
+    /// What the agent is doing. Worked out when the pane is read, not stored:
+    /// "done" turns into "idle" by being looked at.
+    pub activity: Activity,
+    /// Since when, as far as is known: its own report, or its last output
+    /// that was not a repaint. `last_output_at` is neither — an idle Claude
+    /// Code prints every few seconds.
+    pub activity_since: DateTime<Utc>,
 }
+
+/// What an agent is doing, as best the app can tell.
+///
+/// From the agent itself where it will say — Claude Code's hooks report a
+/// prompt taken, a tool run, a permission asked, a turn finished. Otherwise
+/// from its output, which is a guess: Claude Code repaints its prompt every
+/// few seconds while doing nothing at all, so "printed recently" had an agent
+/// two days idle marked as working.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Activity {
+    Working,
+    /// Stopped on something only you can answer: a permission, the trust
+    /// question, a usage limit.
+    Asking,
+    /// Finished what it was asked, and nobody has looked since.
+    Done,
+    /// Nothing going on and nothing new.
+    Idle,
+}
+
+/// Silence past this, from an agent that does not report itself, reads as
+/// finished. Matches the label's wording in `store.ts`.
+const IDLE_AFTER: chrono::TimeDelta = chrono::TimeDelta::seconds(45);
+
+/// Output this soon after the app sent the pane something is taken as the
+/// answer to it — the echo of a key, the repaint after a resize or a focus
+/// change — and not as the agent getting on with work.
+const ANSWER_WINDOW: std::time::Duration = std::time::Duration::from_millis(1500);
 
 struct PaneMeta {
     info: PaneInfo,
     /// Asked to stop — Stop, a handoff, quitting — so its exit is not news.
     stopping: bool,
+    /// The agent's own last word on what it is doing, and when it said it.
+    /// Once there is one, output no longer decides anything.
+    reported: Option<(Activity, DateTime<Utc>)>,
+    /// The last output that was not an answer to something sent.
+    last_work: DateTime<Utc>,
+    /// When the app last sent the pane anything: keys, a resize.
+    last_input: Instant,
+    /// Given something to do since it started — a prompt at launch, or a line
+    /// typed and entered. A resumed agent that has only drawn its screen has
+    /// not finished anything.
+    prompted: bool,
+    /// When the pane was last on screen.
+    seen_at: DateTime<Utc>,
+}
+
+impl PaneMeta {
+    fn activity(&self, watched: bool, now: DateTime<Utc>) -> Activity {
+        self.state(watched, now).0
+    }
+
+    fn state(&self, watched: bool, now: DateTime<Utc>) -> (Activity, DateTime<Utc>) {
+        let info = &self.info;
+        if info.kind != PaneKind::Agent || !info.running {
+            return (Activity::Idle, self.last_work);
+        }
+        if info.notice.is_some() {
+            return (Activity::Asking, info.last_output_at);
+        }
+        let (state, since) = match self.reported {
+            Some(reported) => reported,
+            None if now - self.last_work < IDLE_AFTER => return (Activity::Working, self.last_work),
+            None if !self.prompted => return (Activity::Idle, self.last_work),
+            None => (Activity::Done, self.last_work + IDLE_AFTER),
+        };
+        // Finished while on screen, or looked at since: nothing new.
+        if state == Activity::Done && (watched || since <= self.seen_at) {
+            return (Activity::Idle, since);
+        }
+        (state, since)
+    }
+
+    fn snapshot(&self, watched: bool) -> PaneInfo {
+        let mut info = self.info.clone();
+        (info.activity, info.activity_since) = self.state(watched, Utc::now());
+        info
+    }
+
+    fn sent(&mut self, data: &str) {
+        self.last_input = Instant::now();
+        if data.contains('\r') || data.contains('\n') {
+            self.prompted = true;
+        }
+    }
 }
 
 /// What a pane has printed, and how much of it the webview has been sent.
@@ -346,6 +435,13 @@ pub struct SpawnOptions {
     /// Typed into the pane once it is up, for agents that take no prompt flag.
     #[serde(default)]
     pub initial_input: Option<String>,
+    /// Started with something to do, as a prompt argument.
+    #[serde(default)]
+    pub prompted: bool,
+    /// Set in the child's environment, over the login shell's. The pane's own
+    /// id is always there too, as `VILLAIN_PANE`.
+    #[serde(default)]
+    pub env: Vec<(String, String)>,
 }
 
 /// The most panes that may exist at once.
@@ -525,6 +621,7 @@ impl PtyManager {
             .openpty(size)
             .map_err(|e| Error::Pty(format!("openpty: {e}")))?;
 
+        let id = uuid::Uuid::new_v4().to_string();
         let mut cmd = CommandBuilder::new(&opts.program);
         for arg in &opts.args {
             cmd.arg(arg);
@@ -536,6 +633,11 @@ impl PtyManager {
         // removes. Clearing first is what lets shellenv's scrub stick.
         cmd.env_clear();
         for (k, v) in shellenv::user_env() {
+            cmd.env(k, v);
+        }
+        // What the agent's hooks use to say which pane they are reporting on.
+        cmd.env("VILLAIN_PANE", &id);
+        for (k, v) in &opts.env {
             cmd.env(k, v);
         }
 
@@ -565,7 +667,6 @@ impl PtyManager {
             }
         });
 
-        let id = uuid::Uuid::new_v4().to_string();
         let now = Utc::now();
         let info = PaneInfo {
             id: id.clone(),
@@ -580,11 +681,21 @@ impl PtyManager {
             started_at: now,
             last_output_at: now,
             notice: None,
+            activity: Activity::Idle,
+            activity_since: now,
         };
 
         let pid = child.process_id();
         let pane = Arc::new(Pane {
-            meta: Mutex::new(PaneMeta { info: info.clone(), stopping: false }),
+            meta: Mutex::new(PaneMeta {
+                info: info.clone(),
+                stopping: false,
+                reported: None,
+                last_work: now,
+                last_input: Instant::now(),
+                prompted: opts.prompted || opts.initial_input.is_some(),
+                seen_at: now,
+            }),
             pid,
             master: Mutex::new(pair.master),
             input,
@@ -631,7 +742,11 @@ impl PtyManager {
                             };
                             {
                                 let mut meta = pane.meta.lock();
-                                meta.info.last_output_at = Utc::now();
+                                let now = Utc::now();
+                                meta.info.last_output_at = now;
+                                if meta.last_input.elapsed() > ANSWER_WINDOW {
+                                    meta.last_work = now;
+                                }
                                 // A trust prompt clears once answered, so
                                 // let it come and go; a usage limit sticks.
                                 if meta.info.notice.as_deref() != found
@@ -712,6 +827,17 @@ impl PtyManager {
     pub fn write(&self, id: &str, data: &str) -> Result<()> {
         let pane = self.get(id)?;
         *pane.typed.lock() = Some(Instant::now());
+        {
+            let mut meta = pane.meta.lock();
+            meta.sent(data);
+            // Claude Code runs no hook when a turn is interrupted, so a turn
+            // stopped with Esc or ^C would read as working for good.
+            if matches!(data, "\u{1b}" | "\u{3}")
+                && matches!(meta.reported, Some((Activity::Working, _)))
+            {
+                meta.reported = Some((Activity::Idle, Utc::now()));
+            }
+        }
         pane.input
             .send(data.as_bytes().to_vec())
             .map_err(|_| Error::Pty("the terminal has closed".into()))
@@ -724,7 +850,9 @@ impl PtyManager {
     /// shows up, but nothing is submitted until someone presses Enter again.
     /// A short gap between the two is enough for the TUI to accept the submit.
     pub fn submit(&self, id: &str, text: &str) -> Result<()> {
-        let keys = self.get(id)?.input.clone();
+        let pane = self.get(id)?;
+        pane.meta.lock().sent("\r");
+        let keys = pane.input.clone();
         let payload = text.as_bytes().to_vec();
         std::thread::spawn(move || {
             if keys.send(payload).is_ok() {
@@ -737,6 +865,7 @@ impl PtyManager {
 
     pub fn resize(&self, id: &str, rows: u16, cols: u16) -> Result<()> {
         let pane = self.get(id)?;
+        pane.meta.lock().last_input = Instant::now();
         let master = pane.master.lock();
         master
             .resize(PtySize {
@@ -759,6 +888,7 @@ impl PtyManager {
         let pane = self.get(id)?;
         let mut out = pane.output.lock();
         pane.watched.store(true, Ordering::Release);
+        pane.meta.lock().seen_at = Utc::now();
         let (bytes, reset) = out.since(since);
         let catchup = Catchup {
             data: base64::engine::general_purpose::STANDARD.encode(bytes),
@@ -773,6 +903,7 @@ impl PtyManager {
     pub fn detach(&self, id: &str) {
         if let Ok(pane) = self.get(id) {
             pane.watched.store(false, Ordering::Release);
+            pane.meta.lock().seen_at = Utc::now();
         }
     }
 
@@ -784,7 +915,26 @@ impl PtyManager {
     }
 
     pub fn info(&self, id: &str) -> Result<PaneInfo> {
-        Ok(self.get(id)?.meta.lock().info.clone())
+        let pane = self.get(id)?;
+        let watched = pane.watched.load(Ordering::Acquire);
+        let info = pane.meta.lock().snapshot(watched);
+        Ok(info)
+    }
+
+    /// What the agent says it is doing, from its own hooks. True when that
+    /// changed what the pane reads as.
+    pub fn report(&self, id: &str, activity: Activity) -> Result<bool> {
+        let pane = self.get(id)?;
+        let watched = pane.watched.load(Ordering::Acquire);
+        let mut meta = pane.meta.lock();
+        let before = meta.activity(watched, Utc::now());
+        meta.reported = Some((activity, Utc::now()));
+        Ok(meta.activity(watched, Utc::now()) != before)
+    }
+
+    /// What the agent last reported, if it reports at all.
+    pub fn reported(&self, id: &str) -> Option<Activity> {
+        self.get(id).ok()?.meta.lock().reported.map(|(a, _)| a)
     }
 
     /// Ask the process group to stop, and only insist if it will not.
@@ -881,7 +1031,7 @@ impl PtyManager {
             .panes
             .lock()
             .values()
-            .map(|p| p.meta.lock().info.clone())
+            .map(|p| p.meta.lock().snapshot(p.watched.load(Ordering::Acquire)))
             .filter(|i| task_id.is_none_or(|t| i.task_id == t))
             .collect();
         out.sort_by_key(|i| i.started_at);
@@ -896,7 +1046,7 @@ impl PtyManager {
             .values()
             .map(|p| {
                 let meta = p.meta.lock();
-                (meta.info.clone(), meta.stopping)
+                (meta.snapshot(p.watched.load(Ordering::Acquire)), meta.stopping)
             })
             .collect()
     }
@@ -955,6 +1105,89 @@ impl PtyManager {
 
 #[cfg(test)]
 mod tests {
+
+    fn meta(prompted: bool, quiet_secs: i64) -> PaneMeta {
+        let now = Utc::now();
+        PaneMeta {
+            info: PaneInfo {
+                id: "p".into(),
+                task_id: "t".into(),
+                checkout_id: None,
+                kind: PaneKind::Agent,
+                title: "Claude Code".into(),
+                agent_id: Some("claude".into()),
+                cwd: "/tmp".into(),
+                running: true,
+                exit_code: None,
+                started_at: now - chrono::TimeDelta::seconds(3600),
+                last_output_at: now,
+                notice: None,
+                activity: Activity::Idle,
+                activity_since: now,
+            },
+            stopping: false,
+            reported: None,
+            last_work: now - chrono::TimeDelta::seconds(quiet_secs),
+            last_input: Instant::now(),
+            prompted,
+            seen_at: now - chrono::TimeDelta::seconds(3600),
+        }
+    }
+
+    #[test]
+    fn an_agent_that_reports_itself_is_what_it_says_whatever_it_prints() {
+        let now = Utc::now();
+        // Printing just now, as Claude Code does while it sits at its prompt.
+        let mut m = meta(true, 0);
+        m.reported = Some((Activity::Done, now - chrono::TimeDelta::seconds(60)));
+        assert_eq!(m.activity(false, now), Activity::Done);
+        // Looked at since it finished: nothing new.
+        m.seen_at = now - chrono::TimeDelta::seconds(10);
+        assert_eq!(m.activity(false, now), Activity::Idle);
+        // Quiet for a day but saying it is working: working.
+        let mut m = meta(true, 86_400);
+        m.reported = Some((Activity::Working, now));
+        assert_eq!(m.activity(false, now), Activity::Working);
+        m.reported = Some((Activity::Asking, now));
+        assert_eq!(m.activity(true, now), Activity::Asking);
+    }
+
+    #[test]
+    fn without_reports_quiet_is_done_until_seen() {
+        let now = Utc::now();
+        assert_eq!(meta(true, 10).activity(false, now), Activity::Working);
+        assert_eq!(meta(true, 60).activity(false, now), Activity::Done);
+        // On screen when it went quiet, or looked at since.
+        assert_eq!(meta(true, 60).activity(true, now), Activity::Idle);
+        let mut m = meta(true, 60);
+        m.seen_at = now;
+        assert_eq!(m.activity(false, now), Activity::Idle);
+        // Resumed and never given anything: it has not finished anything.
+        assert_eq!(meta(false, 600).activity(false, now), Activity::Idle);
+    }
+
+    #[test]
+    fn a_notice_or_an_exit_outranks_the_rest() {
+        let now = Utc::now();
+        let mut m = meta(true, 0);
+        m.info.notice = Some("trust_prompt".into());
+        assert_eq!(m.activity(false, now), Activity::Asking);
+        let mut m = meta(true, 600);
+        m.info.running = false;
+        assert_eq!(m.activity(false, now), Activity::Idle);
+    }
+
+    #[test]
+    fn only_a_line_entered_counts_as_being_given_work() {
+        let mut m = meta(false, 0);
+        // Focus reports and keystrokes are not a prompt.
+        m.sent("\u{1b}[I");
+        m.sent("hel");
+        assert!(!m.prompted);
+        m.sent("\r");
+        assert!(m.prompted);
+    }
+
     use super::*;
 
     #[test]
@@ -1088,6 +1321,8 @@ mod tests {
                         rows: None,
                         cols: None,
                         initial_input: None,
+                        prompted: false,
+                        env: Vec::new(),
                     },
                 )
                 .unwrap();
@@ -1144,6 +1379,8 @@ mod tests {
                     rows: None,
                     cols: None,
                     initial_input: None,
+                    prompted: false,
+                    env: Vec::new(),
                 },
             )
             .unwrap()
@@ -1219,6 +1456,8 @@ mod tests {
                             rows: None,
                             cols: None,
                             initial_input: None,
+                            prompted: false,
+                            env: Vec::new(),
                         },
                     );
                     if spawned.is_ok() {

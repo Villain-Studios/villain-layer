@@ -974,6 +974,9 @@ textarea { resize: vertical; font-family: var(--mono); }
   padding: 1px 6px;
 }
 .viewtab.active .badge { color: var(--accent); background: #1a1628; }
+/* What the dock icon counts: agents asking for something, or finished unseen. */
+.viewtab .badge.warn,
+.viewtab.active .badge.warn { color: var(--amber); background: #2a2214; margin-left: 4px; font-family: var(--sans); }
 
 .views { flex: 1; overflow: hidden; display: flex; }
 .app { display: grid; grid-template-columns: 260px 1fr; height: 100%; width: 100%; }

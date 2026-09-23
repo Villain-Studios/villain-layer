@@ -165,7 +165,8 @@ function samePanes(a: PaneInfo[], b: PaneInfo[]): boolean {
       x.running !== y.running ||
       x.exit_code !== y.exit_code ||
       x.notice !== y.notice ||
-      x.last_output_at !== y.last_output_at ||
+      x.activity !== y.activity ||
+      x.activity_since !== y.activity_since ||
       x.title !== y.title ||
       x.task_id !== y.task_id
     ) {
@@ -469,16 +470,13 @@ export function stoppedOnPurpose(paneId: string): boolean {
 export const selectedTask = (s: State) =>
   s.tasks.find((t) => t.id === s.selectedTask) ?? null;
 
-/** A running agent that has printed nothing for a while is usually waiting. */
-const IDLE_AFTER_MS = 45_000;
-
 /**
- * The time, for labels that change with it: "idle — may need you", "2m ago".
+ * The time, for labels that change with it: "2m ago".
  *
  * Those were worked out from `Date.now()` whenever something happened to
- * redraw, and an agent that has gone quiet is exactly one whose pane stops
- * changing — so nothing redrew, and it said "working" for as long as it sat
- * waiting on a prompt. Ticks only while the window is in front.
+ * redraw, and a pane that has gone quiet is exactly one that stops changing —
+ * so nothing redrew, and the label froze. Ticks only while the window is in
+ * front.
  */
 export function useNow(everyMs: number): number {
   const active = useStore((s) => s.appActive);
@@ -492,7 +490,14 @@ export function useNow(everyMs: number): number {
   return now;
 }
 
-export function paneState(pane: PaneInfo, now = Date.now()): { label: string; dot: string } {
+/**
+ * What a pane is doing, in a word and a colour.
+ *
+ * The backend works it out — from the agent's own hooks where it has them —
+ * so this, the dock count and the banners all say the same thing. The amber
+ * dot means it needs you: it is asking, or it finished and nobody has looked.
+ */
+export function paneState(pane: PaneInfo): { label: string; dot: string } {
   if (pane.running && pane.notice === "usage_limit") {
     return { label: "out of budget — hand off", dot: "gone" };
   }
@@ -501,14 +506,32 @@ export function paneState(pane: PaneInfo, now = Date.now()): { label: string; do
   }
   if (!pane.running) {
     return {
-      label: pane.exit_code === 0 ? "finished" : `exited ${pane.exit_code ?? "?"}`,
-      dot: "gone",
+      label: pane.exit_code === 0 ? "exited" : `exited with ${pane.exit_code ?? "?"}`,
+      dot: pane.exit_code === 0 ? "" : "gone",
     };
   }
-  if (now - new Date(pane.last_output_at).getTime() > IDLE_AFTER_MS) {
-    return { label: "idle — may need you", dot: "idle" };
+  if (pane.kind === "shell") return { label: "shell", dot: "live" };
+  switch (pane.activity) {
+    case "working": return { label: "working", dot: "live" };
+    case "asking": return { label: "needs you — asking permission", dot: "idle" };
+    case "done": return { label: "finished — your turn", dot: "idle" };
+    default: return { label: "idle", dot: "" };
   }
-  return { label: "working", dot: "live" };
+}
+
+/**
+ * An agent in a task that needs you — what the dock icon counts.
+ *
+ * The same rule as the backend's: asking, or finished and not yet seen. The
+ * standing chat is left out; sitting idle is what it is for.
+ */
+export function needsYou(pane: PaneInfo): boolean {
+  return (
+    pane.kind === "agent" &&
+    pane.running &&
+    pane.task_id !== CHAT_TASK_ID &&
+    (pane.activity === "asking" || pane.activity === "done")
+  );
 }
 
 /**

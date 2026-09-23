@@ -5,6 +5,7 @@ import { read, write } from "../lib/persist";
 import { useStore } from "../store";
 import type { FeedbackItem, FeedbackNote, RepoFeedback, TaskView } from "../lib/types";
 import { Modal, Spinner } from "./ui";
+import { AgentTargetFields, useAgentTarget } from "./AgentTarget";
 
 /** One row in the picker, and what it becomes if it is sent. */
 interface Entry {
@@ -184,26 +185,14 @@ function EntryRow({
  * the step between a review landing and the agent starting on it.
  */
 export function PrFeedback({ task, onClose }: { task: TaskView; onClose: () => void }) {
-  const allPanes = useStore((s) => s.panes);
-  const agents = useStore((s) => s.agents);
-  const refreshPanes = useStore((s) => s.refreshPanes);
-  const setTab = useStore((s) => s.setTab);
   const toast = useStore((s) => s.toast);
   const fail = useStore((s) => s.fail);
-
-  const agentPanes = useMemo(
-    () => allPanes.filter((p) => p.task_id === task.id && p.kind === "agent" && p.running),
-    [allPanes, task.id],
-  );
-  const installed = useMemo(() => agents.filter((a) => a.installed), [agents]);
+  const at = useAgentTarget(task);
 
   const [rows, setRows] = useState<RepoFeedback[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [open, setOpen] = useState<Set<string>>(new Set());
-  const [target, setTarget] = useState("");
-  const [agentId, setAgentId] = useState("");
-  const [scope, setScope] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const sent = useMemo(() => new Set(read<string[]>(sentKey(task.id), [])), [task.id]);
@@ -228,15 +217,6 @@ export function PrFeedback({ task, onClose }: { task: TaskView; onClose: () => v
     return () => { stop = true; };
   }, [task.id, sent]);
 
-  // The agent most likely to be the one that did the work: the first one
-  // still running. A pick that has since exited falls back to it.
-  useEffect(() => {
-    if (!agentPanes.some((p) => p.id === target)) setTarget(agentPanes[0]?.id ?? "");
-  }, [agentPanes, target]);
-  useEffect(() => {
-    if (!installed.some((a) => a.id === agentId)) setAgentId(installed[0]?.id ?? "");
-  }, [installed, agentId]);
-
   const chosen = built.flatMap((b) => b.list.filter((e) => picked.has(e.key)));
   const total = built.reduce((n, b) => n + b.list.length, 0);
 
@@ -252,17 +232,8 @@ export function PrFeedback({ task, onClose }: { task: TaskView; onClose: () => v
     setBusy(true);
     try {
       const items = chosen.map((e) => e.item);
-      const pane = agentPanes.find((p) => p.id === target);
-      if (pane) {
-        await api.sendPrFeedback(task.id, pane.id, null, items);
-        toast("success", `Sent ${chosen.length} item${chosen.length === 1 ? "" : "s"} to ${pane.title}.`);
-      } else {
-        const prompt = await api.sendPrFeedback(task.id, null, scope, items);
-        const started = await api.spawnAgent(task.id, agentId, scope, prompt);
-        await refreshPanes();
-        setTab("terminals");
-        toast("success", `Started ${started.title} on ${chosen.length} item${chosen.length === 1 ? "" : "s"} of feedback.`);
-      }
+      const who = await at.send((paneId, scope) => api.sendPrFeedback(task.id, paneId, scope, items));
+      toast("success", `Sent ${chosen.length} item${chosen.length === 1 ? "" : "s"} of feedback to ${who}.`);
       const keep = [...new Set([...read<string[]>(sentKey(task.id), []), ...chosen.map((e) => e.key)])];
       write(sentKey(task.id), keep.slice(-SENT_LIMIT));
       onClose();
@@ -273,39 +244,16 @@ export function PrFeedback({ task, onClose }: { task: TaskView; onClose: () => v
     }
   }
 
-  const noAgent = agentPanes.length === 0;
+  const noAgent = at.running.length === 0;
   const footer = (
     <>
-      {rows && total > 0 && (noAgent ? (
-        <>
-          <label className="review-target">
-            <span>Start</span>
-            <select value={agentId} onChange={(e) => setAgentId(e.target.value)} disabled={busy}>
-              {installed.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-            </select>
-          </label>
-          <label className="review-target">
-            <span>in</span>
-            <select value={scope ?? ""} onChange={(e) => setScope(e.target.value || null)} disabled={busy}>
-              <option value="">the task folder</option>
-              {task.checkouts.map((c) => <option key={c.id} value={c.id}>only {c.project_name}</option>)}
-            </select>
-          </label>
-        </>
-      ) : agentPanes.length > 1 && (
-        <label className="review-target">
-          <span>Send to</span>
-          <select value={target} onChange={(e) => setTarget(e.target.value)} disabled={busy}>
-            {agentPanes.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}
-          </select>
-        </label>
-      ))}
+      {rows && total > 0 && <AgentTargetFields task={task} at={at} disabled={busy} />}
       <div className="spacer" />
       <button className="btn" onClick={onClose} disabled={busy}>Cancel</button>
       <button
         className="btn btn-primary"
-        disabled={busy || chosen.length === 0 || (noAgent && !agentId)}
-        title={noAgent && installed.length === 0 ? "Install an agent CLI first" : undefined}
+        disabled={busy || chosen.length === 0 || at.stuck}
+        title={at.stuck ? "Install an agent CLI first" : undefined}
         onClick={() => void send()}
       >
         {busy

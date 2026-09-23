@@ -21,6 +21,7 @@ import type {
   RepoFeedback,
   RepoResult,
   RepoSuggestion,
+  RepoUpdate,
   Resumable,
   ReviewComment,
   ReviewQueue,
@@ -125,6 +126,13 @@ export const api = {
     invoke<string>("send_review", { paneId, comments }),
   commitTask: (taskId: string, message: string) =>
     invoke<RepoResult[]>("commit_task", { taskId, message }),
+  /** Merge each repo's base into the branch; all of the task's repos when `checkoutIds` is null. */
+  updateFromBase: (taskId: string, checkoutIds: string[] | null) =>
+    invoke<RepoUpdate[]>("update_from_base", { taskId, checkoutIds }),
+  abortMerge: (checkoutId: string) => invoke<void>("abort_merge", { checkoutId }),
+  /** Typed into `paneId` when given; otherwise only returned, to start an agent with. */
+  sendMergeConflicts: (taskId: string, paneId: string | null, scope: string | null) =>
+    invoke<string>("send_merge_conflicts", { taskId, paneId, scope }),
   pushTask: (taskId: string) => invoke<RepoResult[]>("push_task", { taskId }),
 
   // jira

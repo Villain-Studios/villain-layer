@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -23,6 +23,7 @@ import { ChatView } from "./components/ChatView";
 import { ReposView } from "./components/ReposView";
 import { ReviewsView } from "./components/ReviewsView";
 import { Settings } from "./components/Settings";
+import { UpdateFromBase } from "./components/UpdateFromBase";
 import { GearIcon, SidebarToggle } from "./components/ui";
 
 /**
@@ -505,6 +506,7 @@ function TaskMain({ task }: { task: TaskView }) {
   // The Terminals badge counts what is open now. The task's own count comes
   // from the task poll, which can be a minute behind a pane just opened.
   const paneCount = useStore((s) => s.panes.filter((p) => p.task_id === task.id).length);
+  const [updating, setUpdating] = useState(false);
 
   const totals = taskTotals(task);
   // What the Diff tab lists by default: files with uncommitted changes. The
@@ -538,8 +540,21 @@ function TaskMain({ task }: { task: TaskView }) {
           {totals.ahead > 0 && <span className="chip">↑{totals.ahead}</span>}
           {totals.behind > 0 && <span className="chip warn">↓{totals.behind}</span>}
           {totals.conflicted > 0 && (
-            <span className="chip del">{totals.conflicted} conflicts</span>
+            <button
+              className="chip del"
+              title="Resolve with an agent, or abandon the merge"
+              onClick={() => setUpdating(true)}
+            >
+              {totals.conflicted} conflicts
+            </button>
           )}
+          <button
+            className="btn btn-sm"
+            title="Fetch each repo's base branch and merge it into this task's branch"
+            onClick={() => setUpdating(true)}
+          >
+            Update from base
+          </button>
           {cursorIde && (
             <button
               className="btn btn-sm"
@@ -588,8 +603,9 @@ function TaskMain({ task }: { task: TaskView }) {
           <Terminals task={task} />
         </div>
         {tab === "diff" && <DiffView task={task} />}
-        {tab === "pr" && <PrPanel task={task} />}
+        {tab === "pr" && <PrPanel task={task} onUpdateFromBase={() => setUpdating(true)} />}
       </div>
+      {updating && <UpdateFromBase task={task} onClose={() => setUpdating(false)} />}
     </>
   );
 }

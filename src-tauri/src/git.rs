@@ -477,8 +477,12 @@ pub fn compare_against(
 /// merge base with the base branch, preferring the remote's copy.
 pub fn baseline(dir: &Path, base: &str, base_commit: Option<&str>) -> String {
     if let Some(commit) = base_commit.map(str::trim).filter(|c| !c.is_empty()) {
-        // Only if this worktree actually has it; a rewritten history may not.
-        if run(dir, &["cat-file", "-e", &format!("{commit}^{{commit}}")]).is_ok() {
+        // Only if the branch actually grew from it. A rewritten history may
+        // not have it at all; and a merge of the base that was then aborted
+        // leaves the point it was heading for recorded but never reached —
+        // measured from there, the diff ran backwards through the base's own
+        // work. The same one call as asking whether the commit exists.
+        if run(dir, &["merge-base", "--is-ancestor", commit, "HEAD"]).is_ok() {
             return commit.to_string();
         }
     }
@@ -697,6 +701,107 @@ pub fn commit_all(dir: &Path, message: &str) -> Result<String> {
 
 pub fn push(dir: &Path, branch: &str) -> Result<String> {
     run(dir, &["push", "-u", "origin", branch])
+}
+
+/// Where a branch stands after being brought up to date with its base.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Updated {
+    /// The base had nothing this branch lacked.
+    UpToDate,
+    /// This many of the base's commits were merged in.
+    Merged { commits: u32 },
+    /// Stopped on these files. The merge is left in progress, for an agent or
+    /// a person to resolve: undoing it here would throw away the only state
+    /// from which the conflict can be seen.
+    Conflicts(Vec<String>),
+}
+
+/// Whether a merge is half done in this worktree.
+pub fn merge_in_progress(dir: &Path) -> bool {
+    run(dir, &["rev-parse", "-q", "--verify", "MERGE_HEAD"]).is_ok()
+}
+
+/// Files with unresolved conflicts, as they are named on disk.
+pub fn conflicted_files(dir: &Path) -> Vec<String> {
+    run(dir, &["diff", "--name-only", "-z", "--diff-filter=U"])
+        .map(|o| o.split('\0').filter(|p| !p.is_empty()).map(str::to_string).collect())
+        .unwrap_or_default()
+}
+
+/// Merge the newest tip of the base into this worktree's branch.
+///
+/// A merge, not a rebase: the branch is usually pushed and often has a pull
+/// request open, and a rebase would need a force push that rewrites the
+/// commits reviewers have already commented on — which is why GitHub's own
+/// "Update branch" merges too.
+///
+/// Returns the commit merged, which becomes the branch's recorded point.
+/// Left at the old one, everything the base did since would be counted as
+/// this branch's work.
+///
+/// Uncommitted edits to tracked files are refused rather than carried
+/// through: a conflict on top of them cannot be untangled from them, and
+/// `merge --abort` would take them too. Untracked files are left to git,
+/// which refuses by itself if the merge would overwrite one.
+pub fn update_from_base(dir: &Path, base: &str) -> Result<(Updated, String)> {
+    let branch = current_branch(dir)?;
+    check_names(&branch, base)?;
+    if merge_in_progress(dir) {
+        return Err(Error::Git("a merge is already in progress here — finish or abort it first".into()));
+    }
+    let st = status(dir)?;
+    let edited = st.staged.max(st.unstaged) + st.conflicted;
+    if edited > 0 {
+        return Err(Error::Git(format!(
+            "{edited} uncommitted change{} — commit {} first",
+            if edited == 1 { "" } else { "s" },
+            if edited == 1 { "it" } else { "them" },
+        )));
+    }
+
+    let from = resolve_base(dir, base);
+    let target = run(dir, &["rev-parse", "--verify", &format!("{from}^{{commit}}")])?
+        .trim()
+        .to_string();
+    let commits = run(dir, &["rev-list", "--count", &format!("HEAD..{target}")])
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        .unwrap_or(0);
+    if commits == 0 {
+        return Ok((Updated::UpToDate, target));
+    }
+
+    // Named for the branch, not the commit: `git merge <sha>` writes "Merge
+    // commit 'a1b2c3'" into history, which says nothing to anyone later.
+    //
+    // `--ff` spelled out, because the user's own config applies here too: with
+    // `merge.ff = only` set globally — a common guard against accidental
+    // merges — every update of a branch with work on it failed with "Not
+    // possible to fast-forward".
+    let message = format!("Merge {from} into {branch}");
+    match run(dir, &["merge", "--ff", "--no-edit", "-m", &message, &target]) {
+        Ok(_) => Ok((Updated::Merged { commits }, target)),
+        Err(e) => {
+            let files = conflicted_files(dir);
+            if !files.is_empty() {
+                return Ok((Updated::Conflicts(files), target));
+            }
+            // Anything else — a hook that refused, an untracked file in the
+            // way — must not leave the worktree half merged.
+            if merge_in_progress(dir) {
+                let _ = run(dir, &["merge", "--abort"]);
+            }
+            Err(e)
+        }
+    }
+}
+
+/// Give up on a merge in progress, putting the branch back as it was.
+pub fn abort_merge(dir: &Path) -> Result<()> {
+    if !merge_in_progress(dir) {
+        return Err(Error::Git("no merge is in progress here".into()));
+    }
+    run(dir, &["merge", "--abort"]).map(|_| ())
 }
 
 /// `owner/repo` parsed from the origin remote.
@@ -1078,5 +1183,102 @@ mod tests {
         run(&repo, &["remote", "set-url", "origin", "https://ghe.example.com/acme/web.git"]).unwrap();
         assert_eq!(origin_slug(&repo).unwrap(), ("acme".into(), "web".into()));
         std::fs::remove_dir_all(repo.parent().unwrap()).ok();
+    }
+    /// A clone of a bare remote, and a worktree of it on `feature`, so the
+    /// base can move on the remote while the branch stays where it was.
+    fn remote_and_worktree() -> (PathBuf, PathBuf, PathBuf, String) {
+        let root = sandbox();
+        let bare = root.join("remote.git");
+        std::fs::create_dir_all(&bare).unwrap();
+        run(&bare, &["init", "-q", "-b", "main", "--bare"]).unwrap();
+        let seed = root.join("seed");
+        run(&root, &["clone", "-q", bare.to_str().unwrap(), seed.to_str().unwrap()]).unwrap();
+        run(&seed, &["config", "user.email", "test@villain.local"]).unwrap();
+        run(&seed, &["config", "user.name", "Test"]).unwrap();
+        std::fs::write(seed.join("a.txt"), "one\ntwo\nthree\n").unwrap();
+        run(&seed, &["add", "-A"]).unwrap();
+        run(&seed, &["commit", "-qm", "init"]).unwrap();
+        run(&seed, &["push", "-q", "-u", "origin", "main"]).unwrap();
+
+        let local = root.join("local");
+        run(&root, &["clone", "-q", bare.to_str().unwrap(), local.to_str().unwrap()]).unwrap();
+        run(&local, &["config", "user.email", "test@villain.local"]).unwrap();
+        run(&local, &["config", "user.name", "Test"]).unwrap();
+        let wt = root.join("wt");
+        let point = add_worktree(&local, &wt, "feature", "main").unwrap();
+        (root, seed, wt, point)
+    }
+
+    fn push_to_main(seed: &Path, file: &str, text: &str) {
+        std::fs::write(seed.join(file), text).unwrap();
+        run(seed, &["add", "-A"]).unwrap();
+        run(seed, &["commit", "-qm", &format!("main: {file}")]).unwrap();
+        run(seed, &["push", "-q"]).unwrap();
+    }
+
+    #[test]
+    fn updating_merges_the_newest_base_and_moves_the_branch_point() {
+        let (root, seed, wt, point) = remote_and_worktree();
+        std::fs::write(wt.join("feat.txt"), "f\n").unwrap();
+        commit_all(&wt, "feature work").unwrap();
+        assert_eq!(update_from_base(&wt, "main").unwrap().0, Updated::UpToDate);
+
+        push_to_main(&seed, "main.txt", "m\n");
+        push_to_main(&seed, "main2.txt", "m\n");
+        fetch_bases(&[(wt.clone(), "main".into())]);
+        let (outcome, target) = update_from_base(&wt, "main").unwrap();
+        assert_eq!(outcome, Updated::Merged { commits: 2 });
+        assert!(wt.join("main2.txt").exists());
+        let subject = run(&wt, &["log", "-1", "--format=%s"]).unwrap();
+        assert_eq!(subject.trim(), "Merge origin/main into feature");
+
+        // From the old point the base's two files look like this branch's;
+        // from the one returned, only the feature's own file does.
+        let from_old = changed_files(&wt, "main", Some(&point), Scope::Branch).unwrap();
+        assert_eq!(from_old.len(), 3);
+        let from_new = changed_files(&wt, "main", Some(&target), Scope::Branch).unwrap();
+        assert_eq!(from_new.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(), ["feat.txt"]);
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn a_conflict_is_left_to_resolve_and_can_be_abandoned() {
+        let (root, seed, wt, point) = remote_and_worktree();
+        std::fs::write(wt.join("a.txt"), "one\nTWO (feature)\nthree\n").unwrap();
+        commit_all(&wt, "feature edit").unwrap();
+        push_to_main(&seed, "a.txt", "one\nTWO (main)\nthree\n");
+        fetch_bases(&[(wt.clone(), "main".into())]);
+
+        let (outcome, target) = update_from_base(&wt, "main").unwrap();
+        assert_eq!(outcome, Updated::Conflicts(vec!["a.txt".into()]));
+        assert!(merge_in_progress(&wt));
+        // Asked again while it is still in progress: refused, not stacked.
+        assert!(update_from_base(&wt, "main").is_err());
+
+        // Recorded as the target but never reached: not a branch point.
+        assert_ne!(baseline(&wt, "main", Some(&target)), target);
+
+        abort_merge(&wt).unwrap();
+        assert!(!merge_in_progress(&wt));
+        assert_eq!(baseline(&wt, "main", Some(&target)), point);
+        assert!(abort_merge(&wt).is_err());
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn uncommitted_edits_are_refused_but_untracked_files_are_not() {
+        let (root, seed, wt, _) = remote_and_worktree();
+        push_to_main(&seed, "main.txt", "m\n");
+        fetch_bases(&[(wt.clone(), "main".into())]);
+
+        std::fs::write(wt.join("a.txt"), "edited\n").unwrap();
+        let err = update_from_base(&wt, "main").unwrap_err().to_string();
+        assert!(err.contains("1 uncommitted change"), "{err}");
+        assert!(!merge_in_progress(&wt));
+
+        run(&wt, &["checkout", "--", "a.txt"]).unwrap();
+        std::fs::write(wt.join("notes.txt"), "scratch\n").unwrap();
+        assert_eq!(update_from_base(&wt, "main").unwrap().0, Updated::Merged { commits: 1 });
+        std::fs::remove_dir_all(root).ok();
     }
 }

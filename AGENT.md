@@ -94,7 +94,13 @@ live process kills it and takes its agents with it, and the same is true of
 - **A branch is measured from its recorded branch point**, not from its base
   branch, which moves. Where both exist, `git::baseline` decides — and a
   worktree without a recorded point falls back to the merge base, which
-  credits the branch with everything merged in from elsewhere.
+  credits the branch with everything merged in from elsewhere. Merging the
+  base in moves the point to what was merged; a point the branch never
+  reached (a merge abandoned half way) is passed over.
+- **The user's git config applies to every git the app runs.** `merge.ff =
+  only` made every update from base fail with "Not possible to fast-forward"
+  until the merge said `--ff` itself. Anything the app relies on git doing,
+  it spells out.
 - **GitHub's PR listing is state-scoped.** `state=open` drops a PR the moment
   it closes, so anything that wants history has to ask for `state=all`.
 

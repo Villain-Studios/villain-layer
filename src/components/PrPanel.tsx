@@ -95,7 +95,12 @@ function checkColor(c: CheckRun) {
   return "var(--red)";
 }
 
-export function PrPanel({ task }: { task: TaskView }) {
+export function PrPanel({
+  task, onUpdateFromBase,
+}: {
+  task: TaskView;
+  onUpdateFromBase: () => void;
+}) {
   const settings = useStore((s) => s.settings);
   const allPanes = useStore((s) => s.panes);
   const agentPanes = useMemo(
@@ -481,6 +486,16 @@ export function PrPanel({ task }: { task: TaskView }) {
               </h3>
               <div className="spacer" />
               {pr.draft && <span className="chip">draft</span>}
+              {/* GitHub's own reading of the branch against its base. */}
+              {(pr.mergeable_state === "dirty" || pr.mergeable_state === "behind") && (
+                <button
+                  className={`chip ${pr.mergeable_state === "dirty" ? "del" : "warn"}`}
+                  title={`Merge ${pr.base} into this branch`}
+                  onClick={(e) => { e.stopPropagation(); onUpdateFromBase(); }}
+                >
+                  {pr.mergeable_state === "dirty" ? `conflicts with ${pr.base}` : `behind ${pr.base}`}
+                </button>
+              )}
               {row.verdict === "approved" && <span className="chip add">approved</span>}
               {row.verdict === "changes_requested" && (
                 <span className="chip del">changes requested</span>

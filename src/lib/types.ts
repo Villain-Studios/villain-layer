@@ -128,6 +128,18 @@ export interface ChangedFile {
   repo: string;
 }
 
+/** What bringing one repository up to date with its base came to. */
+export interface RepoUpdate {
+  checkout_id: string;
+  repo: string;
+  base: string;
+  outcome: "up_to_date" | "merged" | "conflicts" | "failed";
+  /** Commits the base had that the branch did not. */
+  commits: number;
+  conflicts: string[];
+  detail: string;
+}
+
 export interface RepoResult {
   checkout_id: string;
   repo: string;

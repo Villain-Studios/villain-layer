@@ -304,3 +304,230 @@ fn push_task_inner(state: &AppState, task_id: String) -> Result<Vec<RepoResult>>
     Ok(results)
 }
 
+
+/// What bringing one repository up to date with its base came to.
+#[derive(Debug, Serialize)]
+pub struct RepoUpdate {
+    pub checkout_id: String,
+    pub repo: String,
+    pub base: String,
+    /// "up_to_date", "merged", "conflicts" or "failed".
+    pub outcome: &'static str,
+    /// Commits the base had that the branch did not.
+    pub commits: u32,
+    pub conflicts: Vec<String>,
+    pub detail: String,
+}
+
+/// Merge each repository's base into the task branch.
+///
+/// Fetched first, all together, so "up to date" means with the remote and
+/// not with whatever this clone last heard. Off the command thread: a fetch
+/// per repository and a merge that runs the repository's hooks.
+#[tauri::command]
+pub async fn update_from_base(
+    app: AppHandle,
+    task_id: String,
+    checkout_ids: Option<Vec<String>>,
+) -> Result<Vec<RepoUpdate>> {
+    super::blocking(app, move |state| update_from_base_inner(state, task_id, checkout_ids)).await
+}
+
+fn update_from_base_inner(
+    state: &AppState,
+    task_id: String,
+    checkout_ids: Option<Vec<String>>,
+) -> Result<Vec<RepoUpdate>> {
+    let checkouts: Vec<_> = state
+        .config
+        .checkouts_of(&task_id)
+        .into_iter()
+        .filter(|c| checkout_ids.as_ref().is_none_or(|ids| ids.contains(&c.id)))
+        .filter(|c| std::path::Path::new(&c.path).is_dir())
+        .collect();
+    git::fetch_bases(
+        &checkouts
+            .iter()
+            .map(|c| (PathBuf::from(&c.path), c.base.clone()))
+            .collect::<Vec<_>>(),
+    );
+
+    let mut out = Vec::new();
+    for checkout in checkouts {
+        let repo = state
+            .config
+            .project(&checkout.project_id)
+            .map(|p| p.name)
+            .unwrap_or_else(|_| "(unknown)".into());
+        let mut row = RepoUpdate {
+            checkout_id: checkout.id.clone(),
+            repo,
+            base: checkout.base.clone(),
+            outcome: "failed",
+            commits: 0,
+            conflicts: Vec::new(),
+            detail: String::new(),
+        };
+        match git::update_from_base(&PathBuf::from(&checkout.path), &checkout.base) {
+            Ok((updated, target)) => {
+                match updated {
+                    git::Updated::UpToDate => {
+                        row.outcome = "up_to_date";
+                        row.detail = "already up to date".into();
+                    }
+                    git::Updated::Merged { commits } => {
+                        row.outcome = "merged";
+                        row.commits = commits;
+                        row.detail = format!("merged {commits} commit{}", if commits == 1 { "" } else { "s" });
+                    }
+                    git::Updated::Conflicts(files) => {
+                        row.outcome = "conflicts";
+                        row.detail = format!(
+                            "{} conflicted file{}",
+                            files.len(),
+                            if files.len() == 1 { "" } else { "s" }
+                        );
+                        row.conflicts = files;
+                    }
+                }
+                // Recorded even for a conflict: it is where the branch is
+                // heading, and `baseline` passes over a point the branch has
+                // not reached — so while the merge is unfinished, or if it is
+                // abandoned, the diff is measured as it was before.
+                if row.outcome != "up_to_date" {
+                    let id = checkout.id.clone();
+                    state.config.update(|c| {
+                        if let Some(found) = c.checkouts.iter_mut().find(|c| c.id == id) {
+                            found.base_commit = Some(target.clone());
+                        }
+                    })?;
+                }
+            }
+            Err(e) => row.detail = e.to_string(),
+        }
+        // The sidebar's counts are about to be wrong, and would stay wrong
+        // until the cache ran out.
+        state.status_cache.lock().remove(&checkout.id);
+        out.push(row);
+    }
+    Ok(out)
+}
+
+/// Abandon a conflicted update in one repository.
+#[tauri::command]
+pub async fn abort_merge(app: AppHandle, checkout_id: String) -> Result<()> {
+    super::blocking(app, move |state| {
+        let checkout = state.config.checkout(&checkout_id)?;
+        let done = git::abort_merge(&PathBuf::from(&checkout.path));
+        state.status_cache.lock().remove(&checkout_id);
+        done
+    })
+    .await
+}
+
+/// One repository's unfinished merge, as the prompt describes it.
+pub(crate) struct Conflicted {
+    pub repo: String,
+    /// The agent is sitting in this repository, so its paths go bare.
+    pub here: bool,
+    pub base: String,
+    pub files: Vec<String>,
+}
+
+pub(crate) fn conflict_prompt(branch: &str, repos: &[Conflicted]) -> String {
+    let mut out = format!(
+        "Bringing `{branch}` up to date with its base branch stopped on merge conflicts. \
+         The merge is still in progress in {} — do not start it again or abort it.\n\n",
+        if repos.len() == 1 { "that worktree" } else { "each of these worktrees" },
+    );
+    for r in repos {
+        out.push_str(&format!("{} (merging origin/{}):\n", r.repo, r.base));
+        for f in &r.files {
+            if r.here {
+                out.push_str(&format!("- {f}\n"));
+            } else {
+                out.push_str(&format!("- {}/{f}\n", r.repo));
+            }
+        }
+        out.push('\n');
+    }
+    out.push_str(
+        "For each file, work out what both sides were for and keep both where you can — \
+         the base's change is someone else's finished work, and this branch's is ours. \
+         Then build and run the tests, `git add` the files and finish with \
+         `git commit --no-edit`. If two changes cannot both be kept, stop and tell me \
+         which, and why, before choosing.",
+    );
+    out
+}
+
+/// Hand every unfinished merge in the task to an agent.
+///
+/// With `pane_id`, typed into that agent. Without, returned for starting one,
+/// with `scope` saying where it will run.
+#[tauri::command]
+pub async fn send_merge_conflicts(
+    app: AppHandle,
+    task_id: String,
+    pane_id: Option<String>,
+    scope: Option<String>,
+) -> Result<String> {
+    super::blocking(app, move |state| {
+        let task = state.config.task(&task_id)?;
+        let scope = match &pane_id {
+            Some(id) => state.ptys.info(id)?.checkout_id,
+            None => scope,
+        };
+        let repos: Vec<Conflicted> = state
+            .config
+            .checkouts_of(&task_id)
+            .into_iter()
+            .filter_map(|c| {
+                let dir = PathBuf::from(&c.path);
+                if !git::merge_in_progress(&dir) {
+                    return None;
+                }
+                Some(Conflicted {
+                    repo: state
+                        .config
+                        .project(&c.project_id)
+                        .map(|p| p.name)
+                        .unwrap_or_else(|_| "(unknown)".into()),
+                    here: scope.as_deref() == Some(c.id.as_str()),
+                    base: c.base,
+                    files: git::conflicted_files(&dir),
+                })
+            })
+            .filter(|r| !r.files.is_empty())
+            .collect();
+        if repos.is_empty() {
+            return Err(Error::Other("no repository in this task has conflicts left to resolve".into()));
+        }
+        let prompt = conflict_prompt(&task.branch, &repos);
+        if let Some(id) = &pane_id {
+            state.ptys.submit(id, &prompt)?;
+        }
+        Ok(prompt)
+    })
+    .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn conflicts_are_named_from_where_the_agent_stands() {
+        let prompt = conflict_prompt(
+            "ACME-1",
+            &[
+                Conflicted { repo: "api".into(), here: true, base: "main".into(), files: vec!["src/a.ts".into()] },
+                Conflicted { repo: "web".into(), here: false, base: "develop".into(), files: vec!["b.ts".into()] },
+            ],
+        );
+        assert!(prompt.contains("api (merging origin/main):\n- src/a.ts\n"));
+        assert!(prompt.contains("web (merging origin/develop):\n- web/b.ts\n"));
+        assert!(prompt.contains("each of these worktrees"));
+        assert!(prompt.contains("git commit --no-edit"));
+    }
+}

@@ -144,6 +144,16 @@ macOS may suspend. Settings → Appearance → Notifications turns it off.
    are left out, and threads you replied to last, bots and anything already
    sent start unpicked. Nothing is posted to GitHub.
 
+**Keeping up with the base.** *Update from base* in the task header fetches
+each repo's base and merges it into the task branch — a merge, like GitHub's
+own *Update branch*, so an open PR keeps its history and nothing needs a force
+push. A repo with uncommitted edits is skipped rather than merged over. A
+conflict is left in progress, because that is the state it can be resolved
+from: hand it to an agent, which is told which files in which repos and to
+finish with `git commit --no-edit`, or abandon the merge to put the branch
+back. A PR card whose branch GitHub reports as behind or conflicting says so,
+and opens the same dialog.
+
 Repos join and leave a task at any time: expand a task in the sidebar for
 `+ add repo`, or the `✕` on a repo row to drop it. You rarely know the full
 blast radius when you start.

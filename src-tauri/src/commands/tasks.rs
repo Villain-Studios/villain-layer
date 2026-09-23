@@ -410,7 +410,7 @@ pub(crate) fn create_checkout(
     );
 
     let base = base_for(project, base);
-    let repo = super::repo_for(state, project);
+    let repo = super::repo_for_branch(state, project, &task.branch);
     let base_commit = if fetched {
         git::add_worktree_fetched(&repo, &path, &task.branch, &base)?
     } else {
@@ -518,7 +518,7 @@ pub(crate) fn new_task(state: &AppState, req: NewTask) -> Result<Task> {
         // back. Left behind, a retry with a different base found the branch
         // already there, checked it out as it was, and measured it against
         // the new base — the old base's commits then showed up in the diff.
-        let repo = super::repo_for(state, project);
+        let repo = super::repo_for_branch(state, project, &task.branch);
         let fresh_branch = !git::branch_exists(&repo, &task.branch);
         match create_checkout(state, &task, project, &mut taken, base, true) {
             Ok(c) => created.push((c, fresh_branch)),

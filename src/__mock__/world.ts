@@ -126,7 +126,7 @@ const health: RepoHealth[] = [
 const cleanup: CleanupItem[] = [
   { id: "folder:ACME-90", kind: "folder", repo: null, title: "ACME-90", verdict: "safe", detail: "No task uses it. It holds 2 files the app wrote." },
   { id: "folder:ACME-77", kind: "folder", repo: null, title: "ACME-77", verdict: "blocked", detail: "No task uses it, but api: 3 uncommitted changes." },
-  { id: "clone_branch:api:ACME-123", kind: "clone_branch", repo: "api", title: "ACME-123", verdict: "safe", detail: "Left in your clone from before tasks had the app's own copy. Every commit on it is in the copy, where the task works." },
+  { id: "clone_branch:api:ACME-123", kind: "clone_branch", repo: "api", title: "ACME-123", verdict: "safe", detail: "A task works on this branch in the app's copy, which has every commit on it. The task does not need this one." },
   { id: "store_branch:api:ACME-88", kind: "store_branch", repo: "api", title: "ACME-88", verdict: "risky", detail: "No task uses it, but 2 commits on it are on no origin branch. A branch squash-merged and then deleted on origin looks like this too." },
   { id: "records:web", kind: "records", repo: "web", title: "Records of deleted worktrees", verdict: "safe", detail: "Git still lists 1 worktree whose folder is gone." },
   { id: "store:old-tool.git", kind: "store", repo: null, title: "old-tool.git", verdict: "safe", detail: "No repo uses it, and origin has everything in it." },

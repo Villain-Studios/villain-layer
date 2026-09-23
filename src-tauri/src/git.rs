@@ -12,6 +12,7 @@ mod store;
 mod upkeep;
 pub use store::{
     adopt_worktree, belongs_to, copy_local_config, create_store, is_store_of, owner, relink_worktree,
+    take_branch_from_clone,
 };
 pub use upkeep::{
     branch_tips, delete_branch_at, fast_forward, fetch_store, fetched_at, holds, is_bare,

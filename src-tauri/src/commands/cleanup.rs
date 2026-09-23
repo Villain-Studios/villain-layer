@@ -300,7 +300,7 @@ fn clone_branches(project: &Project, clone: &Path, store: &Path, cfg: &AppConfig
         } else if git::holds(store, &tip) {
             (
                 Verdict::Safe,
-                "Left in your clone from before tasks had the app's own copy. Every commit on it is in the copy, where the task works.".to_string(),
+                "A task works on this branch in the app's copy, which has every commit on it. The task does not need this one.".to_string(),
             )
         } else {
             (Verdict::Blocked, "It has commits the app's copy does not. Push them, or delete it yourself.".to_string())

@@ -155,7 +155,17 @@ pub fn adopt_worktree(store: &Path, wt: &Path) -> Result<()> {
         .map(|b| b.trim().to_string())
         .map_err(|_| Error::Git(format!("{} is not on a branch", wt.display())))?;
     super::check_names(&branch, "HEAD")?;
+    copy_branch(&source, store, &branch)?;
 
+    register_in_place(store, wt, &branch, Some(&old))?;
+    // The clone it came from would still count the branch as checked out,
+    // and refuse to delete or check it out, until this goes.
+    let _ = std::fs::remove_dir_all(&old);
+    Ok(())
+}
+
+/// Copy `branch` from `source` into `store`, with where it pushes to.
+fn copy_branch(source: &Path, store: &Path, branch: &str) -> Result<()> {
     let from = source.to_string_lossy();
     run(
         store,
@@ -164,16 +174,25 @@ pub fn adopt_worktree(store: &Path, wt: &Path) -> Result<()> {
     // Where the branch pushes to, if it was pushed from the clone.
     for key in ["remote", "merge"] {
         let name = format!("branch.{branch}.{key}");
-        if let Ok(v) = run(&source, &["config", "--get", &name]) {
+        if let Ok(v) = run(source, &["config", "--get", &name]) {
             let _ = run(store, &["config", &name, v.trim()]);
         }
     }
-
-    register_in_place(store, wt, &branch, Some(&old))?;
-    // The clone it came from would still count the branch as checked out,
-    // and refuse to delete or check it out, until this goes.
-    let _ = std::fs::remove_dir_all(&old);
     Ok(())
+}
+
+/// Bring `branch` over from the user's clone when only the clone has it:
+/// a branch started there, before or after the copy was made. A task on
+/// it then goes on from the user's commits, as it did when worktrees were
+/// cut from the clone itself; without this it quietly started again from
+/// the base. The copy's own branch, when it has one, is the task's and
+/// wins.
+pub fn take_branch_from_clone(store: &Path, clone: &Path, branch: &str) -> Result<()> {
+    super::check_names(branch, "HEAD")?;
+    if super::branch_exists(store, branch) || !super::branch_exists(clone, branch) {
+        return Ok(());
+    }
+    copy_branch(clone, store, branch)
 }
 
 /// Link a worktree whose registration is gone back into `store`, at the
@@ -366,6 +385,31 @@ mod tests {
         let st = super::super::status(&wt).unwrap();
         assert_eq!((st.branch.as_str(), st.unstaged), ("task", 1), "the edit reads as an edit");
         assert_eq!(std::fs::read_to_string(wt.join("a.txt")).unwrap(), "uncommitted\n");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_branch_started_in_the_clone_after_the_copy_goes_on_in_a_task() {
+        let root = sandbox();
+        let (_remote, clone) = user_clone(&root);
+        let store = root.join("store/clone.git");
+        create_store(&clone, &store).unwrap();
+        run(&clone, &["switch", "-q", "-c", "ACME-1"]).unwrap();
+        std::fs::write(clone.join("a.txt"), "started by hand\n").unwrap();
+        run(&clone, &["commit", "-qam", "started"]).unwrap();
+        let started = head(&clone);
+
+        take_branch_from_clone(&store, &clone, "ACME-1").unwrap();
+        let wt = root.join("task/clone");
+        super::super::add_worktree(&store, &wt, "ACME-1", "main").unwrap();
+        assert_eq!(head(&wt), started, "the task goes on from the clone's commit");
+
+        // Once the copy has it, the task's own commits are what count.
+        std::fs::write(wt.join("a.txt"), "the task's work\n").unwrap();
+        run(&wt, &["commit", "-qam", "task"]).unwrap();
+        let task = head(&wt);
+        take_branch_from_clone(&store, &clone, "ACME-1").unwrap();
+        assert_eq!(head(&wt), task);
         std::fs::remove_dir_all(&root).ok();
     }
 

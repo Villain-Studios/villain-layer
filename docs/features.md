@@ -76,8 +76,9 @@ up** removes what tasks left behind.
     generated and worktrees with no changes;
   - worktrees inside a task folder that are none of its checkouts, on the
     same terms;
-  - task branches left in the user's clone from before REPO-4, only when
-    every commit on them is in the app's copy and they are not checked out;
+  - task branches in the user's clone, left from before REPO-4 or taken
+    over by a task (TASK-3), only when every commit on them is in the
+    app's copy and they are not checked out;
   - branches in the app's copies that no task uses, pre-selected only when
     every commit on them is on origin;
   - copies no repo uses, never one a worktree still belongs to (the other
@@ -121,7 +122,10 @@ the repo count, running agents, uncommitted changes and the review verdict.
   (REPO-4), from the freshly fetched `origin/<base>`, not the local base branch, which may be stale. The commit
   it was cut from is recorded as the branch point
   (`Checkout.base_commit`). Everything that measures the branch ("changed",
-  the Diff, PR descriptions, handoffs) measures from that point.
+  the Diff, PR descriptions, handoffs) measures from that point. A branch
+  that already exists goes on from its own commits: the copy's, or, when
+  only the user's clone has it (started there by hand), the clone's,
+  brought into the copy first.
 - **TASK-4** Creating a task MUST be all or nothing. If any repo fails, the
   worktrees and branches this attempt made are removed, and branches it did
   not make are kept. The task record goes too.

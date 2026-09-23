@@ -333,6 +333,20 @@ pub(crate) fn repo_for(state: &AppState, project: &Project) -> PathBuf {
     })
 }
 
+/// `repo_for`, with `branch` brought over from the user's clone first if
+/// only the clone has it (TASK-3), so a new worktree on it goes on from the
+/// user's commits.
+pub(crate) fn repo_for_branch(state: &AppState, project: &Project, branch: &str) -> PathBuf {
+    let repo = repo_for(state, project);
+    let clone = Path::new(&project.path);
+    if repo != clone && clone.is_dir() {
+        if let Err(e) = git::take_branch_from_clone(&repo, clone, branch) {
+            eprintln!("villain-layer: {branch} stays in {}: {e}", project.path);
+        }
+    }
+    repo
+}
+
 /// The repository an existing worktree is registered in, which may not be
 /// the project's copy yet: one that could not be moved still belongs to the
 /// user's clone, and git only removes a worktree through its own repository.

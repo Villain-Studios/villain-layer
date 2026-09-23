@@ -305,17 +305,30 @@ high-impact tools (`open_prs`, applying a `jira_transition`, `forget_repo`,
 `slack_delete`, and a non-dry-run `slack_cleanup`) refuse unless the call also
 passes `confirm: true`, so the agent has to come back after asking.
 
-Agents get the config automatically:
+Agents get the server handed to them at launch, each CLI the way it takes
+one — never as a file inside a worktree, where it would be an untracked change
+that could be committed by accident:
 
-- The chat folder holds a `.mcp.json`, written at start-up rather than only when
-  the app launches an agent — so running `claude` there yourself gets the same
-  tools and the same context file.
-- Task agents get it too. Where the agent's working directory is a git worktree,
-  the config lives in the task folder and is passed with `--mcp-config`, because
-  a generated `.mcp.json` inside a worktree would show up as an untracked change
-  and could be committed by accident. Agents without such a flag get the tools
-  only when they run at the task root, which is where multi-repo tasks start
-  them anyway.
+| CLI | How it is given the server |
+|---|---|
+| Claude Code | `--mcp-config`, pointing at a `.mcp.json` in the app's own folder |
+| GitHub Copilot CLI | `--additional-mcp-config @<that file>` |
+| OpenCode | added to `OPENCODE_CONFIG_CONTENT`, beside the user's own servers |
+| Gemini CLI | the task folder's `.gemini/settings.json` — at the task root only |
+
+Where a CLI will read the token from the environment (OpenCode, Gemini), it
+does, rather than from another file. Gemini takes a server from no flag,
+variable or file outside its project settings — it refuses a system settings
+file in a folder root does not own — so a Gemini agent inside a single repo's
+worktree goes without; start it at the task root to give it the tools. Gemini
+also leaves all MCP servers off in a folder it does not trust.
+
+The task folder and the chat folder also hold a `.mcp.json` of their own,
+written at start-up, so running `claude` there yourself gets the same tools.
+Claude Code holds a folder's `.mcp.json` server as "pending approval" until
+someone says yes, which in a new task folder every time was noise: for the
+app's own folders the app approves its own server — and only that one — the
+same way it answers the trust question.
 
 ## Appearance
 

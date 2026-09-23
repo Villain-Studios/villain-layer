@@ -30,52 +30,61 @@ pub struct AgentDef {
     /// Where the CLI keeps its transcripts, so the app can tell whether there
     /// is anything to resume before offering to.
     pub session_store: Option<SessionStore>,
-    /// Flag for pointing the agent at an MCP config file outside its working
-    /// directory. Needed when the cwd is a git worktree, where dropping a
-    /// generated `.mcp.json` would show up as an untracked change.
-    pub mcp_config_flag: Option<&'static str>,
-    /// How the CLI can be made to say what it is doing.
-    pub reports: Reports,
+    /// How the app plugs into this CLI for a launch.
+    pub integration: Integration,
 }
 
-/// How an agent CLI tells the app whether it is working, asking or done.
+/// How the app plugs into an agent CLI for one launch: how the CLI says
+/// whether it is working, asking or done, and how it reaches the app's own
+/// MCP server — each done the way that CLI offers, for that launch only,
+/// without the app touching the user's own configuration.
 ///
-/// Each is one the CLI offers for a single launch, without the app touching
-/// the user's own configuration. A CLI that cannot say is not in the
-/// catalogue: from its output alone its state is a guess, and a wrong one —
-/// "working" on an agent two days idle — is worse than none.
-///
-/// Taken out for that reason, and to put back once they report: Cursor's CLI
-/// reads hooks only from fixed files in the home folder and the repository,
-/// and has no event for asking. Codex (hooks, enabled per launch with `-c`),
-/// Aider (`--notifications-command`, which says only "stopped") and Amp (a
-/// plugin, no asking) were not installed to check against, and a wrong flag
-/// stops a CLI from starting at all. Their launch details are in the history
-/// of this file.
+/// A CLI that cannot say what it is doing is not in the catalogue: from its
+/// output alone its state is a guess, and a wrong one — "working" on an agent
+/// two days idle — is worse than none. Taken out for that reason, and to put
+/// back once they report: Cursor's CLI reads hooks only from fixed files in the
+/// home folder and the repository, and has no event for asking. Codex (hooks,
+/// enabled per launch with `-c`), Aider (`--notifications-command`, which says
+/// only "stopped") and Amp (a plugin, no asking) were not installed to check
+/// against, and a wrong flag stops a CLI from starting at all. Their launch
+/// details are in the history of this file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Reports {
-    /// Hooks in a settings file given with `--settings`.
-    ClaudeHooks,
-    /// The same hooks and payloads, in a plugin given with `--plugin-dir`.
-    CopilotHooks,
-    /// A plugin, named in `OPENCODE_CONFIG_CONTENT`, forwarding its event bus.
-    OpencodePlugin,
-    /// Nothing to install: Gemini CLI keeps its window title on its state.
-    GeminiTitle,
+pub enum Integration {
+    /// Hooks in a settings file given with `--settings`; the server with
+    /// `--mcp-config`.
+    Claude,
+    /// Claude Code's hooks and payloads, in a plugin given with
+    /// `--plugin-dir`; the server with `--additional-mcp-config`.
+    Copilot,
+    /// A plugin forwarding its event bus, and the server, both added to
+    /// `OPENCODE_CONFIG_CONTENT`.
+    Opencode,
+    /// Its window title says what it is doing. The server only in a folder of
+    /// the app's own: Gemini CLI takes one from no flag, variable or file
+    /// outside its project settings — it refuses a system settings file in a
+    /// folder root does not own — and project settings in a worktree would be
+    /// a stray file in the user's repository.
+    Gemini,
 }
 
-/// Accept Claude Code's workspace-trust dialog for a directory up front.
+/// Accept Claude Code's workspace-trust dialog for a directory up front, and
+/// its approval of the app's own MCP server there.
 ///
 /// Claude Code asks whether you trust a folder the first time it starts there,
 /// and nothing runs until it is answered. That is a sensible question to ask a
 /// person opening an unfamiliar checkout; it is noise when the app just made
 /// the folder itself, from the user's own repository, for the task they asked
-/// for. So the app answers it, for its own folders only.
+/// for. So the app answers it, for its own folders only. The same goes for
+/// the `.mcp.json` the app writes into a task folder: Claude Code held the
+/// server as "pending approval" in every new task until someone said yes.
+/// Only the app's own server is approved — never anything else a folder's
+/// `.mcp.json` names.
 ///
 /// The record lives in `~/.claude.json`, which Claude Code owns, so this is
 /// deliberately conservative: it never creates the file, never touches it if
-/// it cannot be parsed, sets exactly one key, and writes through a temporary
-/// file so a crash mid-write cannot leave Claude Code without a config.
+/// it cannot be parsed, sets exactly those two keys, and writes through a
+/// temporary file so a crash mid-write cannot leave Claude Code without a
+/// config.
 ///
 /// Returns whether anything was written.
 pub fn pretrust(agent_id: &str, dir: &Path) -> bool {
@@ -118,10 +127,24 @@ fn trust_in(config: &Path, dir: &Path) -> bool {
     let Some(entry) = entry.as_object_mut() else {
         return false;
     };
-    if entry.get("hasTrustDialogAccepted") == Some(&serde_json::Value::Bool(true)) {
+    let trusted = entry.get("hasTrustDialogAccepted") == Some(&serde_json::Value::Bool(true));
+    let approved = entry
+        .get("enabledMcpjsonServers")
+        .and_then(|v| v.as_array())
+        .is_some_and(|a| a.iter().any(|n| n.as_str() == Some(crate::mcp::SERVER_NAME)));
+    if trusted && approved {
         return false;
     }
     entry.insert("hasTrustDialogAccepted".into(), serde_json::Value::Bool(true));
+    if !approved {
+        let list = entry
+            .entry("enabledMcpjsonServers")
+            .or_insert_with(|| serde_json::json!([]));
+        match list.as_array_mut() {
+            Some(list) => list.push(crate::mcp::SERVER_NAME.into()),
+            None => *list = serde_json::json!([crate::mcp::SERVER_NAME]),
+        }
+    }
 
     // Pretty, because that is how Claude Code writes it: a compact rewrite
     // would flatten a 2,500-line file the user may well read themselves.
@@ -256,73 +279,124 @@ export const VillainLayer = async () => {
 };
 "#;
 
-/// What the app adds to a launch so the agent reports itself.
-#[derive(Debug, Default, PartialEq)]
-pub struct Reporting {
-    pub args: Vec<String>,
-    pub env: Vec<(String, String)>,
-    /// Posts to the app's hook route, and so needs its address and token.
-    pub posts: bool,
+/// The app's own MCP server, as a launch hands it to a CLI.
+pub struct Mcp<'a> {
+    pub url: &'a str,
+    /// A `.mcp.json` naming the server, token and all, readable by the user
+    /// alone.
+    pub config_file: &'a Path,
 }
 
-/// Get a launch ready to report: write whatever file the CLI loads into `dir`
-/// — the app's own folder, never the worktree, where it would be an untracked
-/// change — and say what to add to its arguments and environment.
+/// What the app adds to a launch.
+#[derive(Debug, Default, PartialEq)]
+pub struct Launch {
+    pub args: Vec<String>,
+    pub env: Vec<(String, String)>,
+}
+
+/// Get a launch plugged in: write whatever the CLI loads, and say what to add
+/// to its arguments and environment.
 ///
+/// Files go in `dir`, the app's own folder — never a worktree, where they
+/// would be untracked changes — except Gemini CLI's project settings, which
+/// go in `own_folder` when the agent starts in a folder of the app's own that
+/// is not a repository (a task root, a chat), and nowhere otherwise.
 /// `opencode_config` is any `OPENCODE_CONFIG_CONTENT` the user already has:
-/// the plugin is added to it, not put in its place.
-pub fn prepare_reporting(
-    reports: Reports,
+/// what the app needs is added to it, not put in its place.
+///
+/// The token is read from `VILLAIN_HOOK_TOKEN` wherever the CLI will expand a
+/// variable, rather than written into another file.
+pub fn prepare_launch(
+    integration: Integration,
     dir: &Path,
+    mcp: Option<&Mcp>,
+    own_folder: Option<&Path>,
     opencode_config: Option<&str>,
-) -> std::io::Result<Reporting> {
-    let write = |name: &str, text: &[u8]| -> std::io::Result<PathBuf> {
-        std::fs::create_dir_all(dir)?;
-        let path = dir.join(name);
-        std::fs::write(&path, text)?;
-        Ok(path)
-    };
+) -> std::io::Result<Launch> {
+    std::fs::create_dir_all(dir)?;
     let json = |v: serde_json::Value| serde_json::to_vec_pretty(&v).unwrap_or_default();
-    Ok(match reports {
-        Reports::GeminiTitle => Reporting::default(),
-        Reports::ClaudeHooks => {
-            let path = write("claude-hooks.json", &json(claude_hook_settings()))?;
-            Reporting {
-                args: vec!["--settings".into(), path.to_string_lossy().into()],
-                env: Vec::new(),
-                posts: true,
+    let mut launch = Launch::default();
+    match integration {
+        Integration::Claude => {
+            let path = dir.join("claude-hooks.json");
+            std::fs::write(&path, json(claude_hook_settings()))?;
+            launch.args = vec!["--settings".into(), path.to_string_lossy().into()];
+            if let Some(mcp) = mcp {
+                // Always the flag, even where a `.mcp.json` sits in the
+                // working directory: a task from the one-repo layout has no
+                // folder of its own to put one in.
+                launch.args.push("--mcp-config".into());
+                launch.args.push(mcp.config_file.to_string_lossy().into());
             }
         }
-        Reports::CopilotHooks => {
+        Integration::Copilot => {
             // A plugin is a folder: its manifest, and the hooks beside it. No
             // `$schema` in the manifest, or Copilot looks for the hooks
             // somewhere else.
             let plugin = dir.join("copilot-plugin");
             std::fs::create_dir_all(&plugin)?;
-            std::fs::write(plugin.join("plugin.json"), json(serde_json::json!({ "name": "villain-layer" })))?;
+            std::fs::write(plugin.join("plugin.json"), json(serde_json::json!({ "name": crate::mcp::SERVER_NAME })))?;
             std::fs::write(plugin.join("hooks.json"), json(copilot_hooks()))?;
-            Reporting {
-                args: vec!["--plugin-dir".into(), plugin.to_string_lossy().into()],
-                env: Vec::new(),
-                posts: true,
+            launch.args = vec!["--plugin-dir".into(), plugin.to_string_lossy().into()];
+            if let Some(mcp) = mcp {
+                // It reads a workspace `.mcp.json` only at a repository's
+                // root, so a task root's went unread. `@` marks a path.
+                launch.args.push("--additional-mcp-config".into());
+                launch.args.push(format!("@{}", mcp.config_file.to_string_lossy()));
             }
         }
-        Reports::OpencodePlugin => {
-            let path = write("opencode-plugin.js", OPENCODE_PLUGIN.as_bytes())?;
+        Integration::Opencode => {
+            let path = dir.join("opencode-plugin.js");
+            std::fs::write(&path, OPENCODE_PLUGIN)?;
             let spec = format!("file://{}", path.to_string_lossy());
-            Reporting {
-                args: Vec::new(),
-                env: vec![("OPENCODE_CONFIG_CONTENT".into(), opencode_config_with(opencode_config, &spec))],
-                posts: true,
+            launch.env = vec![(
+                "OPENCODE_CONFIG_CONTENT".into(),
+                opencode_config_with(opencode_config, &spec, mcp.map(|m| m.url)),
+            )];
+        }
+        Integration::Gemini => {
+            if let (Some(mcp), Some(folder)) = (mcp, own_folder) {
+                gemini_project_server(folder, mcp.url)?;
             }
         }
-    })
+    }
+    Ok(launch)
 }
 
-/// The user's `OPENCODE_CONFIG_CONTENT` with the plugin added. One that does
-/// not parse as a JSON object is left alone rather than guessed at: losing
-/// the plugin costs a state dot, losing their config costs their setup.
-fn opencode_config_with(existing: Option<&str>, spec: &str) -> String {
+/// Name the app's server in Gemini CLI's project settings for `folder`,
+/// keeping whatever else is there. Gemini expands `$VAR` in its settings, so
+/// the token stays in the environment.
+fn gemini_project_server(folder: &Path, url: &str) -> std::io::Result<()> {
+    let path = folder.join(".gemini").join("settings.json");
+    let mut root = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .filter(|v| v.is_object())
+        .unwrap_or_else(|| serde_json::json!({}));
+    let servers = root
+        .as_object_mut()
+        .map(|o| o.entry("mcpServers").or_insert_with(|| serde_json::json!({})));
+    if let Some(servers) = servers.and_then(|s| s.as_object_mut()) {
+        servers.insert(
+            crate::mcp::SERVER_NAME.into(),
+            serde_json::json!({
+                "httpUrl": url,
+                "headers": { "Authorization": "Bearer $VILLAIN_HOOK_TOKEN" }
+            }),
+        );
+    }
+    std::fs::create_dir_all(folder.join(".gemini"))?;
+    std::fs::write(&path, serde_json::to_vec_pretty(&root).unwrap_or_default())
+}
+
+/// The user's `OPENCODE_CONFIG_CONTENT` with the plugin, and the app's server
+/// when there is one, added. One that does not parse as a JSON object is left
+/// alone rather than guessed at: losing the plugin costs a state dot, losing
+/// their config costs their setup.
+///
+/// OpenCode fills `{env:NAME}` in from the environment, so the token is not
+/// written into the variable.
+fn opencode_config_with(existing: Option<&str>, spec: &str, mcp_url: Option<&str>) -> String {
     let mut root = match existing.map(str::trim).filter(|s| !s.is_empty()) {
         None => serde_json::json!({}),
         Some(text) => match serde_json::from_str::<serde_json::Value>(text) {
@@ -338,20 +412,36 @@ fn opencode_config_with(existing: Option<&str>, spec: &str) -> String {
             list.push(serde_json::Value::String(spec.to_string()));
         }
     }
+    if let Some(url) = mcp_url {
+        let servers = root
+            .as_object_mut()
+            .map(|o| o.entry("mcp").or_insert_with(|| serde_json::json!({})));
+        if let Some(servers) = servers.and_then(|s| s.as_object_mut()) {
+            servers.insert(
+                crate::mcp::SERVER_NAME.into(),
+                serde_json::json!({
+                    "type": "remote",
+                    "url": url,
+                    "headers": { "Authorization": "Bearer {env:VILLAIN_HOOK_TOKEN}" },
+                    "enabled": true
+                }),
+            );
+        }
+    }
     root.to_string()
 }
 
 /// What a hook's post says the agent is doing now. None when it says nothing
 /// new.
 pub fn hook_activity(
-    reports: Reports,
+    integration: Integration,
     payload: &serde_json::Value,
     current: Option<crate::pty::Activity>,
 ) -> Option<crate::pty::Activity> {
     use crate::pty::Activity;
-    match reports {
-        Reports::ClaudeHooks | Reports::CopilotHooks => claude_hook_activity(payload, current),
-        Reports::OpencodePlugin => match payload.get("state").and_then(|s| s.as_str())? {
+    match integration {
+        Integration::Claude | Integration::Copilot => claude_hook_activity(payload, current),
+        Integration::Opencode => match payload.get("state").and_then(|s| s.as_str())? {
             // Loaded: at its prompt, with nothing new — unless an event from
             // the session already beat this post here.
             "started" => current.is_none().then_some(Activity::Idle),
@@ -360,7 +450,7 @@ pub fn hook_activity(
             "done" => Some(Activity::Done),
             _ => None,
         },
-        Reports::GeminiTitle => None,
+        Integration::Gemini => None,
     }
 }
 
@@ -424,9 +514,9 @@ pub fn gemini_title_activity(title: &str) -> Option<crate::pty::Activity> {
 }
 
 /// The title reader for a CLI that reports through its title.
-pub fn title_reader(reports: Reports) -> Option<fn(&str) -> Option<crate::pty::Activity>> {
-    match reports {
-        Reports::GeminiTitle => Some(gemini_title_activity),
+pub fn title_reader(integration: Integration) -> Option<fn(&str) -> Option<crate::pty::Activity>> {
+    match integration {
+        Integration::Gemini => Some(gemini_title_activity),
         _ => None,
     }
 }
@@ -445,8 +535,7 @@ pub const AGENTS: &[AgentDef] = &[
         program: "claude",
         base_args: &[],
         prompt: PromptMode::Positional,
-        mcp_config_flag: Some("--mcp-config"),
-        reports: Reports::ClaudeHooks,
+        integration: Integration::Claude,
         resume_args: Some(&["--continue"]),
         session_store: Some(SessionStore::SlugUnderHome {
             dir: ".claude/projects",
@@ -459,8 +548,7 @@ pub const AGENTS: &[AgentDef] = &[
         program: "gemini",
         base_args: &[],
         prompt: PromptMode::Flag("-i"),
-        mcp_config_flag: None,
-        reports: Reports::GeminiTitle,
+        integration: Integration::Gemini,
         resume_args: None,
         session_store: None,
     },
@@ -470,8 +558,7 @@ pub const AGENTS: &[AgentDef] = &[
         program: "opencode",
         base_args: &[],
         prompt: PromptMode::Typed,
-        mcp_config_flag: None,
-        reports: Reports::OpencodePlugin,
+        integration: Integration::Opencode,
         resume_args: None,
         session_store: None,
     },
@@ -483,13 +570,7 @@ pub const AGENTS: &[AgentDef] = &[
         // `-i` starts the TUI and runs the prompt; `-p` would answer once and
         // exit, which is no use for a pane you are going to talk to.
         prompt: PromptMode::Flag("-i"),
-        // It reads a workspace `.mcp.json` on its own, which covers an agent
-        // started at the task root. Its flag for a config kept elsewhere,
-        // `--additional-mcp-config`, wants the path written `@/the/path`, and
-        // this struct has no way to say that — so an agent whose cwd is a
-        // worktree goes without, as it does for every other CLI here.
-        mcp_config_flag: None,
-        reports: Reports::CopilotHooks,
+        integration: Integration::Copilot,
         // It has `--continue`, but that resumes the most recent session
         // anywhere rather than the most recent one *here*, and its transcripts
         // are filed under a UUID with no directory in the name. Neither half
@@ -680,11 +761,28 @@ mod tests {
     fn a_folder_already_accepted_is_not_rewritten() {
         let dir = sandbox("noop");
         let config = dir.join(".claude.json");
-        let before = r#"{"projects":{"/work":{"hasTrustDialogAccepted":true}}}"#;
+        let before = r#"{"projects":{"/work":{"hasTrustDialogAccepted":true,"enabledMcpjsonServers":["villain-layer"]}}}"#;
         std::fs::write(&config, before).unwrap();
 
         assert!(!trust_in(&config, Path::new("/work")));
         assert_eq!(std::fs::read_to_string(&config).unwrap(), before);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn only_the_apps_own_server_is_approved_beside_what_was() {
+        let dir = sandbox("approve");
+        let config = dir.join(".claude.json");
+        std::fs::write(
+            &config,
+            r#"{"projects":{"/work":{"hasTrustDialogAccepted":true,"enabledMcpjsonServers":["theirs"],"disabledMcpjsonServers":["other"]}}}"#,
+        )
+        .unwrap();
+        assert!(trust_in(&config, Path::new("/work")));
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+        assert_eq!(v["projects"]["/work"]["enabledMcpjsonServers"], serde_json::json!(["theirs", "villain-layer"]));
+        assert_eq!(v["projects"]["/work"]["disabledMcpjsonServers"], serde_json::json!(["other"]));
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -707,7 +805,7 @@ mod tests {
     #[test]
     fn no_other_cli_keeps_its_state_in_that_file() {
         assert!(!pretrust("gemini", Path::new("/work")));
-        assert!(!pretrust("gemini", Path::new("/work")));
+        assert!(!pretrust("copilot", Path::new("/work")));
     }
 
     #[test]
@@ -761,7 +859,7 @@ mod tests {
     #[test]
     fn opencode_says_one_word_and_the_plugin_is_added_to_the_users_config() {
         use crate::pty::Activity;
-        let say = |w: &str, now| hook_activity(Reports::OpencodePlugin, &serde_json::json!({ "state": w }), now);
+        let say = |w: &str, now| hook_activity(Integration::Opencode, &serde_json::json!({ "state": w }), now);
         assert_eq!(say("working", None), Some(Activity::Working));
         assert_eq!(say("asking", Some(Activity::Working)), Some(Activity::Asking));
         assert_eq!(say("done", Some(Activity::Working)), Some(Activity::Done));
@@ -769,16 +867,21 @@ mod tests {
         assert_eq!(say("started", Some(Activity::Working)), None);
 
         let spec = "file:///app/opencode-plugin.js";
-        assert_eq!(opencode_config_with(None, spec), r#"{"plugin":["file:///app/opencode-plugin.js"]}"#);
-        let theirs = r#"{"model":"x","plugin":["their-plugin"]}"#;
-        let merged: serde_json::Value = serde_json::from_str(&opencode_config_with(Some(theirs), spec)).unwrap();
+        assert_eq!(opencode_config_with(None, spec, None), r#"{"plugin":["file:///app/opencode-plugin.js"]}"#);
+        let theirs = r#"{"model":"x","plugin":["their-plugin"],"mcp":{"theirs":{"type":"local"}}}"#;
+        let merged: serde_json::Value =
+            serde_json::from_str(&opencode_config_with(Some(theirs), spec, Some("http://127.0.0.1:9/mcp"))).unwrap();
         assert_eq!(merged["model"], "x");
         assert_eq!(merged["plugin"], serde_json::json!(["their-plugin", spec]));
+        // Their servers stay; ours is added, its token left to the environment.
+        assert_eq!(merged["mcp"]["theirs"]["type"], "local");
+        assert_eq!(merged["mcp"]["villain-layer"]["url"], "http://127.0.0.1:9/mcp");
+        assert_eq!(merged["mcp"]["villain-layer"]["headers"]["Authorization"], "Bearer {env:VILLAIN_HOOK_TOKEN}");
         // Twice is still once.
-        let again = opencode_config_with(Some(&merged.to_string()), spec);
+        let again = opencode_config_with(Some(&merged.to_string()), spec, None);
         assert_eq!(again.matches(spec).count(), 1);
         // Not ours to fix.
-        assert_eq!(opencode_config_with(Some("not json"), spec), "not json");
+        assert_eq!(opencode_config_with(Some("not json"), spec, None), "not json");
     }
 
     #[test]
@@ -801,21 +904,46 @@ mod tests {
     }
 
     #[test]
-    fn each_reporter_writes_what_its_cli_loads() {
-        let dir = std::env::temp_dir().join(format!("vl-reports-{}", uuid::Uuid::new_v4()));
-        let c = prepare_reporting(Reports::ClaudeHooks, &dir, None).unwrap();
+    fn each_cli_is_handed_its_hooks_and_the_server_its_own_way() {
+        let dir = std::env::temp_dir().join(format!("vl-launch-{}", uuid::Uuid::new_v4()));
+        let own = dir.join("task-root");
+        std::fs::create_dir_all(&own).unwrap();
+        let config = dir.join(".mcp.json");
+        let mcp = Mcp { url: "http://127.0.0.1:9/mcp", config_file: &config };
+        let cfg = config.to_string_lossy().to_string();
+
+        let c = prepare_launch(Integration::Claude, &dir, Some(&mcp), None, None).unwrap();
         assert_eq!(c.args[0], "--settings");
         assert!(std::path::Path::new(&c.args[1]).is_file());
-        let p = prepare_reporting(Reports::CopilotHooks, &dir, None).unwrap();
+        assert_eq!(c.args[2..], ["--mcp-config".to_string(), cfg.clone()]);
+
+        let p = prepare_launch(Integration::Copilot, &dir, Some(&mcp), None, None).unwrap();
         assert_eq!(p.args[0], "--plugin-dir");
         assert!(std::path::Path::new(&p.args[1]).join("hooks.json").is_file());
         assert!(std::path::Path::new(&p.args[1]).join("plugin.json").is_file());
-        let o = prepare_reporting(Reports::OpencodePlugin, &dir, None).unwrap();
+        assert_eq!(p.args[2..], ["--additional-mcp-config".to_string(), format!("@{cfg}")]);
+
+        let o = prepare_launch(Integration::Opencode, &dir, Some(&mcp), None, None).unwrap();
         assert!(o.args.is_empty());
         assert_eq!(o.env[0].0, "OPENCODE_CONFIG_CONTENT");
+        assert!(o.env[0].1.contains("villain-layer"));
         assert!(dir.join("opencode-plugin.js").is_file());
-        let g = prepare_reporting(Reports::GeminiTitle, &dir, None).unwrap();
-        assert_eq!(g, Reporting::default());
+
+        // Gemini: in a folder of the app's own, beside what is already there.
+        let settings = own.join(".gemini/settings.json");
+        std::fs::create_dir_all(own.join(".gemini")).unwrap();
+        std::fs::write(&settings, r#"{"ui":{"theme":"x"}}"#).unwrap();
+        let g = prepare_launch(Integration::Gemini, &dir, Some(&mcp), Some(&own), None).unwrap();
+        assert_eq!(g, Launch::default());
+        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+        assert_eq!(v["ui"]["theme"], "x");
+        assert_eq!(v["mcpServers"]["villain-layer"]["httpUrl"], "http://127.0.0.1:9/mcp");
+        assert_eq!(v["mcpServers"]["villain-layer"]["headers"]["Authorization"], "Bearer $VILLAIN_HOOK_TOKEN");
+        // In a worktree: nothing written at all.
+        let wt = dir.join("worktree");
+        std::fs::create_dir_all(&wt).unwrap();
+        prepare_launch(Integration::Gemini, &dir, Some(&mcp), None, None).unwrap();
+        assert!(!wt.join(".gemini").exists());
         std::fs::remove_dir_all(dir).ok();
     }
 }

@@ -938,6 +938,8 @@ fn delete_task_inner(state: &AppState, id: String, force: bool) -> Result<Vec<Re
         for name in GENERATED_FILES {
             let _ = std::fs::remove_file(dir.join(name));
         }
+        // The folder Gemini CLI's project settings sit in, emptied above.
+        let _ = std::fs::remove_dir(dir.join(".gemini"));
     }
     let _ = std::fs::remove_dir(&task.root);
 

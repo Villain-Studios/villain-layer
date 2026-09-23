@@ -261,23 +261,17 @@ pub(crate) fn start_agent(
         agents::launch_args(def, prompt.as_deref())
     };
 
-    // Give the agent the app's own MCP tools. When its cwd is the task root it
-    // picks .mcp.json up by itself; when the cwd is a worktree the file has to
-    // live elsewhere and be pointed at explicitly.
+    // The task folder keeps a `.mcp.json` of its own too, so running a CLI
+    // there by hand gets the same tools the app's agents do.
     // Best effort: neither is a reason to refuse to start the agent.
     let _ = write_task_context(state, &task);
+    let own = agent_file_dir(state, &task).filter(|dir| Path::new(&cwd) == dir.as_path());
     if let Some(dir) = agent_file_dir(state, &task) {
         let _ = crate::mcp::write_config(&dir);
-        if Path::new(&cwd) != dir {
-            if let Some(flag) = def.mcp_config_flag {
-                args.push(flag.to_string());
-                args.push(dir.join(".mcp.json").to_string_lossy().to_string());
-            }
-        }
     }
 
     pretrust_own_dir(state, &agent_id, &cwd);
-    let env = report_hooks(app, def, &mut args);
+    let env = plug_in(app, def, &mut args, own.as_deref());
 
     let pane = state.ptys.spawn(
         app,
@@ -295,37 +289,47 @@ pub(crate) fn start_agent(
             initial_input,
             prompted: prompt.is_some() && !resume,
             env,
-            title_activity: agents::title_reader(def.reports),
+            title_activity: agents::title_reader(def.integration),
         },
     )?;
     remember_pane(state, &pane);
     Ok(pane)
 }
 
-/// Get an agent ready to say what it is doing, where its CLI can, and the
-/// environment that lets it reach the app.
+/// Plug an agent into the app for this launch: how it says what it is doing,
+/// and the app's own MCP server — with the environment both need.
 ///
 /// What the CLI loads goes in the app's own folder: it is the same for every
 /// pane, and the one part that differs — which pane — comes from the
 /// environment. The token travels that way too rather than on the command
-/// line, where any process on the machine can read it. Best effort: without
-/// it the pane still works, and its state is guessed from output.
-fn report_hooks(app: &AppHandle, def: &agents::AgentDef, args: &mut Vec<String>) -> Vec<(String, String)> {
+/// line, where any process on the machine can read it. `own` is the folder
+/// the agent starts in when that folder is the app's and not a repository.
+/// Best effort: without any of this the pane still works, with its state
+/// guessed from output and without the app's tools.
+fn plug_in(
+    app: &AppHandle,
+    def: &agents::AgentDef,
+    args: &mut Vec<String>,
+    own: Option<&Path>,
+) -> Vec<(String, String)> {
     let (Some(url), Some(endpoint), Ok(dir)) =
         (crate::mcp::hook_url(), crate::mcp::endpoint(), app.path().app_config_dir())
     else {
         return Vec::new();
     };
+    // One `.mcp.json` of the app's own for every launch to point at: a task
+    // from the one-repo layout has no folder for one, and a worktree must not.
+    let config = dir.join(".mcp.json");
+    let mcp = (std::fs::create_dir_all(&dir).is_ok() && crate::mcp::write_config(&dir).is_ok())
+        .then_some(agents::Mcp { url: &endpoint.url, config_file: &config });
     let theirs = shellenv::user_env().get("OPENCODE_CONFIG_CONTENT").map(String::as_str);
-    let Ok(reporting) = agents::prepare_reporting(def.reports, &dir, theirs) else {
+    let Ok(launch) = agents::prepare_launch(def.integration, &dir, mcp.as_ref(), own, theirs) else {
         return Vec::new();
     };
-    args.extend(reporting.args);
-    let mut env = reporting.env;
-    if reporting.posts {
-        env.push(("VILLAIN_HOOK_URL".into(), url));
-        env.push(("VILLAIN_HOOK_TOKEN".into(), endpoint.token.clone()));
-    }
+    args.extend(launch.args);
+    let mut env = launch.env;
+    env.push(("VILLAIN_HOOK_URL".into(), url));
+    env.push(("VILLAIN_HOOK_TOKEN".into(), endpoint.token.clone()));
     env
 }
 
@@ -352,8 +356,14 @@ pub(crate) fn chat_room(state: &AppState, id: &str) -> Result<PathBuf> {
 }
 
 /// Everything the app itself writes into a task folder.
-pub(crate) const GENERATED_FILES: &[&str] =
-    &["CLAUDE.md", "AGENTS.md", ".mcp.json", "PR_DESCRIPTION.md", super::github::FEEDBACK_FILE];
+pub(crate) const GENERATED_FILES: &[&str] = &[
+    "CLAUDE.md",
+    "AGENTS.md",
+    ".mcp.json",
+    "PR_DESCRIPTION.md",
+    super::github::FEEDBACK_FILE,
+    ".gemini/settings.json",
+];
 
 /// Where generated agent files (`.mcp.json`, context) may safely be written.
 ///
@@ -561,7 +571,7 @@ pub(crate) fn open_chat(
 
     // Resuming hands the conversation back to the CLI, so an opening prompt
     // would only talk over it.
-    let (args, initial_input) = if resume {
+    let (mut args, initial_input) = if resume {
         let flags = def.resume_args.ok_or_else(|| {
             Error::Other(format!("{} cannot resume a previous session", def.name))
         })?;
@@ -571,6 +581,8 @@ pub(crate) fn open_chat(
     };
 
     pretrust_own_dir(state, &agent_id, &dir.to_string_lossy());
+    // The chat's folder is the app's own, so it can hold what a CLI needs.
+    let env = plug_in(app, def, &mut args, Some(&dir));
 
     let pane = state.ptys.spawn(
         app,
@@ -587,8 +599,8 @@ pub(crate) fn open_chat(
             cols: None,
             prompted: prompt.is_some() && !resume,
             initial_input,
-            env: Vec::new(),
-            title_activity: None,
+            env,
+            title_activity: agents::title_reader(def.integration),
         },
     )?;
     remember_pane(state, &pane);

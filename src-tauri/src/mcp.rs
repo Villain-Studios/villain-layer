@@ -38,6 +38,10 @@ pub fn endpoint() -> Option<&'static Endpoint> {
     ENDPOINT.get()
 }
 
+/// What the server is called in every config that names it. Claude Code's
+/// approval of it is recorded under this name, so it must not change.
+pub const SERVER_NAME: &str = "villain-layer";
+
 /// Where an agent's hooks report what it is doing: `<this>/<pane id>`.
 pub fn hook_url() -> Option<String> {
     endpoint().map(|e| format!("{}/hook", e.url.trim_end_matches("/mcp")))
@@ -48,7 +52,7 @@ pub fn mcp_json() -> Option<Value> {
     let e = endpoint()?;
     Some(json!({
         "mcpServers": {
-            "villain-layer": {
+            SERVER_NAME: {
                 "type": "http",
                 "url": e.url,
                 "headers": { "Authorization": format!("Bearer {}", e.token) }
@@ -166,7 +170,7 @@ pub(crate) fn take_hook(ptys: &crate::pty::PtyManager, pane: &str, payload: &Val
         return false;
     };
     let now = ptys.reported(pane);
-    crate::agents::hook_activity(def.reports, payload, now)
+    crate::agents::hook_activity(def.integration, payload, now)
         .is_some_and(|activity| matches!(ptys.report(pane, activity), Ok(true)))
 }
 

@@ -606,10 +606,16 @@ export function taskReview(rows: CheckoutPr[]): TaskReview {
   // Merged is the last word: a "changes requested" left outstanding on a PR
   // that landed anyway is history, not something still to answer.
   if (live.every((r) => r.pr!.merged)) return "merged";
-  if (live.some((r) => r.verdict === "changes_requested")) return "changes_requested";
+  // Verdicts only from the open ones. A merged PR's reviews are not fetched,
+  // so its verdict is "none" — and asking every live row to be approved made
+  // "approved" unreachable for a task with any repo merged.
+  const open = live.filter((r) => r.pr!.state === "open");
+  if (open.some((r) => r.verdict === "changes_requested")) return "changes_requested";
+  // For a merged repo, `changed` counts from what it landed, so this is work
+  // committed after the merge.
   if (rows.some((r) => (!r.pr || r.pr.state !== "open") && r.changed > 0)) return "incomplete";
-  if (live.every((r) => r.verdict === "approved")) return "approved";
-  if (live.some((r) => r.verdict === "commented")) return "commented";
+  if (open.every((r) => r.verdict === "approved")) return "approved";
+  if (open.some((r) => r.verdict === "commented")) return "commented";
   return "open";
 }
 

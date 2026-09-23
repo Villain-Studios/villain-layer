@@ -22,6 +22,9 @@ pub struct PullRequest {
     pub draft: bool,
     pub author: String,
     pub head: String,
+    /// The commit the PR's branch pointed at on GitHub. For a merged PR, what
+    /// landed: work after it is what still needs a PR.
+    pub head_sha: String,
     pub base: String,
     pub url: String,
     pub mergeable_state: Option<String>,
@@ -560,6 +563,11 @@ fn to_pr(v: &Value) -> PullRequest {
             .to_string(),
         head: v
             .pointer("/head/ref")
+            .and_then(|r| r.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        head_sha: v
+            .pointer("/head/sha")
             .and_then(|r| r.as_str())
             .unwrap_or_default()
             .to_string(),

@@ -378,13 +378,24 @@ pub fn changed_count(
     scope: Scope,
 ) -> usize {
     let merge_base = compare_against(dir, base, base_commit, scope);
-    let tracked = run(dir, &["diff", "--name-only", &merge_base])
+    changed_count_from(dir, &merge_base)
+}
+
+/// `changed_count` measured from any revision: files that differ from it,
+/// committed or not, plus untracked ones.
+pub fn changed_count_from(dir: &Path, rev: &str) -> usize {
+    let tracked = run(dir, &["diff", "--name-only", rev])
         .map(|o| o.lines().filter(|l| !l.trim().is_empty()).count())
         .unwrap_or(0);
     let untracked = run(dir, &["ls-files", "--others", "--exclude-standard"])
         .map(|o| o.lines().filter(|l| !l.trim().is_empty()).count())
         .unwrap_or(0);
     tracked + untracked
+}
+
+/// Whether `rev` names a commit this repository has.
+pub fn has_commit(dir: &Path, rev: &str) -> bool {
+    !rev.is_empty() && !rev.starts_with('-') && run(dir, &["cat-file", "-e", &format!("{rev}^{{commit}}")]).is_ok()
 }
 
 /// What the diff is measured against.

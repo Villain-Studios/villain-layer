@@ -200,6 +200,8 @@ export interface PullRequest {
   draft: boolean;
   author: string;
   head: string;
+  /** The commit the branch was at on GitHub; for a merged PR, what landed. */
+  head_sha: string;
   base: string;
   url: string;
   mergeable_state: string | null;
@@ -238,6 +240,7 @@ export interface CheckoutPr {
   verdict: Verdict;
   /** Where this repo's next PR is opened against; may differ from pr.base. */
   base: string;
+  /** Files changed on the branch — or, once its PR has merged, since what it landed. */
   changed: number;
   error: string | null;
 }

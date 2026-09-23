@@ -69,6 +69,8 @@ pub struct CheckoutPr {
     /// keeps whatever base it was created with until it is retargeted, so
     /// this and `pr.base` can differ, and the panel says so when they do.
     pub base: String,
+    /// Files changed on the branch — or, once its PR has merged, since what
+    /// the PR landed.
     pub changed: usize,
     pub error: Option<String>,
 }
@@ -438,6 +440,25 @@ pub(crate) async fn task_prs(
                                 // sweep, for as long as the task is kept — which
                                 // is what keeps a dozen done tasks from eating
                                 // the API budget the open ones need.
+                                //
+                                // A merged one covers everything up to what it
+                                // landed. Counted from the branch point, a repo
+                                // whose PR had merged never went back to zero, so
+                                // a task with one repo merged and another in
+                                // review read "partly up for review, one repo
+                                // still without a PR".
+                                if found.merged {
+                                    let (dir, sha) =
+                                        (PathBuf::from(&checkout.path), found.head_sha.clone());
+                                    if let Ok(Some(n)) = off_runtime(move || {
+                                        git::has_commit(&dir, &sha)
+                                            .then(|| git::changed_count_from(&dir, &sha))
+                                    })
+                                    .await
+                                    {
+                                        row.changed = n;
+                                    }
+                                }
                                 row.pr = Some(found);
                             }
                             row.past = all;

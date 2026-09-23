@@ -29,7 +29,9 @@ fn command(dir: &Path, args: &[&str]) -> Command {
     cmd
 }
 
-pub fn run(dir: &Path, args: &[&str]) -> Result<String> {
+/// Private on purpose: a hand-written argument list elsewhere skips the flags
+/// this file adds against the user's own git config. Add a named function.
+fn run(dir: &Path, args: &[&str]) -> Result<String> {
     let out = command(dir, args)
         .output()
         .map_err(|e| {
@@ -52,6 +54,12 @@ pub fn run(dir: &Path, args: &[&str]) -> Result<String> {
         }));
     }
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+/// For other modules' test fixtures, which need a real repository to stand on.
+#[cfg(test)]
+pub fn run_for_tests(dir: &Path, args: &[&str]) -> Result<String> {
+    run(dir, args)
 }
 
 pub fn repo_root(dir: &Path) -> Result<String> {
@@ -706,6 +714,27 @@ pub fn commits_since(
             Some(CommitInfo { sha, short, subject })
         })
         .collect())
+}
+
+/// `git diff --stat` from `from` to the worktree, for a summary of the change.
+pub fn diff_stat(dir: &Path, from: &str) -> Result<String> {
+    run(dir, &["diff", "--no-color", "--no-ext-diff", "--stat", from])
+}
+
+/// The patch from `from` to the worktree, leaving out the `excluded` pathspecs
+/// (`:!*.lock`). `--no-ext-diff` for the same reason as `file_diff`.
+pub fn diff_patch(dir: &Path, from: &str, excluded: &[&str]) -> Result<String> {
+    let mut args = vec!["diff", "--no-color", "--no-ext-diff", from];
+    if !excluded.is_empty() {
+        args.extend_from_slice(&["--", "."]);
+        args.extend_from_slice(excluded);
+    }
+    run(dir, &args)
+}
+
+/// Forget worktrees whose folders were removed by hand.
+pub fn prune_worktrees(repo: &Path) -> Result<()> {
+    run(repo, &["worktree", "prune"]).map(|_| ())
 }
 
 /// Files changed in a single commit, with the same shape as `changed_files`.

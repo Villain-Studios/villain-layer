@@ -66,6 +66,16 @@ where
         .map_err(|e| crate::error::Error::Other(format!("background work failed: {e}")))?
 }
 
+/// `blocking` for work that needs no `AppState`: the same pool, for the same
+/// reason.
+pub(crate) async fn off_runtime<T: Send + 'static>(
+    f: impl FnOnce() -> T + Send + 'static,
+) -> crate::error::Result<T> {
+    tauri::async_runtime::spawn_blocking(f)
+        .await
+        .map_err(|e| crate::error::Error::Other(format!("background work failed: {e}")))
+}
+
 /// Queue a notice for the UI. Emitting at startup is useless — the webview has
 /// not subscribed yet — so everything goes through the pending list and the
 /// frontend drains it when it is ready.
@@ -324,12 +334,12 @@ mod tests {
                 0 | 1 => {
                     let repo = sandbox.join(format!("repo{i}"));
                     std::fs::create_dir_all(&repo).unwrap();
-                    crate::git::run(&repo, &["init", "-q", "-b", "main"]).unwrap();
-                    crate::git::run(&repo, &["config", "user.email", "t@villain.local"]).unwrap();
-                    crate::git::run(&repo, &["config", "user.name", "Test"]).unwrap();
+                    crate::git::run_for_tests(&repo, &["init", "-q", "-b", "main"]).unwrap();
+                    crate::git::run_for_tests(&repo, &["config", "user.email", "t@villain.local"]).unwrap();
+                    crate::git::run_for_tests(&repo, &["config", "user.name", "Test"]).unwrap();
                     std::fs::write(repo.join("tracked.txt"), "x\n").unwrap();
-                    crate::git::run(&repo, &["add", "-A"]).unwrap();
-                    crate::git::run(&repo, &["commit", "-qm", "init"]).unwrap();
+                    crate::git::run_for_tests(&repo, &["add", "-A"]).unwrap();
+                    crate::git::run_for_tests(&repo, &["commit", "-qm", "init"]).unwrap();
                     for n in 0..i {
                         std::fs::write(repo.join(format!("new{n}.txt")), "y\n").unwrap();
                     }

@@ -470,14 +470,14 @@ pub(crate) fn review_context(repos: &[Reviewed]) -> String {
         let merge_base = git::baseline(&dir, &checkout.base, checkout.base_commit.as_deref());
 
         out.push_str(&format!("\n## {repo}\n\n"));
-        if let Ok(log) = git::run(&dir, &["log", "--no-color", "--format=- %s", &format!("{merge_base}..HEAD")]) {
-            if !log.trim().is_empty() {
-                out.push_str("Commits:\n");
-                out.push_str(log.trim());
-                out.push('\n');
+        let commits = git::commits_since(&dir, &checkout.base, checkout.base_commit.as_deref()).unwrap_or_default();
+        if !commits.is_empty() {
+            out.push_str("Commits:\n");
+            for c in &commits {
+                out.push_str(&format!("- {}\n", c.subject));
             }
         }
-        if let Ok(stat) = git::run(&dir, &["diff", "--no-color", "--stat", &merge_base]) {
+        if let Ok(stat) = git::diff_stat(&dir, &merge_base) {
             if !stat.trim().is_empty() {
                 out.push_str("\nFiles changed:\n```\n");
                 out.push_str(stat.trim());
@@ -485,14 +485,12 @@ pub(crate) fn review_context(repos: &[Reviewed]) -> String {
             }
         }
 
-        let mut args = vec!["diff", "--no-color", &merge_base, "--", "."];
-        args.extend_from_slice(GENERATED);
-        let mut patch = git::run(&dir, &args).unwrap_or_default();
+        let mut patch = git::diff_patch(&dir, &merge_base, GENERATED).unwrap_or_default();
         if patch.trim().is_empty() {
             // A dependency bump is all generated files. Filtering them out
             // would leave nothing to describe, so in that case they are the
             // change and the whole diff goes through.
-            patch = git::run(&dir, &["diff", "--no-color", &merge_base]).unwrap_or_default();
+            patch = git::diff_patch(&dir, &merge_base, &[]).unwrap_or_default();
         }
         if !patch.trim().is_empty() {
             diff.push_str(&format!("\n### {repo}\n\n```diff\n{}\n```\n", patch.trim()));
@@ -918,19 +916,15 @@ pub async fn handoff_prompt(state: State<'_, AppState>, pane_id: String) -> Resu
             (repo, c)
         })
         .collect();
-    let history = tokio::task::spawn_blocking(move || {
+    let history = super::off_runtime(move || {
         let mut out = String::new();
         for (repo, checkout) in checkouts {
             let dir = PathBuf::from(&checkout.path);
             // From the branch point, like the file list under it: measured
             // against the base branch itself, every commit merged in from
             // elsewhere since would be listed as this branch's own work.
-            let point = git::baseline(&dir, &checkout.base, checkout.base_commit.as_deref());
-            let commits = git::run(
-                &dir,
-                &["log", "--oneline", "--no-decorate", &format!("{point}..HEAD")],
-            )
-            .unwrap_or_default();
+            let commits = git::commits_since(&dir, &checkout.base, checkout.base_commit.as_deref())
+                .unwrap_or_default();
             let files = git::changed_files(
                 &dir,
                 &checkout.base,
@@ -939,14 +933,14 @@ pub async fn handoff_prompt(state: State<'_, AppState>, pane_id: String) -> Resu
             )
             .unwrap_or_default();
 
-            if commits.trim().is_empty() && files.is_empty() {
+            if commits.is_empty() && files.is_empty() {
                 continue;
             }
             out.push_str(&format!("### {repo}\n"));
-            if !commits.trim().is_empty() {
+            if !commits.is_empty() {
                 out.push_str("\nCommits on this branch:\n");
-                for line in commits.lines() {
-                    out.push_str(&format!("- {line}\n"));
+                for c in &commits {
+                    out.push_str(&format!("- {} {}\n", c.short, c.subject));
                 }
             }
             if !files.is_empty() {
@@ -959,8 +953,7 @@ pub async fn handoff_prompt(state: State<'_, AppState>, pane_id: String) -> Resu
         }
         out
     })
-    .await
-    .map_err(|e| Error::Other(format!("background work failed: {e}")))?;
+    .await?;
     if history.is_empty() {
         out.push_str("Nothing has been committed or changed yet.\n\n");
     } else {

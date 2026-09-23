@@ -15,7 +15,7 @@ use super::diff::RepoResult;
 use super::jira::{jira_client, stored_or};
 use super::panes::agent_file_dir;
 use super::slack::{record_post, slack_for};
-use super::AppState;
+use super::{off_runtime, AppState};
 
 // ------------------------------------------------------------------ github
 
@@ -236,13 +236,6 @@ pub async fn github_all_prs(state: State<'_, AppState>) -> Result<Vec<TaskPrs>> 
         .collect::<Vec<_>>()
         .await;
     Ok(out)
-}
-
-/// Blocking work — git, mostly — from an async command, on the blocking pool.
-async fn off_runtime<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Result<T> {
-    tokio::task::spawn_blocking(f)
-        .await
-        .map_err(|e| Error::Other(format!("background work failed: {e}")))
 }
 
 /// How many tasks the PR sweep asks GitHub about at once.

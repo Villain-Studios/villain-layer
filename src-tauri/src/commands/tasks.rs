@@ -713,7 +713,7 @@ fn remove_checkout_inner(state: &AppState, checkout_id: String, force: bool) -> 
         git::remove_worktree(&repo, &checkout.path, force)?;
     } else {
         // Already removed by hand; just tidy the admin files.
-        let _ = git::run(&repo, &["worktree", "prune"]);
+        let _ = git::prune_worktrees(&repo);
     }
 
     state
@@ -903,7 +903,7 @@ fn delete_task_inner(state: &AppState, id: String, force: bool) -> Result<Vec<Re
         let path = PathBuf::from(&checkout.path);
         let (ok, detail) = if !path.exists() {
             // Already removed by hand; just tidy the admin files.
-            let _ = git::run(&PathBuf::from(&project.path), &["worktree", "prune"]);
+            let _ = git::prune_worktrees(&PathBuf::from(&project.path));
             (true, "already gone".to_string())
         } else {
             match git::remove_worktree(&PathBuf::from(&project.path), &checkout.path, force) {

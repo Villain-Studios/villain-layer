@@ -675,6 +675,14 @@ impl PtyManager {
             Reserved(&self.starting)
         };
 
+        // portable-pty starts a child whose folder is missing in $HOME instead,
+        // without a word. A worktree deleted by hand then got `claude
+        // --continue` in the home folder — resuming the wrong conversation, or
+        // walking out into Photos and Downloads.
+        if !std::path::Path::new(&opts.cwd).is_dir() {
+            return Err(Error::Pty(format!("{} no longer exists", opts.cwd)));
+        }
+
         let system = portable_pty::native_pty_system();
         let size = PtySize {
             rows: opts.rows.unwrap_or(30),
@@ -713,14 +721,24 @@ impl PtyManager {
             .map_err(|e| Error::Pty(format!("spawn {}: {e}", opts.program)))?;
         drop(pair.slave);
 
-        let reader = pair
+        // Started but not yet anyone's: failing past here must not leave it
+        // running with nothing able to see or stop it.
+        let ends = pair
             .master
             .try_clone_reader()
-            .map_err(|e| Error::Pty(format!("clone reader: {e}")))?;
-        let mut writer = pair
-            .master
-            .take_writer()
-            .map_err(|e| Error::Pty(format!("take writer: {e}")))?;
+            .map_err(|e| Error::Pty(format!("clone reader: {e}")))
+            .and_then(|r| {
+                let w = pair.master.take_writer().map_err(|e| Error::Pty(format!("take writer: {e}")))?;
+                Ok((r, w))
+            });
+        let (reader, mut writer) = match ends {
+            Ok(ends) => ends,
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(e);
+            }
+        };
         let killer = child.clone_killer();
 
         let (input, keys) = std::sync::mpsc::channel::<Vec<u8>>();
@@ -1013,9 +1031,9 @@ impl PtyManager {
 
     /// Ask the process group to stop, and only insist if it will not.
     ///
-    /// This matters more than it looks: `ChildKiller::kill` is SIGKILL, which
-    /// an agent cannot catch, so it dies without writing its transcript — and
-    /// that transcript is the only thing that makes a session resumable later.
+    /// This matters more than it looks: insisting is SIGKILL, which an agent
+    /// cannot catch, so it dies without writing its transcript — and that
+    /// transcript is the only thing that makes a session resumable later.
     fn request_stop(pane: &Pane) {
         pane.meta.lock().stopping = true;
         if let Some(pid) = pane.pid {
@@ -1035,6 +1053,24 @@ impl PtyManager {
         }
     }
 
+    /// Insist, once asking has not worked.
+    ///
+    /// Not portable-pty's `ChildKiller::kill`: that is a SIGHUP to the leader
+    /// alone, which the agent that ignored SIGTERM ignores too. The pane was
+    /// taken off the list regardless, and the agent ran on out of sight —
+    /// uncounted by the pane cap, in a worktree about to be deleted under it.
+    fn force_kill(pane: &Pane) {
+        match pane.pid {
+            #[cfg(unix)]
+            Some(pid) => unsafe {
+                libc::kill(-(pid as i32), libc::SIGKILL);
+            },
+            _ => {
+                let _ = pane.killer.lock().kill();
+            }
+        }
+    }
+
     fn wait_for_exit(pane: &Pane, deadline: std::time::Instant) -> bool {
         while std::time::Instant::now() < deadline {
             if !pane.meta.lock().info.running {
@@ -1051,7 +1087,7 @@ impl PtyManager {
         }
         Self::request_stop(pane);
         if !Self::wait_for_exit(pane, std::time::Instant::now() + grace) {
-            let _ = pane.killer.lock().kill();
+            Self::force_kill(pane);
         }
     }
 
@@ -1095,7 +1131,7 @@ impl PtyManager {
         }
         for pane in &panes {
             if pane.meta.lock().info.running {
-                let _ = pane.killer.lock().kill();
+                Self::force_kill(pane);
             }
         }
     }
@@ -1171,7 +1207,7 @@ impl PtyManager {
         }
         for pane in &panes {
             if pane.meta.lock().info.running {
-                let _ = pane.killer.lock().kill();
+                Self::force_kill(pane);
             }
         }
     }
@@ -1548,6 +1584,58 @@ mod tests {
             "closing a shell took {:?}",
             started.elapsed()
         );
+    }
+
+    /// An agent that ignores being asked is still stopped, with its
+    /// subprocesses: insisting used to be a hangup, which it ignored as well,
+    /// and it ran on after its pane was gone.
+    #[test]
+    fn a_pane_that_ignores_its_signals_is_still_killed() {
+        let app = tauri::test::mock_app();
+        let ptys = PtyManager::default();
+        let dir = std::env::temp_dir().join(format!("villain-stubborn-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pidfile = dir.join("pid");
+        let opts = |cwd: String| SpawnOptions {
+            task_id: "t".into(),
+            checkout_id: None,
+            cwd,
+            kind: PaneKind::Agent,
+            title: "t".into(),
+            program: "/bin/sh".into(),
+            args: vec![
+                "-c".into(),
+                format!("trap '' TERM HUP; echo $$ > '{}'; while :; do sleep 1; done", pidfile.display()),
+            ],
+            agent_id: None,
+            rows: None,
+            cols: None,
+            initial_input: None,
+            prompted: false,
+            env: Vec::new(),
+            title_activity: None,
+        };
+
+        let gone = dir.join("gone").to_string_lossy().to_string();
+        let err = ptys.spawn(app.handle(), opts(gone)).unwrap_err().to_string();
+        assert!(err.contains("no longer exists"), "{err}");
+
+        let pane = ptys.spawn(app.handle(), opts(dir.to_string_lossy().to_string())).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let pid: i32 = loop {
+            if let Some(pid) = std::fs::read_to_string(&pidfile).ok().and_then(|s| s.trim().parse().ok()) {
+                break pid;
+            }
+            assert!(Instant::now() < deadline, "the script never started");
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        ptys.close(&pane.id).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while unsafe { libc::kill(pid, 0) } == 0 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_ne!(unsafe { libc::kill(pid, 0) }, 0, "pid {pid} is still running");
+        std::fs::remove_dir_all(dir).ok();
     }
 
     /// The cap holds when spawns race: forty at once from separate threads,

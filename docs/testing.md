@@ -112,9 +112,12 @@ bun run dev:app        # dev build: its own config folder and keychain item
 ```
 
 The dev build is `Villain Layer Dev` (`dev.villain.layer.dev`). It starts
-empty, with nothing connected. It can run next to the installed app, since
-they share nothing. Quit it before `cargo` rebuilds under it, or relinking
-kills it and its agents.
+empty, with nothing connected, and has its own config and keychain item, so
+it can run next to the installed app. One thing both default to is the task
+folder location, `~/.villain-worktrees`: set the dev build's to something
+else (Settings → General, for example `~/.villain-worktrees-dev`), so their
+task folders and chat rooms stay apart. Quit it before `cargo` rebuilds under
+it, or relinking kills it and its agents.
 
 ```bash
 bun run release:mac    # refuses while the installed app is running

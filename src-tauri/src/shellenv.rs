@@ -50,6 +50,15 @@ pub fn user_env() -> &'static HashMap<String, String> {
     })
 }
 
+/// The login shell's PATH if it has already been asked for, without waiting.
+///
+/// For git, which runs from the first moment of a launch: a poll should not
+/// sit behind a 300ms interactive shell, but a commit hook that needs node or
+/// a Homebrew tool should find it once the answer is in.
+pub fn path_if_ready() -> Option<&'static str> {
+    ENV.get().and_then(|env| env.get("PATH")).map(String::as_str)
+}
+
 pub fn path() -> String {
     user_env()
         .get("PATH")

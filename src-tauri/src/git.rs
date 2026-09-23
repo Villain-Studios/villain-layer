@@ -9,9 +9,21 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, Result};
 
 pub fn run(dir: &Path, args: &[&str]) -> Result<String> {
-    let out = Command::new("git")
-        .args(args)
+    let mut cmd = Command::new("git");
+    cmd.args(args)
         .current_dir(dir)
+        // The status poll runs beside agents committing in the same worktree.
+        // Without this, `git status` refreshes the index as a side effect and
+        // takes index.lock to do it, and an agent's own `git commit` landing
+        // in that moment fails with "index.lock: File exists".
+        .env("GIT_OPTIONAL_LOCKS", "0");
+    // A GUI app's PATH is /usr/bin:/bin. Hooks run with git's environment, so
+    // a husky or lint-staged hook that needs node — or git-lfs on checkout —
+    // failed here while working in a terminal.
+    if let Some(path) = crate::shellenv::path_if_ready() {
+        cmd.env("PATH", path);
+    }
+    let out = cmd
         .output()
         .map_err(|e| {
             // The common cause is a missing working directory, not a missing

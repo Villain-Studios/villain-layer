@@ -701,10 +701,22 @@ pub fn restore_panes(app: &AppHandle) {
         // before or after the webview is listening.
         super::push_notice(&state, "info", text);
     }
-    // The list is rebuilt as each pane comes back with a new id, and only then
-    // written. Clearing it up front meant a restore that failed — or an app
-    // killed part-way through one — lost the record of what had been open.
-    let _ = state.config.update(|c| c.saved_panes.clear());
+    // The list is rebuilt as each pane comes back with a new id: its old
+    // entry is taken off only then. Clearing it up front meant a restore that
+    // failed — or an app killed part-way through one — lost the record of
+    // what had been open. Only what is over the limit goes now, as the notice
+    // above says.
+    let attempted: std::collections::HashSet<String> = saved.iter().map(|p| p.id.clone()).collect();
+    let _ = state.config.update(|c| c.saved_panes.retain(|p| attempted.contains(&p.id)));
+    let forget = |id: &str| {
+        let _ = state.config.update(|c| c.saved_panes.retain(|p| p.id != id));
+    };
+
+    // Which agent has already resumed in which folder this restore. Two
+    // agents in one folder both ran `--continue`, which picks the newest
+    // conversation there: both came back as the same one, writing into one
+    // transcript, and the other conversation was not resumed at all.
+    let mut resumed: std::collections::HashSet<(String, String)> = Default::default();
 
     for pane in saved {
         // Chats belong to no task: they live in their own folder, so they are
@@ -725,30 +737,46 @@ pub fn restore_panes(app: &AppHandle) {
                 })
                 .unwrap_or(false);
             // No remember_pane here: spawning records the pane itself.
-            if let Err(e) = open_chat(app, &state, agent_id, None, room, resume) {
-                eprintln!("could not restore a chat: {e}");
+            match open_chat(app, &state, agent_id, None, room, resume) {
+                Ok(_) => forget(&pane.id),
+                Err(e) => eprintln!("could not restore a chat: {e}"),
             }
             continue;
         }
         if state.config.task(&pane.task_id).is_err() {
+            forget(&pane.id);
             continue;
         }
         let restored = match pane.kind.as_str() {
             "agent" => {
                 let Some(agent_id) = pane.agent_id.clone() else {
+                    forget(&pane.id);
                     continue;
                 };
                 // Only resume if there is a conversation to resume.
                 let Ok(task) = state.config.task(&pane.task_id) else {
+                    forget(&pane.id);
                     continue;
                 };
-                let resume = resolve_scope(&state, &task, pane.checkout_id.as_deref())
-                    .map(|(cwd, _, _)| {
-                        resumable_for(&state, &task, &cwd)
-                            .iter()
-                            .any(|r| r.agent_id == agent_id)
-                    })
-                    .unwrap_or(false);
+                let found = resolve_scope(&state, &task, pane.checkout_id.as_deref()).ok().and_then(
+                    |(cwd, _, _)| {
+                        // Where the agent will actually start. One pinned to
+                        // a repo runs there, not wherever `resume_dir` would
+                        // pick — so looking across the whole task found
+                        // conversations it would then not be started beside,
+                        // and `--continue` in its own folder had none.
+                        let (dir, sessions) = if pane.checkout_id.is_some() {
+                            (cwd.clone(), agents::resumable(&cwd))
+                        } else {
+                            (resume_dir(&state, &task, &agent_id, &cwd), resumable_for(&state, &task, &cwd))
+                        };
+                        sessions.iter().any(|r| r.agent_id == agent_id).then_some(dir)
+                    },
+                );
+                let resume = match found {
+                    Some(dir) => resumed.insert((agent_id.clone(), dir)),
+                    None => false,
+                };
 
                 start_agent(
                     app,
@@ -766,9 +794,11 @@ pub fn restore_panes(app: &AppHandle) {
         };
 
         // Likewise: the spawn recorded it, so recording it again here is what
-        // made every restart double the list.
-        if let Err(e) = restored {
-            eprintln!("could not restore a pane: {e}");
+        // made every restart double the list. A pane that did not come back
+        // keeps its entry, to be tried again next launch.
+        match restored {
+            Ok(_) => forget(&pane.id),
+            Err(e) => eprintln!("could not restore a pane: {e}"),
         }
     }
 }

@@ -117,11 +117,21 @@ pub fn set_worktree_root(state: State<AppState>, path: Option<String>) -> Result
         .update(|c| c.worktree_root = path.filter(|p| !p.trim().is_empty()))
 }
 
+/// Off the command thread: deleting the token goes through the keychain,
+/// which can stop and ask — and the window froze behind the prompt.
 #[tauri::command]
-pub fn disconnect(state: State<AppState>, which: String) -> Result<()> {
-    match which.as_str() {
+pub async fn disconnect(app: AppHandle, which: String) -> Result<()> {
+    super::blocking(app, move |state| disconnect_inner(state, &which)).await
+}
+
+fn disconnect_inner(state: &AppState, which: &str) -> Result<()> {
+    match which {
         "jira" => {
             secrets::delete(secrets::JIRA)?;
+            // What was learned about that site goes with it; reconnecting to
+            // another one should not be told the old one's issue types.
+            *state.jira_types.lock() = None;
+            *state.epic_field_missing.lock() = None;
             state.config.update(|c| c.jira = None)
         }
         "github" => {
@@ -163,8 +173,15 @@ fn cursor_ide_present() -> bool {
 
 /// Open a folder in Cursor IDE. Prefers the `cursor` CLI (opens as a window);
 /// falls back to launching the .app on macOS.
+///
+/// Off the command thread: finding the CLI can wait on the login shell, and
+/// `open -a` is waited on until Launch Services answers.
 #[tauri::command]
-pub fn open_in_cursor(path: String) -> Result<()> {
+pub async fn open_in_cursor(app: AppHandle, path: String) -> Result<()> {
+    super::blocking(app, move |_| open_in_cursor_inner(path)).await
+}
+
+fn open_in_cursor_inner(path: String) -> Result<()> {
     let dir = PathBuf::from(&path);
     if !dir.is_dir() {
         return Err(Error::NotFound(format!("folder {path}")));
@@ -203,7 +220,7 @@ mod cursor_tests {
 
     #[test]
     fn missing_folder_is_not_found() {
-        let err = open_in_cursor("/no/such/cursor/folder/ever".into()).unwrap_err();
+        let err = open_in_cursor_inner("/no/such/cursor/folder/ever".into()).unwrap_err();
         assert!(matches!(err, Error::NotFound(_)));
     }
 

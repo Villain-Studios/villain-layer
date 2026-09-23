@@ -103,13 +103,22 @@ pub fn get(key: &str) -> Result<Option<String>> {
     Ok(load()?.get(key).cloned())
 }
 
+/// Held across a read-change-write of the bundle.
+///
+/// Every token is in one item, so a change is read, edit, write back — and
+/// two at once, connecting Jira while GitHub reconnects, each wrote back the
+/// bundle it had read, and whichever landed second erased the other token.
+static WRITING: Mutex<()> = Mutex::new(());
+
 pub fn set(key: &str, secret: &str) -> Result<()> {
+    let _writing = WRITING.lock();
     let mut bundle = load()?;
     bundle.insert(key.to_string(), secret.to_string());
     store(bundle)
 }
 
 pub fn delete(key: &str) -> Result<()> {
+    let _writing = WRITING.lock();
     let mut bundle = load()?;
     bundle.remove(key);
     store(bundle)

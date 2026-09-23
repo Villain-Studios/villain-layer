@@ -201,6 +201,35 @@ export function TicketsView() {
     }
   }
 
+  // Memoised: up to 500 issues are filtered and grouped here, and this view
+  // also redraws for things that change none of them — a menu opening, a
+  // ticket syncing, a task poll.
+  const q = query.trim().toLowerCase();
+  const filtered = useMemo(
+    () =>
+      issues.filter(
+        (i) =>
+          (kinds.length === 0 || kinds.includes(i.issue_type)) &&
+          (!q ||
+            i.key.toLowerCase().includes(q) ||
+            i.summary.toLowerCase().includes(q) ||
+            i.labels.some((l) => l.toLowerCase().includes(q)) ||
+            i.components.some((c) => c.toLowerCase().includes(q))),
+      ),
+    [issues, kinds, q],
+  );
+  const taskByKey = useMemo(() => {
+    // The first task for a ticket wins, as it did when this was a find().
+    const m = new Map<string, string>();
+    for (const t of tasks) if (t.issue_key && !m.has(t.issue_key)) m.set(t.issue_key, t.id);
+    return m;
+  }, [tasks]);
+  const epics = useMemo(
+    () => groupByEpic(filtered, new Set(taskByKey.keys())),
+    [filtered, taskByKey],
+  );
+  const taskFor = (key: string) => taskByKey.get(key) ?? null;
+
   if (!settings) {
     return (
       <div className="empty">
@@ -219,22 +248,6 @@ export function TicketsView() {
     );
   }
 
-  const q = query.trim().toLowerCase();
-  const matchesKind = (i: JiraIssue) => kinds.length === 0 || kinds.includes(i.issue_type);
-  const filtered = issues.filter(
-    (i) =>
-      matchesKind(i) &&
-      (!q ||
-        i.key.toLowerCase().includes(q) ||
-        i.summary.toLowerCase().includes(q) ||
-        i.labels.some((l) => l.toLowerCase().includes(q)) ||
-        i.components.some((c) => c.toLowerCase().includes(q))),
-  );
-  const taskFor = (key: string) => tasks.find((t) => t.issue_key === key)?.id ?? null;
-  const started = new Set(
-    tasks.map((t) => t.issue_key).filter((k): k is string => !!k),
-  );
-  const epics = groupByEpic(filtered, started);
   // Collapsed is stored per epic, so "all" means every one currently listed —
   // which is what a filter has narrowed things to, not the whole board.
   const allShut = epics.length > 0 && epics.every((e) => shut[e.key] ?? false);

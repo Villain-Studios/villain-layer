@@ -12,6 +12,7 @@ import {
   reviewIdentity,
 } from "./lib/notify";
 import { CHAT_TASK_ID, selectedTask, taskTotals, useStore, type View } from "./store";
+import type { TaskView } from "./lib/types";
 import { Sidebar } from "./components/Sidebar";
 import { Terminals } from "./components/Terminals";
 import { DiffView } from "./components/DiffView";
@@ -24,23 +25,33 @@ import { ReviewsView } from "./components/ReviewsView";
 import { Settings } from "./components/Settings";
 import { GearIcon, SidebarToggle } from "./components/ui";
 
-export default function App() {
-  const task = useStore(selectedTask);
-  const view = useStore((s) => s.view);
-  const tab = useStore((s) => s.tab);
-  const settingsOpen = useStore((s) => s.settingsOpen);
-  const toasts = useStore((s) => s.toasts);
-  const watchFailing = useStore((s) => s.watchFailing);
-  const panes = useStore((s) => s.panes);
-  const issueCount = useStore((s) => s.issues.length);
-  const settings = useStore((s) => s.settings);
-  const projectCount = useStore((s) => s.projects.length);
+/**
+ * Tauri emits an unfocused event while the window is still coming up.
+ * Honouring it paused polls and kicked a catch-up list_tasks that raced the
+ * boot refresh — two full git-status sweeps on every launch.
+ *
+ * Measured from the page loading, not from the effect below: that re-runs on
+ * every change of view, and restarting the grace each time meant switching
+ * away within a couple of seconds of a click was ignored, with the polls left
+ * running behind a window nobody was looking at.
+ */
+const BOOTED_AT = Date.now();
+const BOOT_GRACE_MS = 2500;
+
+/**
+ * The polls, the event listeners and the announcements: everything the app
+ * does on its own rather than draws.
+ *
+ * Separate from what it draws so that what it listens to does not redraw the
+ * window. As one component, a pane poll landing while an agent printed —
+ * every five seconds — re-rendered whatever view was open, the whole ticket
+ * board or the whole diff included, to update a badge.
+ */
+function Watchers() {
   const prs = useStore((s) => s.prs);
   const tasks = useStore((s) => s.tasks);
-  const setView = useStore((s) => s.setView);
-  const setTab = useStore((s) => s.setTab);
-  const sidebarHidden = useStore((s) => s.sidebarHidden);
-  const toggleSettings = useStore((s) => s.toggleSettings);
+  const view = useStore((s) => s.view);
+  const githubConnected = useStore((s) => s.settings?.github_connected);
   const refreshAll = useStore((s) => s.refreshAll);
   const refreshPanes = useStore((s) => s.refreshPanes);
   const refreshPrs = useStore((s) => s.refreshPrs);
@@ -51,10 +62,8 @@ export default function App() {
   const notifyOn = useStore((s) => s.settings?.ui.system_notifications);
   const refreshTasks = useStore((s) => s.refreshTasks);
   const setAppActive = useStore((s) => s.setAppActive);
-  const dismissToast = useStore((s) => s.dismissToast);
   const toast = useStore((s) => s.toast);
   const fail = useStore((s) => s.fail);
-  const cursorIde = useStore((s) => s.cursorIde);
 
   /** The last PR state each repo was seen in, so only changes are announced. */
   const seenPrs = useRef(
@@ -82,11 +91,6 @@ export default function App() {
     let alive = true;
     let quiet = false;
     let lastInput = Date.now();
-    // Tauri emits an unfocused event while the window is still coming up.
-    // Honouring it paused polls and kicked a catch-up list_tasks that raced
-    // the boot refresh — two full git-status sweeps on every launch.
-    const bootedAt = Date.now();
-    const BOOT_GRACE_MS = 2500;
     const QUIET_AFTER_MS = 45_000;
 
     const clear = () => {
@@ -117,7 +121,7 @@ export default function App() {
 
     const setActive = (active: boolean) => {
       if (!alive) return;
-      if (!active && Date.now() - bootedAt < BOOT_GRACE_MS) return;
+      if (!active && Date.now() - BOOTED_AT < BOOT_GRACE_MS) return;
       const was = useStore.getState().appActive;
       setAppActive(active);
       if (active) {
@@ -183,16 +187,16 @@ export default function App() {
       window.removeEventListener("pointerdown", onInput);
       window.removeEventListener("keydown", onInput);
     };
-  }, [refreshTasks, refreshPanes, refreshPrs, refreshReviewQueue, setAppActive, settings?.github_connected, view]);
+  }, [refreshTasks, refreshPanes, refreshPrs, refreshReviewQueue, setAppActive, githubConnected, view]);
 
   // One sweep as soon as GitHub is available; the timer above takes it from
   // there. Kept out of the polling effect on purpose: that one re-runs on
   // every change of view, and a sweep per tab switch is four calls per open
   // pull request each time the Tickets tab is glanced at.
-  useEffect(() => { void refreshPrs(); }, [refreshPrs, settings?.github_connected]);
+  useEffect(() => { void refreshPrs(); }, [refreshPrs, githubConnected]);
   useEffect(() => {
     void refreshReviewQueue({ quiet: true });
-  }, [refreshReviewQueue, settings?.github_connected]);
+  }, [refreshReviewQueue, githubConnected]);
 
   // Reviews and tickets keep being asked about while the window is in the
   // background. The other polls stop then — a git status of every worktree is
@@ -418,19 +422,26 @@ export default function App() {
     return () => { void p.then((un) => un()); };
   }, []);
 
-  const totals = task ? taskTotals(task) : null;
-  // What the Diff tab lists by default: files with uncommitted changes. The
-  // sidebar's counts split the same work into staged, unstaged and untracked,
-  // and adding those up put a 2 beside a list of forty files.
-  const changed = totals?.changed ?? 0;
-  // Chats have their own badge, so they must not be counted as work as well.
-  const running = panes.filter(
-    (p) => p.kind === "agent" && p.running && p.task_id !== CHAT_TASK_ID,
-  ).length;
+  return null;
+}
 
-  const chats = panes.filter((p) => p.task_id === CHAT_TASK_ID).length;
-  const reviewCount =
-    (reviewQueue?.mine.length ?? 0) + (reviewQueue?.team?.prs.length ?? 0);
+/** The view switcher, with a count on each view worth one. */
+function TopBar() {
+  const view = useStore((s) => s.view);
+  const setView = useStore((s) => s.setView);
+  const toggleSettings = useStore((s) => s.toggleSettings);
+  const watchFailing = useStore((s) => s.watchFailing);
+  // Counts, not the lists: a number that has not changed is not a redraw.
+  // Chats have their own badge, so they must not be counted as work as well.
+  const running = useStore(
+    (s) => s.panes.filter((p) => p.kind === "agent" && p.running && p.task_id !== CHAT_TASK_ID).length,
+  );
+  const chats = useStore((s) => s.panes.filter((p) => p.task_id === CHAT_TASK_ID).length);
+  const issueCount = useStore((s) => s.issues.length);
+  const projectCount = useStore((s) => s.projects.length);
+  const reviewCount = useStore(
+    (s) => (s.reviewQueue?.mine.length ?? 0) + (s.reviewQueue?.team?.prs.length ?? 0),
+  );
 
   const tabs: { id: View; label: string; badge?: number }[] = [
     { id: "work", label: "Work", badge: running || undefined },
@@ -441,34 +452,159 @@ export default function App() {
   ];
 
   return (
-    <div className="shell" style={{ ["--ui-scale" as string]: settings?.ui.scale ?? 1 }}>
-      <div className="topbar">
-        <div className="topbar-left">
-          <div className="brand">villain<span>·</span>layer</div>
-        </div>
-        <div className="topbar-center">
-          {tabs.map((t) => (
-            <button
-              key={t.id}
-              className={`viewtab${view === t.id ? " active" : ""}`}
-              onClick={() => setView(t.id)}
+    <div className="topbar">
+      <div className="topbar-left">
+        <div className="brand">villain<span>·</span>layer</div>
+      </div>
+      <div className="topbar-center">
+        {tabs.map((t) => (
+          <button
+            key={t.id}
+            className={`viewtab${view === t.id ? " active" : ""}`}
+            onClick={() => setView(t.id)}
+          >
+            {t.label}
+            {t.badge !== undefined && <span className="badge">{t.badge}</span>}
+          </button>
+        ))}
+      </div>
+      <div className="topbar-right">
+        {watchFailing && (
+          <span className="watch-chip" title="Task and pane polls are failing">
+            couldn&apos;t refresh
+          </span>
+        )}
+        <button className="icon-btn" title="Settings" onClick={() => toggleSettings(true)}>
+          <GearIcon />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** The selected task: its header, its tabs, and whichever tab is open. */
+function TaskMain({ task }: { task: TaskView }) {
+  const tab = useStore((s) => s.tab);
+  const setTab = useStore((s) => s.setTab);
+  const cursorIde = useStore((s) => s.cursorIde);
+  const fail = useStore((s) => s.fail);
+  // The Terminals badge counts what is open now. The task's own count comes
+  // from the task poll, which can be a minute behind a pane just opened.
+  const paneCount = useStore((s) => s.panes.filter((p) => p.task_id === task.id).length);
+
+  const totals = taskTotals(task);
+  // What the Diff tab lists by default: files with uncommitted changes. The
+  // sidebar's counts split the same work into staged, unstaged and untracked,
+  // and adding those up put a 2 beside a list of forty files.
+  const changed = totals.changed;
+
+  return (
+    <>
+      <div className="ws-header">
+        <SidebarToggle />
+        <h1>{task.name}</h1>
+        <span className="branch">{task.branch}</span>
+        <div className="chips">
+          {task.checkouts.map((c) => (
+            <span
+              key={c.id}
+              className="chip"
+              title={c.path}
+              style={!c.exists ? { color: "var(--red)" } : undefined}
             >
-              {t.label}
-              {t.badge !== undefined && <span className="badge">{t.badge}</span>}
-            </button>
+              {c.project_name}
+            </span>
           ))}
         </div>
-        <div className="topbar-right">
-          {watchFailing && (
-            <span className="watch-chip" title="Task and pane polls are failing">
-              couldn&apos;t refresh
-            </span>
+        <div className="spacer" />
+        <div className="chips">
+          {totals.missing > 0 && (
+            <span className="chip warn">{totals.missing} worktree(s) missing</span>
           )}
-          <button className="icon-btn" title="Settings" onClick={() => toggleSettings(true)}>
-            <GearIcon />
-          </button>
+          {totals.ahead > 0 && <span className="chip">↑{totals.ahead}</span>}
+          {totals.behind > 0 && <span className="chip warn">↓{totals.behind}</span>}
+          {totals.conflicted > 0 && (
+            <span className="chip del">{totals.conflicted} conflicts</span>
+          )}
+          {cursorIde && (
+            <button
+              className="btn btn-sm"
+              title={`Open ${task.root} in Cursor`}
+              onClick={() => void api.openInCursor(task.root).catch(fail)}
+            >
+              Cursor ↗
+            </button>
+          )}
+          {task.issue_url && (
+            <button className="btn btn-sm" onClick={() => void openUrl(task.issue_url!)}>
+              {task.issue_key} ↗
+            </button>
+          )}
         </div>
       </div>
+
+      <div className="tabs">
+        <button
+          className={tab === "terminals" ? "active" : ""}
+          onClick={() => setTab("terminals")}
+        >
+          Terminals<span className="badge">{paneCount}</span>
+        </button>
+        <button className={tab === "diff" ? "active" : ""} onClick={() => setTab("diff")}>
+          Diff{changed > 0 && <span className="badge">{changed}</span>}
+        </button>
+        <button className={tab === "pr" ? "active" : ""} onClick={() => setTab("pr")}>
+          Pull requests
+          {task.checkouts.length > 1 && (
+            <span className="badge">{task.checkouts.length}</span>
+          )}
+        </button>
+      </div>
+
+      <div className="content">
+        {/* Terminals stay mounted so xterm state survives tab switches. */}
+        <div
+          style={{
+            display: tab === "terminals" ? "flex" : "none",
+            flexDirection: "column",
+            flex: 1,
+            overflow: "hidden",
+          }}
+        >
+          <Terminals task={task} />
+        </div>
+        {tab === "diff" && <DiffView task={task} />}
+        {tab === "pr" && <PrPanel task={task} />}
+      </div>
+    </>
+  );
+}
+
+function Toasts() {
+  const toasts = useStore((s) => s.toasts);
+  const dismissToast = useStore((s) => s.dismissToast);
+  return (
+    <div className="toasts">
+      {toasts.map((t) => (
+        <div key={t.id} className={`toast ${t.kind}`} onClick={() => dismissToast(t.id)}>
+          {t.text}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export default function App() {
+  const task = useStore(selectedTask);
+  const view = useStore((s) => s.view);
+  const settingsOpen = useStore((s) => s.settingsOpen);
+  const sidebarHidden = useStore((s) => s.sidebarHidden);
+  const scale = useStore((s) => s.settings?.ui.scale ?? 1);
+
+  return (
+    <div className="shell" style={{ ["--ui-scale" as string]: scale }}>
+      <Watchers />
+      <TopBar />
 
       <div className="views">
         {view === "work" && (
@@ -476,92 +612,7 @@ export default function App() {
             <Sidebar />
             <div className="main">
               {task ? (
-                <>
-                  <div className="ws-header">
-                    <SidebarToggle />
-                    <h1>{task.name}</h1>
-                    <span className="branch">{task.branch}</span>
-                    <div className="chips">
-                      {task.checkouts.map((c) => (
-                        <span
-                          key={c.id}
-                          className="chip"
-                          title={c.path}
-                          style={!c.exists ? { color: "var(--red)" } : undefined}
-                        >
-                          {c.project_name}
-                        </span>
-                      ))}
-                    </div>
-                    <div className="spacer" />
-                    <div className="chips">
-                      {totals && totals.missing > 0 && (
-                        <span className="chip warn">{totals.missing} worktree(s) missing</span>
-                      )}
-                      {totals && totals.ahead > 0 && <span className="chip">↑{totals.ahead}</span>}
-                      {totals && totals.behind > 0 && (
-                        <span className="chip warn">↓{totals.behind}</span>
-                      )}
-                      {totals && totals.conflicted > 0 && (
-                        <span className="chip del">{totals.conflicted} conflicts</span>
-                      )}
-                      {cursorIde && (
-                        <button
-                          className="btn btn-sm"
-                          title={`Open ${task.root} in Cursor`}
-                          onClick={() => void api.openInCursor(task.root).catch(fail)}
-                        >
-                          Cursor ↗
-                        </button>
-                      )}
-                      {task.issue_url && (
-                        <button
-                          className="btn btn-sm"
-                          onClick={() => void openUrl(task.issue_url!)}
-                        >
-                          {task.issue_key} ↗
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="tabs">
-                    <button
-                      className={tab === "terminals" ? "active" : ""}
-                      onClick={() => setTab("terminals")}
-                    >
-                      Terminals<span className="badge">{task.pane_count}</span>
-                    </button>
-                    <button
-                      className={tab === "diff" ? "active" : ""}
-                      onClick={() => setTab("diff")}
-                    >
-                      Diff{changed > 0 && <span className="badge">{changed}</span>}
-                    </button>
-                    <button className={tab === "pr" ? "active" : ""} onClick={() => setTab("pr")}>
-                      Pull requests
-                      {task.checkouts.length > 1 && (
-                        <span className="badge">{task.checkouts.length}</span>
-                      )}
-                    </button>
-                  </div>
-
-                  <div className="content">
-                    {/* Terminals stay mounted so xterm state survives tab switches. */}
-                    <div
-                      style={{
-                        display: tab === "terminals" ? "flex" : "none",
-                        flexDirection: "column",
-                        flex: 1,
-                        overflow: "hidden",
-                      }}
-                    >
-                      <Terminals task={task} />
-                    </div>
-                    {tab === "diff" && <DiffView task={task} />}
-                    {tab === "pr" && <PrPanel task={task} />}
-                  </div>
-                </>
+                <TaskMain task={task} />
               ) : (
                 // With nothing selected, show what every agent is doing rather
                 // than an empty panel — the sidebar covers the task list, this
@@ -579,14 +630,7 @@ export default function App() {
       </div>
 
       {settingsOpen && <Settings />}
-
-      <div className="toasts">
-        {toasts.map((t) => (
-          <div key={t.id} className={`toast ${t.kind}`} onClick={() => dismissToast(t.id)}>
-            {t.text}
-          </div>
-        ))}
-      </div>
+      <Toasts />
     </div>
   );
 }

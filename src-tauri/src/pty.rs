@@ -340,6 +340,21 @@ pub(crate) const MAX_PANES: usize = 32;
 #[derive(Default)]
 pub struct PtyManager {
     panes: Mutex<HashMap<String, Arc<Pane>>>,
+    /// Spawns past the cap check and not yet in `panes`. Spawns run in
+    /// parallel now — the blocking pool, the restore thread, MCP — and
+    /// several checking the count at 31 before any of them had inserted all
+    /// got through. Counted under the `panes` lock, so the check sees them.
+    starting: std::sync::atomic::AtomicUsize,
+}
+
+/// A slot under `MAX_PANES`, held from the check until the pane is in the map
+/// or the spawn has failed.
+struct Reserved<'a>(&'a std::sync::atomic::AtomicUsize);
+
+impl Drop for Reserved<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 #[derive(Serialize, Clone)]
@@ -402,6 +417,20 @@ impl PtyManager {
                 // scrollback, and showing the pane again collects it.
                 if !pane.watched.load(Ordering::Acquire) {
                     pane.flush_scheduled.store(false, Ordering::Release);
+                    // Unless it was shown again in between, and a read that
+                    // landed then found this flag still up and left it to us.
+                    let more = pane.watched.load(Ordering::Acquire) && {
+                        let out = pane.output.lock();
+                        out.sent < out.total
+                    };
+                    if more
+                        && pane
+                            .flush_scheduled
+                            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                            .is_ok()
+                    {
+                        continue;
+                    }
                     break;
                 }
                 let batch = pane.output.lock().take_unsent();
@@ -438,14 +467,19 @@ impl PtyManager {
 
     pub fn spawn<R: Runtime>(&self, app: &AppHandle<R>, opts: SpawnOptions) -> Result<PaneInfo> {
         // Checked before anything is allocated, so refusing costs nothing.
-        let live = self.panes.lock().len();
-        if live >= MAX_PANES {
-            return Err(Error::Pty(format!(
-                "{live} terminals are already open, which is the limit. Close some \
-                 before starting another — and if you did not open this many, \
-                 something is starting them on its own."
-            )));
-        }
+        let slot = {
+            let panes = self.panes.lock();
+            let live = panes.len() + self.starting.load(Ordering::Acquire);
+            if live >= MAX_PANES {
+                return Err(Error::Pty(format!(
+                    "{live} terminals are already open, which is the limit. Close some \
+                     before starting another — and if you did not open this many, \
+                     something is starting them on its own."
+                )));
+            }
+            self.starting.fetch_add(1, Ordering::AcqRel);
+            Reserved(&self.starting)
+        };
 
         let system = portable_pty::native_pty_system();
         let size = PtySize {
@@ -532,6 +566,7 @@ impl PtyManager {
         });
 
         self.panes.lock().insert(id.clone(), pane.clone());
+        drop(slot);
 
         // Reader: pump PTY output to the frontend until EOF.
         {
@@ -1023,6 +1058,46 @@ mod tests {
             "closing a shell took {:?}",
             started.elapsed()
         );
+    }
+
+    /// The cap holds when spawns race: forty at once from separate threads,
+    /// and no more than `MAX_PANES` get a pane.
+    #[test]
+    fn the_pane_cap_holds_against_spawns_at_once() {
+        let app = tauri::test::mock_app();
+        let handle = app.handle().clone();
+        let ptys = PtyManager::default();
+        let dir = std::env::temp_dir().to_string_lossy().to_string();
+        let ok = std::sync::atomic::AtomicUsize::new(0);
+        std::thread::scope(|scope| {
+            for _ in 0..40 {
+                scope.spawn(|| {
+                    let spawned = ptys.spawn(
+                        &handle,
+                        SpawnOptions {
+                            task_id: "t".into(),
+                            checkout_id: None,
+                            cwd: dir.clone(),
+                            kind: PaneKind::Agent,
+                            title: "t".into(),
+                            program: "/bin/sleep".into(),
+                            args: vec!["30".into()],
+                            agent_id: None,
+                            rows: None,
+                            cols: None,
+                            initial_input: None,
+                        },
+                    );
+                    if spawned.is_ok() {
+                        ok.fetch_add(1, Ordering::SeqCst);
+                    }
+                });
+            }
+        });
+        let started = ok.load(Ordering::SeqCst);
+        ptys.shutdown(Duration::from_secs(2));
+        assert_eq!(started, MAX_PANES);
+        assert_eq!(ptys.list(None).len(), MAX_PANES);
     }
 
     #[test]

@@ -307,24 +307,10 @@ pub fn changed_files(
     let merge_base = compare_against(dir, base, base_commit, scope);
 
     // Committed on this branch since the baseline, plus everything in the tree.
-    let numstat = run(dir, &["diff", "--numstat", &merge_base])?;
-    for line in numstat.lines() {
-        let mut parts = line.split('\t');
-        let (a, d, path) = (parts.next(), parts.next(), parts.next());
-        let (Some(a), Some(d), Some(path)) = (a, d, path) else {
-            continue;
-        };
-        let binary = a == "-" || d == "-";
-        files.push(ChangedFile {
-            path: path.to_string(),
-            additions: a.parse().unwrap_or(0),
-            deletions: d.parse().unwrap_or(0),
-            binary,
-            origin: "tracked".into(),
-        });
-    }
+    let numstat = run(dir, &["diff", "--numstat", "-z", &merge_base])?;
+    files.extend(parse_numstat(&numstat));
 
-    for path in run(dir, &["ls-files", "--others", "--exclude-standard"])?.lines() {
+    for path in run(dir, &["ls-files", "-z", "--others", "--exclude-standard"])?.split('\0') {
         if path.is_empty() {
             continue;
         }
@@ -332,28 +318,38 @@ pub fn changed_files(
         // refresh of the list. An untracked dump or archive of tens of
         // megabytes is not something anyone reviews line by line, so past a
         // few megabytes it is listed as binary and not read at all.
-        let full = dir.join(path);
-        let small = std::fs::metadata(&full)
-            .map(|m| m.len() <= UNTRACKED_COUNT_LIMIT)
-            .unwrap_or(false);
-        let added = if small {
-            std::fs::read_to_string(&full)
-                .map(|c| c.lines().count() as u32)
-                .unwrap_or(0)
-        } else {
-            0
-        };
+        let added = untracked_text(&dir.join(path)).map(|c| c.lines().count() as u32);
         files.push(ChangedFile {
             path: path.to_string(),
-            additions: added,
+            additions: added.unwrap_or(0),
             deletions: 0,
-            binary: !small,
+            binary: added.is_none(),
             origin: "untracked".into(),
         });
     }
 
     files.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(files)
+}
+
+/// An untracked file's contents, if it is text worth showing as a diff.
+///
+/// None for anything too big to read on every refresh, and for anything that
+/// is not text — the way git itself decides, by a NUL near the start. A small
+/// PNG used to be read as a string, fail, and leave the previous file's patch
+/// on screen beside an error.
+fn untracked_text(path: &Path) -> Option<String> {
+    let small = std::fs::metadata(path)
+        .map(|m| m.is_file() && m.len() <= UNTRACKED_COUNT_LIMIT)
+        .unwrap_or(false);
+    if !small {
+        return None;
+    }
+    let bytes = std::fs::read(path).ok()?;
+    if bytes[..bytes.len().min(8000)].contains(&0) {
+        return None;
+    }
+    String::from_utf8(bytes).ok()
 }
 
 /// How many files differ from the baseline, committed or not.
@@ -507,7 +503,13 @@ pub fn file_diff(
     }
 
     // Nothing from git means it is untracked; synthesise the addition patch.
-    let content = std::fs::read_to_string(dir.join(path))?;
+    let full = dir.join(path);
+    if !full.exists() {
+        return Err(Error::Git(format!("{path} is no longer in the worktree")));
+    }
+    let content = untracked_text(&full).ok_or_else(|| {
+        Error::Git(format!("{path} is binary or too large to show as a diff"))
+    })?;
     let lines = content.lines().count();
     let mut out = format!("--- /dev/null\n+++ b/{path}\n@@ -0,0 +1,{lines} @@\n");
     for line in content.lines() {
@@ -568,53 +570,53 @@ pub fn commits_since(
 /// Files changed in a single commit, with the same shape as `changed_files`.
 pub fn commit_files(dir: &Path, sha: &str) -> Result<Vec<ChangedFile>> {
     // Empty format: we only want the numstat body, not the commit header.
-    let numstat = run(dir, &["show", "--numstat", "--format=", "--diff-filter=AMDR", sha])?;
-    let mut files = Vec::new();
-    for line in numstat.lines() {
-        let mut parts = line.split('\t');
-        let (a, d, path) = (parts.next(), parts.next(), parts.next());
-        let (Some(a), Some(d), Some(path)) = (a, d, path) else {
-            continue;
-        };
-        // Renames: the Diff view wants the new path.
-        let path = rename_target(path);
-        if path.is_empty() {
-            continue;
-        }
-        let binary = a == "-" || d == "-";
-        files.push(ChangedFile {
-            path: path.to_string(),
-            additions: a.parse().unwrap_or(0),
-            deletions: d.parse().unwrap_or(0),
-            binary,
-            origin: "tracked".into(),
-        });
-    }
+    let numstat = run(
+        dir,
+        &["show", "--numstat", "-z", "--format=", "--diff-filter=AMDR", sha],
+    )?;
+    let mut files = parse_numstat(&numstat);
     files.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(files)
 }
 
-/// The new side of a rename as `git show --numstat` prints it.
+/// `--numstat -z` output as changed files, each under the path it has now.
 ///
-/// git abbreviates a rename to the part that changed: `src/{old => new}/x.rs`
-/// for a directory, `old.rs => new.rs` for a file. Stripping braces off the
-/// ends handled neither — the brace closing the changed part sits in the
-/// middle of the path, and taking the right-hand side of `=>` dropped the
-/// prefix. The braces are expanded, and an empty side collapses so
-/// `src/{sub => }/x` reads `src/x`.
-fn rename_target(path: &str) -> String {
-    if let (Some(lb), Some(rb)) = (path.find('{'), path.rfind('}')) {
-        if lb < rb {
-            if let Some((_, new)) = path[lb + 1..rb].split_once(" => ") {
-                let joined = format!("{}{}{}", &path[..lb], new, &path[rb + 1..]);
-                return joined.replace("//", "/");
-            }
+/// Read with `-z` because without it git rewrites the paths for a terminal:
+/// a rename becomes `src/{old => new}/x.rs` and a name outside ASCII comes
+/// back quoted and escaped, `"caf\303\251.txt"`. Neither is a path, so the
+/// Diff view could list the file but not open it, and a note on it sent the
+/// agent a name that does not exist. With `-z` a rename is its own two
+/// fields, old then new, and every name is exactly as it is on disk.
+fn parse_numstat(out: &str) -> Vec<ChangedFile> {
+    let mut files = Vec::new();
+    let mut fields = out.split('\0');
+    while let Some(record) = fields.next() {
+        // `show` can lead with the newline its empty header ends in.
+        let record = record.trim_start_matches('\n');
+        let mut parts = record.splitn(3, '\t');
+        let (Some(a), Some(d), Some(path)) = (parts.next(), parts.next(), parts.next()) else {
+            continue;
+        };
+        let path = if path.is_empty() {
+            // A rename: the next two fields are where it came from and where
+            // it went. The Diff view wants the new one.
+            let _from = fields.next();
+            fields.next().unwrap_or_default()
+        } else {
+            path
+        };
+        if path.is_empty() {
+            continue;
         }
+        files.push(ChangedFile {
+            path: path.to_string(),
+            additions: a.parse().unwrap_or(0),
+            deletions: d.parse().unwrap_or(0),
+            binary: a == "-" || d == "-",
+            origin: "tracked".into(),
+        });
     }
-    path.rsplit_once(" => ")
-        .map(|(_, n)| n)
-        .unwrap_or(path)
-        .to_string()
+    files
 }
 
 /// Unified patch for one file as it changed in `sha`.
@@ -831,11 +833,37 @@ mod tests {
 
     #[test]
     fn renames_resolve_to_the_new_path() {
-        assert_eq!(rename_target("a/{b => c}/d.rs"), "a/c/d.rs");
-        assert_eq!(rename_target("old.rs => new.rs"), "new.rs");
-        assert_eq!(rename_target("src/{ => sub}/x.rs"), "src/sub/x.rs");
-        assert_eq!(rename_target("src/{sub => }/x.rs"), "src/x.rs");
-        assert_eq!(rename_target("plain/path.rs"), "plain/path.rs");
+        let parsed = parse_numstat("1\t0\tplain.txt\x000\t0\t\0src/old.txt\0src/new.txt\0-\t-\tpic.png\0");
+        let paths: Vec<_> = parsed.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, ["plain.txt", "src/new.txt", "pic.png"]);
+        assert!(parsed[2].binary);
+        // `show` opens with the newline its empty header ends in.
+        assert_eq!(parse_numstat("\n3\t1\ta.rs\0")[0].path, "a.rs");
+    }
+
+    #[test]
+    fn renamed_and_non_ascii_files_keep_paths_that_open() {
+        let repo = fixture();
+        std::fs::create_dir_all(repo.join("src")).unwrap();
+        std::fs::write(repo.join("src/old.txt"), (1..50).map(|n| format!("{n}\n")).collect::<String>()).unwrap();
+        run(&repo, &["add", "-A"]).unwrap();
+        run(&repo, &["commit", "-qm", "old"]).unwrap();
+        run(&repo, &["mv", "src/old.txt", "src/new.txt"]).unwrap();
+        std::fs::write(repo.join("café.txt"), "z\n").unwrap();
+
+        let files = changed_files(&repo, "main", None, Scope::Uncommitted).unwrap();
+        let paths: Vec<_> = files.iter().map(|f| f.path.as_str()).collect();
+        assert!(paths.contains(&"src/new.txt"), "{paths:?}");
+        assert!(paths.contains(&"café.txt"), "{paths:?}");
+        for f in &files {
+            file_diff(&repo, "main", None, Scope::Uncommitted, &f.path)
+                .unwrap_or_else(|e| panic!("{} did not open: {e}", f.path));
+        }
+
+        run(&repo, &["commit", "-qm", "move"]).unwrap();
+        let sha = run(&repo, &["rev-parse", "HEAD"]).unwrap();
+        let moved = commit_files(&repo, sha.trim()).unwrap();
+        assert_eq!(moved.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(), ["src/new.txt"]);
     }
 
     #[test]

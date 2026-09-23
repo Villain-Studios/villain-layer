@@ -16,7 +16,16 @@ import { Combo, Field, Modal, Spinner } from "./ui";
  */
 function latestByAuthor(reviews: Review[]): Review[] {
   const by = new Map<string, Review>();
-  for (const r of reviews) by.set(r.author, r);
+  for (const r of reviews) {
+    // A comment after a decision does not undo it — the rule the verdict on
+    // the card follows. Letting it through showed a reviewer who approved and
+    // then replied as having only commented, under an "approved" chip.
+    const prev = by.get(r.author);
+    if ((r.state === "COMMENTED" || r.state === "PENDING") && prev && prev.state !== "COMMENTED") {
+      continue;
+    }
+    by.set(r.author, r);
+  }
   return [...by.values()];
 }
 
@@ -169,9 +178,13 @@ export function PrPanel({ task }: { task: TaskView }) {
   // The description arrives a few words at a time. Showing it as it is written
   // is most of what makes this feel quick: the wait is the same, but it starts
   // reading like an answer straight away instead of a spinner.
+  //
+  // Only while a draft is being written: a chunk still in flight when the
+  // finished text landed was appended to it, repeating the end.
+  const streaming = useRef(false);
   useEffect(() => {
     const p = listen<{ task_id: string; text: string }>("pr:draft", (e) => {
-      if (e.payload.task_id !== task.id) return;
+      if (e.payload.task_id !== task.id || !streaming.current) return;
       setBody((current) => current + e.payload.text);
     });
     return () => { void p.then((un) => un()); };
@@ -222,13 +235,17 @@ export function PrPanel({ task }: { task: TaskView }) {
     setDrafting(true);
     // Cleared so the streamed text is not appended to whatever was there.
     setBody("");
+    streaming.current = true;
     try {
-      setBody((await api.draftPrDescription(task.id)).trim());
+      const drafted = await api.draftPrDescription(task.id);
+      streaming.current = false;
+      setBody(drafted.trim());
       toast("success", "Description drafted — edit it before opening the PR.");
       setDrafting(false);
       return;
     } catch (e) {
       // Whatever was streamed before it failed is half an answer, not an answer.
+      streaming.current = false;
       setBody("");
       const pane = agentPanes[0];
       if (!pane) {

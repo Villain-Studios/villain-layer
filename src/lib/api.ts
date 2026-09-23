@@ -5,6 +5,8 @@ import type {
   Catchup,
   ChangedFile,
   CheckoutPr,
+  Cleaned,
+  CleanupItem,
   CreateField,
   DiffScope,
   FeedbackItem,
@@ -19,6 +21,7 @@ import type {
   RepoBranchFacts,
   RepoCommits,
   RepoFeedback,
+  RepoHealth,
   RepoResult,
   RepoSuggestion,
   RepoUpdate,
@@ -28,6 +31,7 @@ import type {
   Settings,
   SlackConfig,
   Started,
+  Synced,
   Task,
   TaskPrs,
   TaskView,
@@ -48,6 +52,12 @@ export const api = {
   removeProject: (id: string) => invoke<void>("remove_project", { id }),
   projectBranches: (projectId: string) =>
     invoke<string[]>("project_branches", { projectId }),
+  repoHealth: () => invoke<RepoHealth[]>("repo_health"),
+  locateProject: (projectId: string, path: string) =>
+    invoke<Project>("locate_project", { projectId, path }),
+  syncRepos: (projectIds: string[]) => invoke<Synced[]>("sync_repos", { projectIds }),
+  cleanupPlan: () => invoke<CleanupItem[]>("cleanup_plan"),
+  cleanupApply: (ids: string[]) => invoke<Cleaned[]>("cleanup_apply", { ids }),
 
   // tasks
   listTasks: (focus?: string | null) =>

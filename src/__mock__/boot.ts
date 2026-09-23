@@ -26,7 +26,7 @@
  */
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
-import type { Catchup, PaneInfo } from "../lib/types";
+import type { Catchup, Cleaned, PaneInfo, Synced } from "../lib/types";
 import { ago, SCENARIOS } from "./world";
 
 type Args = Record<string, unknown>;
@@ -123,6 +123,44 @@ const answer: Record<string, Answer> = {
   jira_browse: () => ({ issues: world.issues, more: false }),
   suggest_repos: () => ({ project_ids: [], reason: null }),
   project_branches: () => ["main", "develop"],
+
+  // Repos: health, Sync, Locate, Clean up.
+  repo_health: () => world.health,
+  sync_repos: (a) =>
+    (a.projectIds as string[]).map((id): Synced => {
+      const p = world.projects.find((x) => x.id === id);
+      const h = world.health.find((x) => x.project_id === id);
+      if (!p || !h) return { project_id: id, repo: id, ok: false, detail: "No such repository" };
+      if (h.clone !== "ok") {
+        return { project_id: id, repo: p.name, ok: true, detail: `Fetched. The clone is not at ${p.path} any more: Locate it.` };
+      }
+      const moved = h.ahead ? 0 : h.behind ?? 0;
+      h.fetched_at = Math.round(Date.now() / 1000);
+      if (moved) h.behind = 0;
+      const detail = h.ahead
+        ? `Fetched. main has ${h.ahead} commit of its own, so it was left alone.`
+        : moved ? `Fetched. main moved forward ${moved} commits.` : "Fetched. main is up to date.";
+      return { project_id: id, repo: p.name, ok: true, detail };
+    }),
+  locate_project: (a) => {
+    const p = world.projects.find((x) => x.id === a.projectId);
+    const h = world.health.find((x) => x.project_id === a.projectId);
+    if (!p || !h) throw "no such repository";
+    p.path = a.path as string;
+    Object.assign(h, { clone: "ok", found: null, origin: `git@github.com:acme/${p.name}.git` });
+    return p;
+  },
+  cleanup_plan: () => world.cleanup,
+  cleanup_apply: (a) => {
+    const ids = a.ids as string[];
+    const done: Cleaned[] = ids.map((id) => {
+      const item = world.cleanup.find((i) => i.id === id);
+      if (!item) return { id, ok: false, detail: "Changed since the list was made. Look again." };
+      return item.verdict === "blocked" ? { id, ok: false, detail: item.detail } : { id, ok: true, detail: "" };
+    });
+    world.cleanup = world.cleanup.filter((i) => !done.some((d) => d.ok && d.id === i.id));
+    return done;
+  },
 
   // Plugins the UI reaches through @tauri-apps packages.
   "plugin:notification|is_permission_granted": () => true,

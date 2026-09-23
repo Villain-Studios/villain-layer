@@ -30,6 +30,9 @@ is a terminal running an agent CLI or a shell.
 The Repos view lists registered repos in collapsible groups. Repos are added
 by picking folders, or by scanning a folder (three levels deep) and ticking
 what was found. A repo has at most one group; groups are renamed in place.
+Each repo says how it is doing, and the view keeps them in shape: **Sync**
+brings them up to date, **Locate** follows a clone that moved, and **Clean
+up** removes what tasks left behind.
 
 - **REPO-1** A repo MUST be a git work tree root. It is registered by path,
   and its default branch is detected (origin/HEAD, then `main`, then
@@ -47,17 +50,58 @@ what was found. A repo has at most one group; groups are renamed in place.
   hard-linked, so it costs little disk and survives the clone being
   deleted. It fetches from the clone's `origin` and carries its repo-local
   git settings.
+- **REPO-5** Each repo MUST show whether its clone is still where it was
+  registered and still the same repository, where it fetches from, whether
+  the app's copy exists and when it last fetched, and how the clone's
+  default branch stands against origin's (behind, or with commits of its
+  own). A repo with a problem says what the problem is, with its fix beside
+  it, and its group opens. Read when the view opens and after anything here
+  changes it, never on a timer.
+- **REPO-6** Locate MUST point a repo at another folder without taking it
+  out of any task, and only when that folder is the same repository: one
+  fetching from where the app's copy does. When the clone is gone, a folder
+  of the same name near where it was is offered. Before this, the only way
+  was remove and add again, which dropped the repo from every task (REPO-3).
+- **REPO-7** Sync MUST fetch origin into the app's copy, forgetting branches
+  origin deleted, and carry the clone's repo-local settings again. In the
+  clone it only ever fast-forwards the default branch, and only when that
+  branch has no commits of its own and, if checked out, no uncommitted
+  changes to tracked files. It never merges or rebases there, so how a team
+  updates its branches does not matter to it. It reports a row per repo:
+  what moved, what was left alone and why.
+- **REPO-8** Clean up MUST list what it would remove, and why, before it
+  removes anything. It pre-selects only what loses nothing, and checks each
+  item again as it removes it. It finds:
+  - task folders no task uses, removable when they hold only what the app
+    generated and worktrees with no changes;
+  - worktrees inside a task folder that are none of its checkouts, on the
+    same terms;
+  - task branches left in the user's clone from before REPO-4, only when
+    every commit on them is in the app's copy and they are not checked out;
+  - branches in the app's copies that no task uses, pre-selected only when
+    every commit on them is on origin;
+  - copies no repo uses, never one a worktree still belongs to (the other
+    build's, say);
+  - git's records, in the app's copies, of worktrees whose folders are
+    gone, and staging left by an interrupted move (TASK-12).
 
-Code: `commands/projects.rs`, `ReposView.tsx`, `AddRepos.tsx`.
+  A worktree is removed through git, which refuses one with changes. A
+  folder is removed only once it is empty.
+
+Code: `commands/projects.rs`, `commands/repos.rs`, `commands/cleanup.rs`,
+`git/store.rs`, `git/upkeep.rs`, `ReposView.tsx`, `AddRepos.tsx`,
+`CleanUp.tsx`.
 
 Known gaps:
 - Removing a repo leaves panes running in *surviving* tasks' checkouts of
   it, and does not rewrite those tasks' context files. Removing a checkout
   does both.
-- The copy takes the clone's repo-local settings once, when it is made.
-  Later changes to the clone's `.git/config` do not follow.
+- Sync carries the clone's repo-local settings again, but one removed from
+  the clone stays in the copy.
 - Removing a repo leaves its copy in `.repos/`. Adding the repo again
-  reuses it.
+  reuses it; Clean up offers it once no worktree belongs to it.
+- A branch squash-merged and then deleted on origin has commits that are on
+  no remote branch, so Clean up does not pre-select it.
 - Task branches are not in the user's clone until pushed and fetched.
 
 ## 2. Tasks
@@ -534,7 +578,10 @@ keychain item instead.
 - **DISK-1** Nothing generated MUST ever be written inside a worktree,
   where it would end up in a commit.
 - **DISK-2** Deleting a task MUST remove what the app generated in its
-  folder, and the folder, if it is empty after that.
+  folder, and what others leave there that goes with it (Claude Code's
+  `.claude/settings.local.json`, Finder's `.DS_Store`), and then the
+  folder, if it is empty. Clean up (REPO-8) removes the same from a folder
+  no task uses.
 - **DISK-3** `config.json` MUST be written whole, via a temp file and
   rename. A file from a newer build is copied aside before an older build
   touches it. An unreadable one is kept as `config.json.unreadable`.

@@ -479,6 +479,31 @@ impl ConfigStore {
             .unwrap_or_else(default_worktree_root)
     }
 
+    /// What the app's other builds on this machine have saved, read only:
+    /// the dev build beside the installed one, whose identifier is this
+    /// one's with `.dev` on the end. Both default to the same task folder
+    /// location, so a folder or a copy this build does not use may be the
+    /// other's. Plain JSON, since the other build may be older or newer.
+    pub fn other_builds(&self) -> Vec<serde_json::Value> {
+        let Some(ours) = self.path.parent() else {
+            return Vec::new();
+        };
+        let (Some(name), Some(all)) = (
+            ours.file_name().and_then(|n| n.to_str()),
+            ours.parent().and_then(|d| std::fs::read_dir(d).ok()),
+        ) else {
+            return Vec::new();
+        };
+        all.flatten()
+            .filter(|e| {
+                let other = e.file_name().to_string_lossy().to_string();
+                other != name && (other.starts_with(&format!("{name}.")) || name.starts_with(&format!("{other}.")))
+            })
+            .filter_map(|e| std::fs::read_to_string(e.path().join("config.json")).ok())
+            .filter_map(|raw| serde_json::from_str(&raw).ok())
+            .collect()
+    }
+
     pub fn project(&self, id: &str) -> Result<Project> {
         self.inner
             .read()

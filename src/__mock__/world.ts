@@ -10,6 +10,7 @@
 import type {
   AgentStatus,
   ChangedFile,
+  CleanupItem,
   CreateField,
   JiraIssue,
   JiraIssueType,
@@ -17,6 +18,7 @@ import type {
   PaneInfo,
   Project,
   RepoFeedback,
+  RepoHealth,
   ReviewQueue,
   Settings,
   TaskPrs,
@@ -26,6 +28,8 @@ import type {
 
 export interface World {
   projects: Project[];
+  health: RepoHealth[];
+  cleanup: CleanupItem[];
   tasks: TaskView[];
   panes: PaneInfo[];
   agents: AgentStatus[];
@@ -102,10 +106,30 @@ function issue(key: string, summary: string, status: string, category: string, e
   };
 }
 
+const copies = "/Users/you/.villain-worktrees/.repos";
 const projects: Project[] = [
-  { id: "p-api", name: "api", path: "/Users/you/code/api", default_branch: "main", group: "platform", store: null },
-  { id: "p-web", name: "web", path: "/Users/you/code/web", default_branch: "main", group: "platform", store: null },
+  { id: "p-api", name: "api", path: "/Users/you/code/api", default_branch: "main", group: "platform", store: `${copies}/api.git` },
+  { id: "p-web", name: "web", path: "/Users/you/code/web", default_branch: "main", group: "platform", store: `${copies}/web.git` },
   { id: "p-infra", name: "infra", path: "/Users/you/code/infra", default_branch: "main", group: null, store: null },
+];
+
+const hourAgo = Math.round(Date.now() / 1000) - 3600;
+
+/** api is behind, web has a commit of its own on main, infra has moved. */
+const health: RepoHealth[] = [
+  { project_id: "p-api", clone: "ok", origin: "git@github.com:acme/api.git", store: `${copies}/api.git`, fetched_at: hourAgo, behind: 3, ahead: 0, found: null },
+  { project_id: "p-web", clone: "ok", origin: "git@github.com:acme/web.git", store: `${copies}/web.git`, fetched_at: hourAgo, behind: 0, ahead: 1, found: null },
+  { project_id: "p-infra", clone: "missing", origin: null, store: null, fetched_at: null, behind: null, ahead: null, found: "/Users/you/code/ops/infra" },
+];
+
+/** One of each thing Clean up finds, in each verdict it can have. */
+const cleanup: CleanupItem[] = [
+  { id: "folder:ACME-90", kind: "folder", repo: null, title: "ACME-90", verdict: "safe", detail: "No task uses it. It holds 2 files the app wrote." },
+  { id: "folder:ACME-77", kind: "folder", repo: null, title: "ACME-77", verdict: "blocked", detail: "No task uses it, but api: 3 uncommitted changes." },
+  { id: "clone_branch:api:ACME-123", kind: "clone_branch", repo: "api", title: "ACME-123", verdict: "safe", detail: "Left in your clone from before tasks had the app's own copy. Every commit on it is in the copy, where the task works." },
+  { id: "store_branch:api:ACME-88", kind: "store_branch", repo: "api", title: "ACME-88", verdict: "risky", detail: "No task uses it, but 2 commits on it are on no origin branch. A branch squash-merged and then deleted on origin looks like this too." },
+  { id: "records:web", kind: "records", repo: "web", title: "Records of deleted worktrees", verdict: "safe", detail: "Git still lists 1 worktree whose folder is gone." },
+  { id: "store:old-tool.git", kind: "store", repo: null, title: "old-tool.git", verdict: "safe", detail: "No repo uses it, and origin has everything in it." },
 ];
 
 const clean = { ahead: 0, behind: 0, staged: 0, unstaged: 0, untracked: 0, conflicted: 0, dirty_files: 0 };
@@ -243,6 +267,8 @@ const say = (lines: string[]) => lines.join("\r\n") + "\r\n";
 function busy(): World {
   return {
     projects,
+    health,
+    cleanup,
     tasks,
     panes,
     agents,
@@ -301,7 +327,7 @@ function busy(): World {
 /** First launch: nothing added, nothing connected. */
 function empty(): World {
   return {
-    projects: [], tasks: [], panes: [], agents, settings: disconnected, prs: [],
+    projects: [], health: [], cleanup: [], tasks: [], panes: [], agents, settings: disconnected, prs: [],
     reviews: { mine: [], mine_more: false, team: null },
     issues: [], issueTypes: [], transitions: [], requiredFields: [], changed: [], feedback: [], output: {},
   };

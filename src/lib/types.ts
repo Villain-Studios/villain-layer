@@ -9,6 +9,49 @@ export interface Project {
   store: string | null;
 }
 
+/** How a registered repository is doing (REPO-5). */
+export interface RepoHealth {
+  project_id: string;
+  /** `missing`: nothing at its path; `not_repo`: no longer a git repository;
+   *  `other`: a different repository from the one the app's copy was made of. */
+  clone: "ok" | "missing" | "not_repo" | "other";
+  origin: string | null;
+  store: string | null;
+  /** Seconds since the epoch. */
+  fetched_at: number | null;
+  /** The clone's default branch against origin's. */
+  behind: number | null;
+  ahead: number | null;
+  /** A folder that looks like this repository, when the clone is missing. */
+  found: string | null;
+}
+
+/** One repository's row from Sync (REPO-7). */
+export interface Synced {
+  project_id: string;
+  repo: string;
+  ok: boolean;
+  detail: string;
+}
+
+/** Something Clean up would remove (REPO-8). */
+export interface CleanupItem {
+  id: string;
+  kind: "worktree" | "folder" | "clone_branch" | "store_branch" | "records" | "store";
+  repo: string | null;
+  title: string;
+  detail: string;
+  /** safe: loses nothing, pre-selected. risky: offered, never pre-selected.
+   *  blocked: not removable here. */
+  verdict: "safe" | "risky" | "blocked";
+}
+
+export interface Cleaned {
+  id: string;
+  ok: boolean;
+  detail: string;
+}
+
 export interface RepoSuggestion {
   project_ids: string[];
   reason: string | null;

@@ -9,7 +9,14 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, Result};
 
 mod store;
-pub use store::{adopt_worktree, belongs_to, create_store, is_store_of, owner, relink_worktree};
+mod upkeep;
+pub use store::{
+    adopt_worktree, belongs_to, copy_local_config, create_store, is_store_of, owner, relink_worktree,
+};
+pub use upkeep::{
+    branch_tips, delete_branch_at, fast_forward, fetch_store, fetched_at, holds, is_bare,
+    list_worktrees, only_here, origin_url, same_remote, standing, Forwarded,
+};
 
 fn command(dir: &Path, args: &[&str]) -> Command {
     let mut cmd = Command::new("git");
@@ -140,50 +147,6 @@ pub fn branch_exists(dir: &Path, branch: &str) -> bool {
         &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")],
     )
     .is_ok()
-}
-
-#[cfg(test)]
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct WorktreeEntry {
-    pub path: String,
-    pub branch: Option<String>,
-    pub head: Option<String>,
-    pub locked: bool,
-}
-
-/// `git worktree list`, parsed. Only the tests read it back today.
-#[cfg(test)]
-pub fn list_worktrees(repo: &Path) -> Result<Vec<WorktreeEntry>> {
-    let out = run(repo, &["worktree", "list", "--porcelain"])?;
-    let mut entries = Vec::new();
-    let mut cur: Option<WorktreeEntry> = None;
-
-    for line in out.lines() {
-        if let Some(path) = line.strip_prefix("worktree ") {
-            if let Some(e) = cur.take() {
-                entries.push(e);
-            }
-            cur = Some(WorktreeEntry {
-                path: path.to_string(),
-                branch: None,
-                head: None,
-                locked: false,
-            });
-        } else if let Some(e) = cur.as_mut() {
-            if let Some(head) = line.strip_prefix("HEAD ") {
-                e.head = Some(head.to_string());
-            } else if let Some(branch) = line.strip_prefix("branch ") {
-                e.branch = Some(branch.trim_start_matches("refs/heads/").to_string());
-            } else if line.starts_with("locked") {
-                e.locked = true;
-            }
-        }
-    }
-    if let Some(e) = cur {
-        entries.push(e);
-    }
-    Ok(entries)
 }
 
 /// A start-point that `git worktree add -b` can resolve.

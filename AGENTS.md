@@ -112,7 +112,9 @@ by `scripts/guard.ts`. Its failure message says what to do, and
   New ones are cut from `commands::repo_for(state, project)`. For an
   existing one, ask it which repository owns it: `commands::owner_of`.
   `Project.path` is where the user's clone is, for showing and copying,
-  not for running git.
+  not for running git. Only Sync and Clean up write to it, and only as
+  `REPO-7` and `REPO-8` allow: a fast-forward of its default branch, or
+  deleting a task branch whose every commit the app's copy has.
 - **Never `--force`.** A rebased branch is pushed with
   `--force-with-lease=<branch>:<sha>`, from `Checkout.push_lease`, and only
   through `git::push`.
@@ -218,12 +220,12 @@ build does the same.
 | Path | What |
 |---|---|
 | `src-tauri/src/lib.rs` | startup, `generate_handler!` (every command's registration) |
-| `src-tauri/src/commands/` | every Tauri command, by area: `projects`, `tasks`, `panes`, `diff`, `jira`, `github`, `slack`, `settings`; `mod.rs` has `AppState`, `blocking`, `off_runtime` |
+| `src-tauri/src/commands/` | every Tauri command, by area: `projects`, `repos` (health, Sync, Locate), `cleanup`, `tasks`, `panes`, `diff`, `jira`, `github`, `slack`, `settings`; `mod.rs` has `AppState`, `blocking`, `off_runtime` |
 | `src-tauri/src/config.rs` | `AppConfig` (what `config.json` holds), `ConfigStore`, migration |
 | `src-tauri/src/pty.rs` | panes: spawning, output buffer and throttling, stop/kill, activity state |
 | `src-tauri/src/agents.rs` | the agent CLI catalogue and how each reports its state |
 | `src-tauri/src/mcp.rs` | the app's MCP server for agents, and `/hook` for their status reports |
-| `src-tauri/src/git.rs`, `git/store.rs` | the only place that runs git; `store.rs` is the app's own copy of each repo |
+| `src-tauri/src/git.rs`, `git/` | the only place that runs git; `store.rs` is the app's own copy of each repo, `upkeep.rs` its Sync and Clean up |
 | `src-tauri/src/attention.rs` | agents that need you: dock count, banners |
 | `src-tauri/src/news.rs` | new review requests and tickets, for banners |
 | `src-tauri/src/integrations/` | Jira, GitHub and Slack HTTP clients |

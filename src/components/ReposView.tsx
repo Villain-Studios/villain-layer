@@ -1,19 +1,29 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { api } from "../lib/api";
-import { groupProjects, useStore } from "../store";
-import type { Project } from "../lib/types";
+import { ago } from "../lib/time";
+import { groupProjects, repoTrouble, useNow, useStore } from "../store";
+import type { Project, RepoHealth, Synced } from "../lib/types";
 import { AddRepos } from "./AddRepos";
-import { Combo, Confirm } from "./ui";
+import { CleanUp } from "./CleanUp";
+import { Combo, Confirm, Spinner } from "./ui";
 
 export function ReposView() {
   const projects = useStore((s) => s.projects);
   const tasks = useStore((s) => s.tasks);
+  const health = useStore((s) => s.repoHealth);
   const refreshRepos = useStore((s) => s.refreshRepos);
+  const refreshRepoHealth = useStore((s) => s.refreshRepoHealth);
   const refreshAll = useStore((s) => s.refreshAll);
+  const toast = useStore((s) => s.toast);
   const fail = useStore((s) => s.fail);
+  const now = useNow(60_000);
 
   const [adding, setAdding] = useState(false);
+  const [cleaning, setCleaning] = useState(false);
   const [shut, setShut] = useState<Record<string, boolean>>({});
+  const [syncing, setSyncing] = useState<Set<string>>(new Set());
+  const [synced, setSynced] = useState<Record<string, Synced>>({});
   const [confirming, setConfirming] = useState<{
     title: string;
     body: ReactNode;
@@ -22,9 +32,20 @@ export function ReposView() {
     run: () => void | Promise<unknown>;
   } | null>(null);
 
+  // Read again whenever the view opens: what it says is only as fresh as
+  // the last look (REPO-5).
+  useEffect(() => { void refreshRepoHealth().catch(fail); }, [refreshRepoHealth, fail]);
+
   const groups = groupProjects(projects);
   const groupNames = [...new Set(projects.map((p) => p.group).filter(Boolean))] as string[];
-  const anyOpen = groups.some((g) => !(shut[g.group] ?? true));
+  const trouble = (p: Project) => repoTrouble(p, health[p.id], tasks);
+  const troubled = projects.filter((p) => trouble(p)).length;
+  // Collapsed by default: this tab is for finding one repository among
+  // many, and a group is a heading long before it is a list. A group with
+  // a repo in trouble opens, or the trouble is a count nobody can find.
+  const isClosed = (g: (typeof groups)[number]) => shut[g.group] ?? !g.projects.some((p) => trouble(p));
+  const anyOpen = groups.some((g) => !isClosed(g));
+  const lastFetch = Math.max(0, ...projects.map((p) => health[p.id]?.fetched_at ?? 0));
 
   async function setGroup(projectId: string, group: string) {
     try {
@@ -45,6 +66,45 @@ export function ReposView() {
     }
   }
 
+  async function sync(ids: string[]) {
+    setSyncing((s) => new Set([...s, ...ids]));
+    try {
+      const rows = await api.syncRepos(ids);
+      setSynced((s) => ({ ...s, ...Object.fromEntries(rows.map((r) => [r.project_id, r])) }));
+      const failed = rows.filter((r) => !r.ok);
+      if (ids.length > 1) {
+        toast(
+          failed.length ? "error" : "success",
+          failed.length
+            ? `Synced ${rows.length - failed.length} of ${rows.length}. Each repo says what happened.`
+            : `Synced ${rows.length} repositories.`,
+        );
+      } else if (failed.length) {
+        toast("error", failed[0].detail);
+      }
+      await Promise.all([refreshRepos(), refreshRepoHealth()]);
+    } catch (e) {
+      fail(e);
+    } finally {
+      setSyncing((s) => new Set([...s].filter((id) => !ids.includes(id))));
+    }
+  }
+
+  async function locate(p: Project, path?: string) {
+    const chosen = path ?? (await openDialog({ directory: true, title: `Where is ${p.name} now?` }));
+    if (typeof chosen !== "string") return;
+    try {
+      const moved = await api.locateProject(p.id, chosen);
+      // Its group was open only for the trouble; closing under the click
+      // that fixed it hides what just happened.
+      setShut((c) => ({ ...c, [p.group ?? ""]: false }));
+      toast("success", `${p.name} is at ${moved.path} now. Its tasks keep it.`);
+      await Promise.all([refreshRepos(), refreshRepoHealth()]);
+    } catch (e) {
+      fail(e);
+    }
+  }
+
   function askRemove(p: Project) {
     const using = tasks.filter((t) => t.checkouts.some((c) => c.project_id === p.id));
     setConfirming({
@@ -58,6 +118,7 @@ export function ReposView() {
             <div className="confirm-detail">
               {using.length} task{using.length === 1 ? "" : "s"} currently use it. They
               lose that repository, and any task left with none is removed.
+              {health[p.id]?.clone !== "ok" && " If it has only moved, Locate it instead."}
             </div>
           )}
         </>
@@ -70,7 +131,7 @@ export function ReposView() {
       run: async () => {
         try {
           await api.removeProject(p.id);
-          await refreshAll();
+          await Promise.all([refreshAll(), refreshRepoHealth()]);
         } catch (e) {
           fail(e);
         }
@@ -78,19 +139,22 @@ export function ReposView() {
     });
   }
 
+  const syncingAll = syncing.size > 1;
+
   return (
     <div className="wide">
       <div className="wide-head">
         <h2>Repositories</h2>
         <span className="sub">
           {projects.length} in {groups.length} group{groups.length === 1 ? "" : "s"}
+          {troubled > 0 && <> · <span className="trouble-text">{troubled} to fix</span></>}
+          {lastFetch > 0 && <> · last fetched {ago(lastFetch * 1000, now)}</>}
         </span>
         <div className="spacer" />
         {groups.length > 1 && (
           <button
             className="btn btn-sm"
             onClick={() =>
-              // Groups start collapsed, so an empty record cannot mean "open".
               // Every group is written either way, or the ones never touched
               // would fall back to the default instead of following.
               setShut(Object.fromEntries(groups.map((g) => [g.group, anyOpen])))
@@ -99,6 +163,22 @@ export function ReposView() {
             {anyOpen ? "Collapse all" : "Expand all"}
           </button>
         )}
+        <button
+          className="btn"
+          disabled={projects.length === 0}
+          title="Remove what tasks left behind. Shows everything first."
+          onClick={() => setCleaning(true)}
+        >
+          Clean up…
+        </button>
+        <button
+          className="btn"
+          disabled={projects.length === 0 || syncing.size > 0}
+          title="Fetch every repo into the app's copy, and fast-forward each clone's default branch where that is safe"
+          onClick={() => void sync(projects.map((p) => p.id))}
+        >
+          {syncingAll ? <span className="btn-busy"><Spinner />Syncing…</span> : "Sync all"}
+        </button>
         <button className="btn btn-primary" onClick={() => setAdding(true)}>
           Add repositories
         </button>
@@ -114,9 +194,7 @@ export function ReposView() {
       )}
 
       {groups.map((g) => {
-        // Collapsed by default: this tab is for finding one repository among
-        // many, and a group is a heading long before it is a list.
-        const closed = shut[g.group] ?? true;
+        const closed = isClosed(g);
         return (
         <div key={g.group || "_"} className="card">
           <div
@@ -141,27 +219,62 @@ export function ReposView() {
           </div>
 
           {!closed && g.projects.map((p) => {
+            const h = health[p.id];
+            const problem = trouble(p);
+            const unlinked = problem !== null && h?.clone === "ok";
             const inUse = tasks.filter((t) =>
               t.checkouts.some((c) => c.project_id === p.id),
             ).length;
+            const row = synced[p.id];
+            const busy = syncing.has(p.id);
             return (
-              <div key={p.id} className="repo-manage">
-                <span className="rname">{p.name}</span>
-                <span className="rpath" title={p.path}>{p.path}</span>
-                <span className="chip">{p.default_branch}</span>
-                {inUse > 0 && <span className="chip add">{inUse} task{inUse === 1 ? "" : "s"}</span>}
-                <Combo
-                  value={p.group ?? ""}
-                  options={groupNames}
-                  placeholder="ungrouped"
-                  width={170}
-                  onChange={(v) => {
-                    if ((v.trim() || null) !== p.group) void setGroup(p.id, v);
-                  }}
-                />
-                <button className="btn btn-sm btn-danger" onClick={() => askRemove(p)}>
-                  Remove
-                </button>
+              <div key={p.id} className={`repo-manage${problem ? " trouble" : ""}`}>
+                <div className="repo-line">
+                  <span className="rname">{p.name}</span>
+                  <span className="chip" title="Default branch">{p.default_branch}</span>
+                  <Standing h={h} branch={p.default_branch} />
+                  {inUse > 0 && <span className="chip add">{inUse} task{inUse === 1 ? "" : "s"}</span>}
+                  <CopyState h={h} now={now} />
+                  <div className="spacer" />
+                  <Combo
+                    value={p.group ?? ""}
+                    options={groupNames}
+                    placeholder="ungrouped"
+                    width={150}
+                    onChange={(v) => {
+                      if ((v.trim() || null) !== p.group) void setGroup(p.id, v);
+                    }}
+                  />
+                  <button className="btn btn-sm" disabled={busy} onClick={() => void sync([p.id])}>
+                    {busy ? <span className="btn-busy"><Spinner />Syncing…</span> : "Sync"}
+                  </button>
+                  <button className="btn btn-sm btn-danger" onClick={() => askRemove(p)}>
+                    Remove
+                  </button>
+                </div>
+                <div className="repo-sub">
+                  {/* Isolated, or the right-to-left run that keeps the end in
+                      view moves the leading slash to the end. */}
+                  <span className="rpath" title={p.path}><bdi>{p.path}</bdi></span>
+                  {h?.origin && <span className="rorigin" title={`Fetches from ${h.origin}`}>{h.origin}</span>}
+                </div>
+                {problem && (
+                  <div className="repo-problem">
+                    <span>
+                      {problem}
+                      {unlinked && " They are linked back when the app next starts, if the app's copy has their last commit."}
+                    </span>
+                    {h?.found && (
+                      <button className="btn btn-sm btn-primary" onClick={() => void locate(p, h.found ?? undefined)}>
+                        Use {h.found}
+                      </button>
+                    )}
+                    {!unlinked && (
+                      <button className="btn btn-sm" onClick={() => void locate(p)}>Locate…</button>
+                    )}
+                  </div>
+                )}
+                {row && <div className={`repo-synced${row.ok ? "" : " failed"}`}>{row.detail}</div>}
               </div>
             );
           })}
@@ -169,7 +282,14 @@ export function ReposView() {
         );
       })}
 
-      {adding && <AddRepos onClose={() => setAdding(false)} />}
+      {adding && <AddRepos onClose={() => { setAdding(false); void refreshRepoHealth().catch(fail); }} />}
+
+      {cleaning && (
+        <CleanUp
+          onClose={() => setCleaning(false)}
+          onDone={() => void Promise.all([refreshAll(), refreshRepoHealth()]).catch(fail)}
+        />
+      )}
 
       {confirming && (
         <Confirm
@@ -182,5 +302,41 @@ export function ReposView() {
         />
       )}
     </div>
+  );
+}
+
+/** The clone's default branch against origin's, when it is not level. */
+function Standing({ h, branch }: { h: RepoHealth | undefined; branch: string }) {
+  if (!h || h.behind === null || h.ahead === null) return null;
+  if (h.ahead > 0) {
+    return (
+      <span
+        className="chip warn"
+        title={`Your clone's ${branch} has ${h.ahead} commit${h.ahead === 1 ? "" : "s"} origin does not${h.behind ? `, and is ${h.behind} behind` : ""}. Sync leaves it alone.`}
+      >
+        ↑{h.ahead}{h.behind > 0 && ` ↓${h.behind}`}
+      </span>
+    );
+  }
+  if (h.behind > 0) {
+    return (
+      <span className="chip" title={`Your clone's ${branch} is ${h.behind} commit${h.behind === 1 ? "" : "s"} behind origin. Sync fast-forwards it.`}>
+        ↓{h.behind}
+      </span>
+    );
+  }
+  return null;
+}
+
+/** Whether the app's copy exists, and when it last fetched. */
+function CopyState({ h, now }: { h: RepoHealth | undefined; now: number }) {
+  if (!h) return null;
+  if (!h.store) {
+    return <span className="rstore warn" title="Sync makes it, if the clone is there">no copy yet</span>;
+  }
+  return (
+    <span className="rstore" title={`The app's copy: ${h.store}`}>
+      {h.fetched_at ? `fetched ${ago(h.fetched_at * 1000, now)}` : "never fetched"}
+    </span>
   );
 }

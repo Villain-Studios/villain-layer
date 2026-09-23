@@ -9,6 +9,7 @@ import type {
   JiraIssueType,
   PaneInfo,
   Project,
+  RepoHealth,
   ReviewQueue,
   Settings,
   TaskView,
@@ -30,6 +31,11 @@ interface Toast {
 
 interface State {
   projects: Project[];
+  /**
+   * How each repository is doing, by project id (REPO-5). Read at launch,
+   * when the Repos view opens, and after anything there changes it.
+   */
+  repoHealth: Record<string, RepoHealth>;
   tasks: TaskView[];
   panes: PaneInfo[];
   agents: AgentStatus[];
@@ -82,6 +88,7 @@ interface State {
 
   refreshAll: () => Promise<void>;
   refreshRepos: () => Promise<void>;
+  refreshRepoHealth: () => Promise<void>;
   /**
    * `poll` marks a timer tick: one that lands while another is still out
    * reuses its answer. An explicit refresh — after a delete, a commit, a
@@ -239,6 +246,7 @@ export const useStore = create<State>((set, get) => {
 
   return {
   projects: [],
+  repoHealth: {},
   tasks: [],
   panes: [],
   prs: {},
@@ -313,6 +321,11 @@ export const useStore = create<State>((set, get) => {
   },
 
   refreshRepos: async () => set({ projects: await api.listProjects() }),
+
+  refreshRepoHealth: async () => {
+    const rows = await api.repoHealth();
+    set({ repoHealth: Object.fromEntries(rows.map((h) => [h.project_id, h])) });
+  },
 
   refreshTasks: (opts) =>
     coalesce(tasksSlot, opts?.poll ?? false, async () => {
@@ -630,6 +643,22 @@ export function groupProjects(projects: Project[]) {
       label: group || "ungrouped",
       projects: [...items].sort((a, b) => a.name.localeCompare(b.name)),
     }));
+}
+
+/**
+ * What is wrong with a repository, in a sentence, or null: a clone that is
+ * gone or has become another repository, and task worktrees git cannot
+ * read. All of it was found by hand once, before the Repos view said so.
+ */
+export function repoTrouble(p: Project, h: RepoHealth | undefined, tasks: TaskView[]): string | null {
+  if (h?.clone === "missing") return `The clone is not at ${p.path} any more.`;
+  if (h?.clone === "not_repo") return `${p.path} is not a git repository any more.`;
+  if (h?.clone === "other") {
+    return `${p.path} is a different repository now, not the one the app's copy fetches from (${h.origin ?? "unknown"}).`;
+  }
+  const unlinked = tasks.flatMap((t) => t.checkouts).filter((c) => c.project_id === p.id && c.broken).length;
+  if (unlinked > 0) return `${unlinked} task worktree${unlinked === 1 ? "" : "s"} git cannot read.`;
+  return null;
 }
 
 /** Rolled-up worktree state across every repo in a task. */

@@ -218,7 +218,8 @@ Don't make the UI ask on a timer.
 ## Add a git operation
 
 1. **A named function in `src-tauri/src/git.rs`** (or `git/store.rs`, for
-   the app's copies). `run` is private, so there is no other way. A
+   the app's copies, `git/upkeep.rs` for Sync and Clean up). `run` is
+   private, so there is no other way. A
    repo-level operation runs in `commands::repo_for` (new worktrees) or
    `commands::owner_of` (an existing one), never in `Project.path`.
 2. **Spell out what you rely on** (see the table in

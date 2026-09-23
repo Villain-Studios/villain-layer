@@ -97,6 +97,8 @@ pub fn notify(app: &tauri::AppHandle, kind: &str, text: impl Into<String>) {
 }
 
 mod projects;
+mod repos;
+mod cleanup;
 mod tasks;
 mod panes;
 mod diff;
@@ -106,6 +108,8 @@ mod slack;
 mod settings;
 
 pub use projects::*;
+pub use repos::*;
+pub use cleanup::*;
 pub use tasks::*;
 pub use panes::*;
 pub use diff::*;

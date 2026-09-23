@@ -227,6 +227,21 @@ status poll keeps current. Per-worktree operations (remove, prune, the
 branch deleted at finish) ask the worktree which repository owns it
 (`owner_of`), so a worktree that could not be moved is still handled.
 
+**Keeping them in shape** (`git/upkeep.rs`, `commands/repos.rs`,
+`commands/cleanup.rs`). Whether a folder is "the same repository" is
+decided one way everywhere: it fetches from where the copy does,
+`same_remote` treating ssh and https spellings as one (`is_store_of`).
+Sync fetches origin into the copy with `--prune`, carries the clone's
+settings again, and fast-forwards the clone's default branch: its
+`origin/<branch>` is written from the copy, so there is no second trip to
+the network, and the branch moves by `merge --ff-only` where it is
+checked out or by a compare-and-swap `update-ref` where it is not. Clean
+up lists before it removes, and removes by id from a list made again at
+that moment, so nothing is taken on the strength of an old look. What the
+other build uses is read from its `config.json` beside this build's
+(`ConfigStore::other_builds`), since both default to the same task folder
+location.
+
 **Branch point and lease.** `Checkout.base_commit` is where the branch was
 cut. It moves to what was merged in or rebased onto. `git::baseline` uses
 it, and falls back to the merge base when HEAD never reached it (a merge

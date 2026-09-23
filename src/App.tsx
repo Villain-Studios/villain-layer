@@ -4,7 +4,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api } from "./lib/api";
 import { prepareNotifications } from "./lib/notify";
-import { CHAT_TASK_ID, needsYou, selectedTask, stoppedOnPurpose, taskTotals, useStore, type View } from "./store";
+import { CHAT_TASK_ID, needsYou, repoTrouble, selectedTask, stoppedOnPurpose, taskTotals, useStore, type View } from "./store";
 import type { NotifyTarget, TaskView } from "./lib/types";
 import { Sidebar } from "./components/sidebar/Sidebar";
 import { Terminals } from "./components/Terminals";
@@ -47,6 +47,7 @@ function Watchers() {
   const view = useStore((s) => s.view);
   const githubConnected = useStore((s) => s.settings?.github_connected);
   const refreshAll = useStore((s) => s.refreshAll);
+  const refreshRepoHealth = useStore((s) => s.refreshRepoHealth);
   const refreshPanes = useStore((s) => s.refreshPanes);
   const refreshPrs = useStore((s) => s.refreshPrs);
   const refreshReviewQueue = useStore((s) => s.refreshReviewQueue);
@@ -62,6 +63,9 @@ function Watchers() {
   );
 
   useEffect(() => { void refreshAll().catch(fail); }, [refreshAll, fail]);
+  // Once at launch too, so a repo in trouble shows on the Repos tab before
+  // anyone opens it.
+  useEffect(() => { void refreshRepoHealth().catch(fail); }, [refreshRepoHealth, fail]);
 
   // Polls only while the window is in front, and slow down further when the
   // window is focused but nobody has touched it — leaving an 8s full-repo
@@ -419,6 +423,9 @@ function TopBar() {
   const waiting = useStore((s) => s.panes.filter(needsYou).length);
   const issueCount = useStore((s) => s.issues.length);
   const projectCount = useStore((s) => s.projects.length);
+  const repoTroubles = useStore(
+    (s) => s.projects.filter((p) => repoTrouble(p, s.repoHealth[p.id], s.tasks)).length,
+  );
   const reviewCount = useStore(
     (s) => (s.reviewQueue?.mine.length ?? 0) + (s.reviewQueue?.team?.prs.length ?? 0),
   );
@@ -445,6 +452,11 @@ function TopBar() {
           >
             {t.label}
             {t.badge !== undefined && <span className="badge">{t.badge}</span>}
+            {t.id === "repos" && repoTroubles > 0 && (
+              <span className="badge warn" title="Repositories with a problem the Repos view can fix">
+                {repoTroubles} to fix
+              </span>
+            )}
             {t.id === "work" && waiting > 0 && (
               <span
                 className="badge warn"

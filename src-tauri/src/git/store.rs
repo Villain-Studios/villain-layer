@@ -55,12 +55,15 @@ pub fn create_store(source: &Path, store: &Path) -> Result<()> {
 /// Whether `store` is a copy this app made of the repository at `source`:
 /// a bare repository fetching from the same place. Lets a second build, or
 /// a repo added again, reuse the copy instead of making another.
+/// Also how Locate and Sync tell that a folder is still the same repository.
 pub fn is_store_of(store: &Path, source: &Path) -> bool {
-    let bare = run(store, &["rev-parse", "--is-bare-repository"])
-        .map(|o| o.trim() == "true")
-        .unwrap_or(false);
-    let url = |dir: &Path| run(dir, &["config", "--get", "remote.origin.url"]).ok().map(|u| u.trim().to_string());
-    bare && url(store).is_some() && url(store) == url(source)
+    let Some(fetches) = super::origin_url(store) else {
+        return false;
+    };
+    // A clone with no origin is one its copy fetches from directly.
+    super::is_bare(store)
+        && (super::origin_url(source).is_some_and(|url| super::same_remote(&url, &fetches))
+            || Path::new(&fetches) == source)
 }
 
 /// The user's settings for this repository, carried into the copy: a work
@@ -68,7 +71,7 @@ pub fn is_store_of(store: &Path, source: &Path) -> bool {
 /// clone used to get them for free, and a commit signed as the wrong person
 /// is not something to find out from review. What describes the clone
 /// itself rather than the user stays behind.
-fn copy_local_config(from: &Path, to: &Path) -> Result<()> {
+pub fn copy_local_config(from: &Path, to: &Path) -> Result<()> {
     let listed = run(from, &["config", "--local", "--null", "--list"])?;
     let mut seen: Vec<String> = Vec::new();
     for entry in listed.split('\0').filter(|e| !e.is_empty()) {

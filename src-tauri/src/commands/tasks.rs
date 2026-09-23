@@ -13,7 +13,7 @@ use crate::pty::PaneKind;
 
 use super::AppState;
 use super::diff::RepoResult;
-use super::panes::{agent_file_dir, write_task_context, GENERATED_FILES};
+use super::panes::{agent_file_dir, remove_generated, write_task_context};
 
 // ------------------------------------------------------------------- tasks
 
@@ -983,15 +983,7 @@ fn delete_task_inner(state: &AppState, id: String, force: bool) -> Result<Vec<Re
     // as an orphan under the worktree root. Anything else in there is the
     // user's, so remove_dir refuses rather than taking it.
     if let Some(dir) = agent_file_dir(state, &task) {
-        for name in GENERATED_FILES {
-            let _ = std::fs::remove_file(dir.join(name));
-        }
-        // The folder Gemini CLI's project settings sit in, emptied above.
-        let _ = std::fs::remove_dir(dir.join(".gemini"));
-        // Claude Code's record of what was allowed in this folder, which goes
-        // with the folder. Left, it was the one file keeping it on disk.
-        let _ = std::fs::remove_file(dir.join(".claude").join("settings.local.json"));
-        let _ = std::fs::remove_dir(dir.join(".claude"));
+        remove_generated(&dir);
     }
     let _ = std::fs::remove_dir(&task.root);
 

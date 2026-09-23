@@ -362,7 +362,7 @@ pub(crate) fn chat_room(state: &AppState, id: &str) -> Result<PathBuf> {
 }
 
 /// Everything the app itself writes into a task folder.
-pub(crate) const GENERATED_FILES: &[&str] = &[
+const GENERATED_FILES: &[&str] = &[
     "CLAUDE.md",
     "AGENTS.md",
     ".mcp.json",
@@ -370,6 +370,30 @@ pub(crate) const GENERATED_FILES: &[&str] = &[
     super::github::FEEDBACK_FILE,
     ".gemini/settings.json",
 ];
+
+/// Left in a task folder by others, and going with it all the same: Claude
+/// Code's record of what was allowed there (left, it was the one file
+/// keeping a deleted task's folder on disk) and Finder's `.DS_Store`.
+const LEFT_BY_OTHERS: &[&str] = &[".claude/settings.local.json", ".DS_Store"];
+
+/// Whether a file in a task folder, by its path there, is one that goes
+/// with the task.
+pub(crate) fn is_generated(rel: &str) -> bool {
+    GENERATED_FILES.contains(&rel) || LEFT_BY_OTHERS.contains(&rel)
+}
+
+/// Take those files out of a task folder: when the task is deleted
+/// (DISK-2), and when Clean up finds a folder no task uses. Anything else
+/// in there is the user's, and stays.
+pub(crate) fn remove_generated(dir: &Path) {
+    for name in GENERATED_FILES.iter().chain(LEFT_BY_OTHERS) {
+        let _ = std::fs::remove_file(dir.join(name));
+    }
+    // The folders those sit in, if that emptied them.
+    for sub in [".gemini", ".claude"] {
+        let _ = std::fs::remove_dir(dir.join(sub));
+    }
+}
 
 /// Where generated agent files (`.mcp.json`, context) may safely be written.
 ///

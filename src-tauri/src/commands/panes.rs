@@ -110,16 +110,21 @@ pub(crate) fn resume_dir(state: &AppState, task: &Task, agent_id: &str, cwd: &st
         .unwrap_or_else(|| cwd.to_string())
 }
 
+/// Off the command thread, like the other two spawns: the first spawn after
+/// launch waits on the login shell's PATH, and every one writes the config.
 #[tauri::command]
-pub fn spawn_shell(
+pub async fn spawn_shell(
     app: AppHandle,
-    state: State<AppState>,
     task_id: String,
     checkout_id: Option<String>,
     rows: Option<u16>,
     cols: Option<u16>,
 ) -> Result<PaneInfo> {
-    open_shell(&app, &state, task_id, checkout_id, rows, cols)
+    let handle = app.clone();
+    super::blocking(app, move |state| {
+        open_shell(&handle, state, task_id, checkout_id, rows, cols)
+    })
+    .await
 }
 
 pub(crate) fn open_shell(
@@ -153,11 +158,14 @@ pub(crate) fn open_shell(
     Ok(pane)
 }
 
+/// Off the command thread: starting an agent writes its context files and
+/// the MCP config, and pre-trusting the folder rewrites `~/.claude.json` —
+/// which grows with every project Claude Code has seen. On the main thread
+/// that was a stall on every Launch.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
-pub fn spawn_agent(
+pub async fn spawn_agent(
     app: AppHandle,
-    state: State<AppState>,
     task_id: String,
     agent_id: String,
     checkout_id: Option<String>,
@@ -166,10 +174,14 @@ pub fn spawn_agent(
     rows: Option<u16>,
     cols: Option<u16>,
 ) -> Result<PaneInfo> {
-    start_agent(
-        &app, &state, task_id, agent_id, checkout_id, prompt,
-        resume.unwrap_or(false), rows, cols,
-    )
+    let handle = app.clone();
+    super::blocking(app, move |state| {
+        start_agent(
+            &handle, state, task_id, agent_id, checkout_id, prompt,
+            resume.unwrap_or(false), rows, cols,
+        )
+    })
+    .await
 }
 
 /// Conversations that could be picked up again in a task's working directory.
@@ -476,13 +488,14 @@ pub(crate) fn write_task_context(state: &AppState, task: &Task) -> Result<()> {
 /// A standing agent with no worktree, for questions, ticket drafting and
 /// whatever MCP servers the user has configured for their own CLI.
 #[tauri::command]
-pub fn spawn_chat(
+pub async fn spawn_chat(
     app: AppHandle,
-    state: State<AppState>,
     agent_id: String,
     prompt: Option<String>,
 ) -> Result<PaneInfo> {
-    open_chat(&app, &state, agent_id, prompt, None, false)
+    let handle = app.clone();
+    super::blocking(app, move |state| open_chat(&handle, state, agent_id, prompt, None, false))
+        .await
 }
 
 pub(crate) fn open_chat(

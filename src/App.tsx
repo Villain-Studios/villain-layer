@@ -57,6 +57,15 @@ function Watchers() {
   const toast = useStore((s) => s.toast);
   const fail = useStore((s) => s.fail);
 
+  /**
+   * When each GitHub sweep last ran. Their timers were set afresh on every
+   * re-arm (each view change, return to the window, and move in or out of
+   * quiet), and so were reset before ninety seconds ever passed: a PR said
+   * "conflicts with dev" long after a rebase and push had fixed it. Timed
+   * from here, re-arming can bring a sweep forward but never put it off.
+   */
+  const sweptAt = useRef({ prs: 0, reviews: 0 });
+
   /** The last PR state each repo was seen in, so only changes are announced. */
   const seenPrs = useRef(
     new Map<string, { verdict: string; comments: number; merged: boolean }>(),
@@ -85,9 +94,27 @@ function Watchers() {
     const clear = () => {
       if (tasksT !== undefined) clearInterval(tasksT);
       if (panesT !== undefined) clearInterval(panesT);
+      // Timeouts and intervals share one list of timers, so either clears.
       if (prsT !== undefined) clearInterval(prsT);
       if (reviewsT !== undefined) clearInterval(reviewsT);
       tasksT = panesT = prsT = reviewsT = undefined;
+    };
+
+    /** Run `sweep` every `every` ms, the first time when it is next due. */
+    const due = (key: "prs" | "reviews", every: number, sweep: () => void) => {
+      const run = () => {
+        sweptAt.current[key] = Date.now();
+        sweep();
+      };
+      const wait = Math.max(0, sweptAt.current[key] + every - Date.now());
+      const id: ReturnType<typeof setInterval> = setTimeout(() => {
+        run();
+        // guard: allow poll — GitHub cannot push to a desktop app; 90s stays inside its search limit.
+        const again = setInterval(run, every);
+        if (key === "prs") prsT = again;
+        else reviewsT = again;
+      }, wait);
+      return id;
     };
 
     const arm = () => {
@@ -102,13 +129,9 @@ function Watchers() {
       // guard: allow poll — a backstop: restored panes and output-timed states arrive without an event.
       panesT = setInterval(() => void refreshPanes({ poll: true }).catch(() => {}), panesMs);
       if (useStore.getState().settings?.github_connected) {
-        // guard: allow poll — GitHub cannot push to a desktop app; 90s stays inside its search limit.
-        prsT = setInterval(() => void refreshPrs(), quiet ? 180_000 : 90_000);
-        // guard: allow poll — as above.
-        reviewsT = setInterval(
-          () => void refreshReviewQueue({ quiet: true }),
-          quiet ? 180_000 : 90_000,
-        );
+        const every = quiet ? 180_000 : 90_000;
+        prsT = due("prs", every, () => void refreshPrs());
+        reviewsT = due("reviews", every, () => void refreshReviewQueue({ quiet: true }));
       }
     };
 
@@ -123,10 +146,9 @@ function Watchers() {
           lastInput = Date.now();
           void refreshTasks({ poll: true }).catch(() => {});
           void refreshPanes({ poll: true }).catch(() => {});
-          if (useStore.getState().settings?.github_connected) {
-            void refreshReviewQueue({ quiet: true });
-          }
         }
+        // Back in front: what GitHub says is refreshed at once if it is
+        // overdue, pull requests included (they were left to the timer).
         arm();
       } else {
         clear();
@@ -187,8 +209,12 @@ function Watchers() {
   // there. Kept out of the polling effect on purpose: that one re-runs on
   // every change of view, and a sweep per tab switch is four calls per open
   // pull request each time the Tickets tab is glanced at.
-  useEffect(() => { void refreshPrs(); }, [refreshPrs, githubConnected]);
   useEffect(() => {
+    sweptAt.current.prs = Date.now();
+    void refreshPrs();
+  }, [refreshPrs, githubConnected]);
+  useEffect(() => {
+    sweptAt.current.reviews = Date.now();
     void refreshReviewQueue({ quiet: true });
   }, [refreshReviewQueue, githubConnected]);
 

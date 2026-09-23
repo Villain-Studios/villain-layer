@@ -25,3 +25,7 @@ dist-ssr
 
 # Serena language-server cache, per checkout.
 .serena/
+
+# Claude Code's per-agent worktrees and personal settings.
+.claude/worktrees/
+.claude/settings.local.json

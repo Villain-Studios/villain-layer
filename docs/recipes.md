@@ -66,7 +66,10 @@ To remove a command, undo every step, in the same commit.
    `#[serde(default)]` (or `#[serde(default = "yes")]` for a `true`
    default). A doc comment says what it controls, and why the default is
    what it is.
-2. For a UI preference, add it to `UiPrefs` **and** to its `Default` impl.
+2. For a UI preference, add it to `UiPrefs`, to its `Default` impl, **and**
+   to `set_ui_prefs` in `commands/settings.rs`, which rebuilds the struct
+   field by field so each value can be clamped (the compiler asks for this
+   one).
 3. **Mirror it** in `src/lib/types.ts` (`UiPrefs`, `Settings`, …).
 4. **Add the control** in `src/components/Settings.tsx`, in the section it
    belongs to. For a switch:
@@ -81,7 +84,9 @@ To remove a command, undo every step, in the same commit.
    ```
 
 5. **Add it to the settings table** in `docs/features.md` (§13), with its
-   default.
+   default. Then search the file for the behaviour it switches: a
+   requirement or table elsewhere (§11 Notifications, say) may describe it,
+   and that is the contract to change first.
 6. **Update the mock world's** `ui` in `src/__mock__/world.ts`. `tsc` will
    tell you.
 7. A field that holds data (not a preference) and is later removed drops

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api } from "../lib/api";
@@ -57,18 +57,47 @@ export function Settings() {
 
   const [worktreeRoot, setWorktreeRoot] = useState("");
 
+  // Each form follows what is stored for it, and only when that changes.
+  // Keyed on the whole settings object, every save anywhere — a switch on
+  // Appearance — refreshed it and reset every field, so a JQL half typed on
+  // the Jira page was gone by the time you came back to it.
+  const loaded = settings !== null;
+  const j = settings?.jira;
   useEffect(() => {
-    if (!settings) return;
-    setJiraUrl(settings.jira?.base_url ?? "");
-    setJiraEmail(settings.jira?.email ?? "");
-    setJiraProject(settings.jira?.project_key ?? "");
-    setJiraJql(settings.jira?.jql ?? "");
-    setGhApi(settings.github?.api_url ?? "https://api.github.com");
-    setGhWeb(settings.github?.web_url ?? "https://github.com");
-    setGhTeam(settings.github?.review_team ?? "");
-    setSlackChannel(settings.slack?.channel ?? "");
-    setWorktreeRoot(settings.worktree_root_is_default ? "" : settings.worktree_root);
-  }, [settings]);
+    if (!loaded) return;
+    setJiraUrl(j?.base_url ?? "");
+    setJiraEmail(j?.email ?? "");
+    setJiraProject(j?.project_key ?? "");
+    setJiraJql(j?.jql ?? "");
+  }, [loaded, j?.base_url, j?.email, j?.project_key, j?.jql]);
+  const g = settings?.github;
+  useEffect(() => {
+    if (!loaded) return;
+    setGhApi(g?.api_url ?? "https://api.github.com");
+    setGhWeb(g?.web_url ?? "https://github.com");
+    setGhTeam(g?.review_team ?? "");
+  }, [loaded, g?.api_url, g?.web_url, g?.review_team]);
+  const slackChannelSaved = settings?.slack?.channel;
+  useEffect(() => {
+    if (loaded) setSlackChannel(slackChannelSaved ?? "");
+  }, [loaded, slackChannelSaved]);
+  const rootSaved = settings ? (settings.worktree_root_is_default ? "" : settings.worktree_root) : null;
+  useEffect(() => {
+    if (rootSaved !== null) setWorktreeRoot(rootSaved);
+  }, [rootSaved]);
+
+  /**
+   * What the sliders say before it is saved.
+   *
+   * Bound straight to the stored value, a slider only moved once the save
+   * came back, so the thumb jumped back between steps of a drag — and every
+   * step was a save, rewriting the whole config file.
+   */
+  const [uiDraft, setUiDraft] = useState<Partial<UiPrefs>>({});
+  const uiDraftRef = useRef(uiDraft);
+  const uiSaveTimer = useRef<number | undefined>(undefined);
+  const uiSaves = useRef(0);
+  const ui = settings ? { ...settings.ui, ...uiDraft } : null;
 
   async function connectJira() {
     setBusy(true);
@@ -137,13 +166,36 @@ export function Settings() {
     }
   }
 
-  async function saveUi(ui: UiPrefs) {
+  /** Save a change to the prefs, on top of whatever a slider has not saved yet. */
+  async function saveUi(patch: Partial<UiPrefs>) {
+    // Read now, not from the render that scheduled this: a slider's save
+    // runs after a pause, and anything switched meanwhile must survive it.
+    const stored = useStore.getState().settings?.ui;
+    if (!stored) return;
+    // This save carries the draft, so a slider's pending one is not needed
+    // — and firing after it would put the slider's older value back.
+    window.clearTimeout(uiSaveTimer.current);
+    uiDraftRef.current = { ...uiDraftRef.current, ...patch };
+    setUiDraft(uiDraftRef.current);
+    const n = ++uiSaves.current;
     try {
-      await api.setUiPrefs(ui);
+      await api.setUiPrefs({ ...stored, ...uiDraftRef.current });
       await refreshSettings();
+      if (n === uiSaves.current) {
+        uiDraftRef.current = {};
+        setUiDraft({});
+      }
     } catch (e) {
       fail(e);
     }
+  }
+
+  /** A slider: shown at once, saved once it stops moving. */
+  function slideUi(patch: Partial<UiPrefs>) {
+    uiDraftRef.current = { ...uiDraftRef.current, ...patch };
+    setUiDraft(uiDraftRef.current);
+    window.clearTimeout(uiSaveTimer.current);
+    uiSaveTimer.current = window.setTimeout(() => void saveUi({}), 250);
   }
 
   async function saveWorktreeRoot(path: string) {
@@ -193,7 +245,7 @@ export function Settings() {
       {section === "appearance" && settings && (
         <>
           <Field
-            label={`Interface scale — ${Math.round(settings.ui.scale * 100)}%`}
+            label={`Interface scale — ${Math.round(ui!.scale * 100)}%`}
             hint="Scales everything except terminal text, which has its own size below."
           >
             <input
@@ -201,17 +253,17 @@ export function Settings() {
               min={0.8}
               max={1.6}
               step={0.05}
-              value={settings.ui.scale}
-              onChange={(e) => void saveUi({ ...settings.ui, scale: Number(e.target.value) })}
+              value={ui!.scale}
+              onChange={(e) => slideUi({ scale: Number(e.target.value) })}
             />
             <div className="row" style={{ marginTop: 6 }}>
               {[0.9, 1.0, 1.15, 1.3, 1.45].map((v) => (
                 <button
                   key={v}
                   className={`btn btn-sm${
-                    Math.abs(settings.ui.scale - v) < 0.001 ? " btn-primary" : ""
+                    Math.abs(ui!.scale - v) < 0.001 ? " btn-primary" : ""
                   }`}
-                  onClick={() => void saveUi({ ...settings.ui, scale: v })}
+                  onClick={() => void saveUi({ scale: v })}
                 >
                   {Math.round(v * 100)}%
                 </button>
@@ -228,7 +280,7 @@ export function Settings() {
                 label="New reviews and tickets"
                 detail="A banner when a pull request starts waiting on your review, or a ticket is assigned to you."
                 checked={settings.ui.system_notifications}
-                onChange={(v) => void saveUi({ ...settings.ui, system_notifications: v })}
+                onChange={(v) => void saveUi({ system_notifications: v })}
               />
             </div>
           </Field>
@@ -242,31 +294,31 @@ export function Settings() {
                 label="Put terminals back when the app reopens"
                 detail="Panes that were open last time are reopened in the same worktrees."
                 checked={settings.ui.restore_panes}
-                onChange={(v) => void saveUi({ ...settings.ui, restore_panes: v })}
+                onChange={(v) => void saveUi({ restore_panes: v })}
               />
               <Switch
                 label="Let agents read terminal output"
                 detail="Agents can read what a terminal here has printed — a dev server's log, a test run — instead of starting a second copy. A shell's scrollback is a record of everything typed in it, so this stays off until you want it."
                 checked={settings.ui.agents_read_panes}
-                onChange={(v) => void saveUi({ ...settings.ui, agents_read_panes: v })}
+                onChange={(v) => void saveUi({ agents_read_panes: v })}
               />
               <Switch
                 label="Move the ticket when work starts"
                 detail="Starting a task transitions its Jira issue into whatever your workflow calls in progress, so the board and this app do not disagree about what is being worked on."
                 checked={settings.ui.sync_jira_status}
-                onChange={(v) => void saveUi({ ...settings.ui, sync_jira_status: v })}
+                onChange={(v) => void saveUi({ sync_jira_status: v })}
               />
               <Switch
                 label="Trust the folders this app creates"
                 detail="Claude Code asks whether it trusts a folder the first time it starts there, and does nothing until answered — once per task, per repo. This answers it in advance, and only for worktrees and chat folders the app made itself."
                 checked={settings.ui.trust_agent_dirs}
-                onChange={(v) => void saveUi({ ...settings.ui, trust_agent_dirs: v })}
+                onChange={(v) => void saveUi({ trust_agent_dirs: v })}
               />
             </div>
           </Field>
 
           <Field
-            label={`Terminal text — ${settings.ui.terminal_font_size}px`}
+            label={`Terminal text — ${ui!.terminal_font_size}px`}
             hint="Applies to running panes immediately; they re-fit to the new cell size."
           >
             <input
@@ -274,10 +326,8 @@ export function Settings() {
               min={9}
               max={24}
               step={1}
-              value={settings.ui.terminal_font_size}
-              onChange={(e) =>
-                void saveUi({ ...settings.ui, terminal_font_size: Number(e.target.value) })
-              }
+              value={ui!.terminal_font_size}
+              onChange={(e) => slideUi({ terminal_font_size: Number(e.target.value) })}
             />
           </Field>
         </>

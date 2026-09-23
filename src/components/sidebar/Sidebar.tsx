@@ -53,7 +53,10 @@ export function Sidebar() {
 
   function askDeleteTask(task: TaskView) {
     if (deleting) return;
-    const { dirty } = taskTotals(task);
+    // Staged counts too: git refuses those as surely as unstaged ones, and
+    // deleting without force then stopped and failed on a staged-only repo.
+    const { dirty: unstaged, staged } = taskTotals(task);
+    const dirty = unstaged + staged;
     const repos = task.checkouts.length;
     setConfirming({
       title: "Delete task",
@@ -422,6 +425,7 @@ export function Sidebar() {
 
               {isOpen && task.checkouts.map((c) => {
                 const d = c.status ? c.status.unstaged + c.status.untracked : 0;
+                const lose = d + (c.status?.staged ?? 0);
                 return (
                   <div key={c.id} className="repo-row">
                     <span className={`dot ${c.exists ? "" : "gone"}`} />
@@ -432,7 +436,7 @@ export function Sidebar() {
                       title="Remove repo from task"
                       onClick={(e) => {
                         e.stopPropagation();
-                        askRemoveRepo(c.id, c.project_name, d, task.checkouts.length === 1);
+                        askRemoveRepo(c.id, c.project_name, lose, task.checkouts.length === 1);
                       }}
                     >
                       ✕

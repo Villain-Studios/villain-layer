@@ -62,11 +62,16 @@ const TRUST_MARKERS: &[&str] = &[
 
 /// Phrases the agent CLIs print when they will not do any more work.
 ///
-/// Best-effort and deliberately specific: a false positive only mislabels a
-/// pane, but matching a bare "rate limit" would fire whenever an agent read
-/// code about rate limiting.
+/// Best-effort and deliberately specific: matching a bare "rate limit" would
+/// fire whenever an agent read code about rate limiting. A bare "usage limit"
+/// was the same mistake — the prompt "add a usage limit to the API" is echoed
+/// as it is typed — and this notice never clears, so it flagged the pane for
+/// good and offered to hand off an agent that was fine.
 const LIMIT_MARKERS: &[&str] = &[
-    "usage limit",
+    "usage limit reached",
+    "reached your usage limit",
+    "hit your usage limit",
+    "usage limit exceeded",
     "rate limit reached",
     "rate limit exceeded",
     "quota exceeded",
@@ -895,7 +900,7 @@ mod tests {
         let both = b"Do you trust this folder?\n... You've reached your USAGE LIMIT";
         assert_eq!(notice_in(both, &mut scratch), Some("usage_limit"));
         // A tail cut through the middle of a character is still searchable.
-        let cut = &"é usage limit".as_bytes()[1..];
+        let cut = &"é usage limit reached".as_bytes()[1..];
         assert_eq!(notice_in(cut, &mut scratch), Some("usage_limit"));
         assert_eq!(notice_in(b"added a rate limiter", &mut scratch), None);
     }
@@ -956,8 +961,12 @@ mod tests {
         assert!(hit("RESOURCE_EXHAUSTED"));
         assert!(hit("Your credit balance is too low"));
 
+        assert!(hit("Claude usage limit reached. Your limit will reset at 5pm"));
+        assert!(hit("You've hit your usage limit for GPT-5"));
+
         // Reading or writing code about rate limiting must not count.
         assert!(!hit("added a rate limiter to the gateway"));
+        assert!(!hit("> add a usage limit to the orders API"));
         assert!(!hit("Do you trust the files in this folder?"));
         assert!(!hit("see docs/rate-limits.md for the policy"));
         assert!(!hit("fn check_quota(user: &User) -> bool"));

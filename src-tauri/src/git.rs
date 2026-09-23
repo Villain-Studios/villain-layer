@@ -709,7 +709,16 @@ pub fn commits_since(
 }
 
 /// Files changed in a single commit, with the same shape as `changed_files`.
+/// A commit id from the UI, which reaches git where options are still read.
+fn commit_id(sha: &str) -> Result<&str> {
+    if sha.is_empty() || sha.starts_with('-') {
+        return Err(Error::Git(format!("{sha:?} is not a commit")));
+    }
+    Ok(sha)
+}
+
 pub fn commit_files(dir: &Path, sha: &str) -> Result<Vec<ChangedFile>> {
+    let sha = commit_id(sha)?;
     // Empty format: we only want the numstat body, not the commit header.
     let numstat = run(
         dir,
@@ -762,6 +771,7 @@ fn parse_numstat(out: &str) -> Vec<ChangedFile> {
 
 /// Unified patch for one file as it changed in `sha`.
 pub fn commit_file_diff(dir: &Path, sha: &str, path: &str) -> Result<String> {
+    let sha = commit_id(sha)?;
     // `--pretty=format:` drops the commit header so the UI gets a bare patch,
     // the same shape `file_diff` returns for working-tree changes.
     let patch = run(dir, &["show", "--no-color", "--pretty=format:", sha, "--", path])?;

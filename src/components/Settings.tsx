@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api } from "../lib/api";
@@ -30,6 +31,8 @@ settings:
 
 export function Settings() {
   const settings = useStore((s) => s.settings);
+  const [version, setVersion] = useState<string | null>(null);
+  useEffect(() => { void getVersion().then(setVersion).catch(() => {}); }, []);
   const agents = useStore((s) => s.agents);
   const toggleSettings = useStore((s) => s.toggleSettings);
   const refreshSettings = useStore((s) => s.refreshSettings);
@@ -626,6 +629,17 @@ export function Settings() {
               />
               <button className="btn" onClick={() => void pickWorktreeRoot()}>Browse…</button>
             </div>
+          </Field>
+          <Field
+            label="Version"
+            hint={
+              <>
+                Name this in a bug report. A crash is written to{" "}
+                <code>~/Library/Logs/villain-layer/panic.log</code>.
+              </>
+            }
+          >
+            <div style={{ fontFamily: "var(--mono)", fontSize: 12 }}>Villain Layer {version ?? "…"}</div>
           </Field>
           <Field label="Detected agents">
             <div className="col">

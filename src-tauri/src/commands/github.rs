@@ -94,6 +94,11 @@ pub async fn set_checkout_base(
     if base.is_empty() {
         return Err(Error::Other("a pull request needs a base branch".into()));
     }
+    // It reaches git where options are still read, on a timer: a base of
+    // `--output=<file>` would have written that file every PR sweep.
+    if base.starts_with('-') {
+        return Err(Error::Other(format!("{base:?} is not a branch name")));
+    }
     state.config.update(|c| {
         let Some(found) = c.checkouts.iter_mut().find(|c| c.id == checkout_id) else {
             return Err(Error::NotFound(format!("checkout {checkout_id}")));

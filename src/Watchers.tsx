@@ -5,7 +5,8 @@ import { api } from "./lib/api";
 import { prepareNotifications } from "./lib/notify";
 import { stoppedOnPurpose, useStore } from "./store";
 import { CHAT_TASK_ID } from "./lib/derive";
-import type { NotifyTarget } from "./lib/types";
+import { goTo } from "./lib/goto";
+import type { Target } from "./lib/types";
 
 /**
  * Tauri emits an unfocused event while the window is still coming up.
@@ -258,6 +259,7 @@ export function Watchers() {
       state.toast(
         pane.exit_code === 0 ? "info" : "error",
         `${pane.title} ${how} in ${owner?.name ?? "a task"}`,
+        { target: `pane:${pane.task_id}:${pane.id}` },
       );
 
       if (state.settings?.slack_connected) {
@@ -294,11 +296,13 @@ export function Watchers() {
       const pane = state.panes.find((x) => x.id === e.payload.pane_id);
       if (!pane) return;
       const owner = state.tasks.find((t) => t.id === pane.task_id);
+      const target: Target = `pane:${pane.task_id}:${pane.id}`;
 
       if (e.payload.notice === "trust_prompt") {
         state.toast(
           "info",
           `${pane.title} is asking whether to trust ${owner?.name ?? "the worktree"} — answer it in Terminals or it will not start.`,
+          { target },
         );
       } else if (e.payload.notice === "usage_limit") {
         // A chat has no handoff; a task's agent does.
@@ -307,6 +311,7 @@ export function Watchers() {
           pane.task_id === CHAT_TASK_ID
             ? `${pane.title} hit a usage limit in a chat — start another chat with a different agent.`
             : `${pane.title} hit a usage limit in ${owner?.name ?? "a task"} — open it to hand off to another agent.`,
+          { target },
         );
       }
     });
@@ -349,6 +354,7 @@ export function Watchers() {
     for (const [taskId, rows] of Object.entries(prs)) {
       const owner = tasks.find((t) => t.id === taskId);
       const where = owner?.name ?? "a task";
+      const target: Target = `pr:${taskId}`;
 
       for (const row of rows) {
         if (!row.pr) continue;
@@ -369,7 +375,7 @@ export function Watchers() {
         // check below, or the one closing worth a word would be the one
         // swallowed. Merged is only news when it was seen open here first.
         if (row.pr.state !== "open") {
-          if (was && now.merged && !was.merged) toast("success", `${pr} merged — ${where}`);
+          if (was && now.merged && !was.merged) toast("success", `${pr} merged — ${where}`, { target });
           seen.set(key, now);
           continue;
         }
@@ -387,34 +393,19 @@ export function Watchers() {
           .find((r) => r.state === "APPROVED" || r.state === "CHANGES_REQUESTED")?.author;
 
         if (now.verdict !== was.verdict && now.verdict === "approved") {
-          toast("success", `${pr} approved${by ? ` by ${by}` : ""} — ${where}`);
+          toast("success", `${pr} approved${by ? ` by ${by}` : ""} — ${where}`, { target });
         } else if (now.verdict !== was.verdict && now.verdict === "changes_requested") {
-          toast("error", `${pr}: changes requested${by ? ` by ${by}` : ""} — ${where}`);
+          toast("error", `${pr}: changes requested${by ? ` by ${by}` : ""} — ${where}`, { target });
         } else if (now.comments > was.comments) {
           const n = now.comments - was.comments;
-          toast("info", `${n} new comment${n === 1 ? "" : "s"} on ${pr} — ${where}`);
+          toast("info", `${n} new comment${n === 1 ? "" : "s"} on ${pr} — ${where}`, { target });
         }
       }
     }
   }, [prs, tasks, toast]);
 
   useEffect(() => {
-    const p = listen<NotifyTarget>("system-notify-click", (e) => {
-      const target = e.payload;
-      const s = useStore.getState();
-      if (target === "reviews" || target === "tickets" || target === "chat") s.setView(target);
-      // Nothing selected is the overview of every agent.
-      else if (target === "work") s.select(null);
-      else if (target.startsWith("task:")) {
-        const id = target.slice("task:".length);
-        // Deleted while the banner sat there: the overview, not a blank task.
-        s.select(s.tasks.some((t) => t.id === id) ? id : null);
-      }
-      const win = getCurrentWindow();
-      void win.unminimize().catch(() => {});
-      void win.show().catch(() => {});
-      void win.setFocus().catch(() => {});
-    });
+    const p = listen<Target>("system-notify-click", (e) => goTo(e.payload, { raise: true }));
     return () => { void p.then((un) => un()); };
   }, []);
 

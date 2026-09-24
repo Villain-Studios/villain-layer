@@ -745,6 +745,9 @@ textarea { resize: vertical; font-family: var(--mono); }
 .toast.error { border-left-color: var(--red); }
 .toast.success { border-left-color: var(--green); }
 .toast.info { border-left-color: var(--blue); }
+/* A toast that opens what it is about says so, so a click is not a surprise. */
+.toast.linked:hover { border-color: var(--accent-dim); }
+.toast.linked::after { content: " →"; color: var(--dim); }
 
 /* A spinner standing in for a button's label: same box, so the button does
    not change width the moment it starts working. */
@@ -1084,6 +1087,11 @@ textarea { resize: vertical; font-family: var(--mono); }
   cursor: pointer;
 }
 .review-card:hover { background: var(--panel); border-color: var(--accent-dim); }
+.review-card.focused {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-dim);
+  background: var(--panel-2);
+}
 .review-card .top {
   display: flex;
   align-items: center;

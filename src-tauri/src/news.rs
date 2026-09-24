@@ -13,6 +13,7 @@ use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
 use crate::commands::{banner, AppState, ReviewQueue};
+use crate::target::Target;
 
 /// How often to look while the window is away. The same three minutes the
 /// webview used.
@@ -115,13 +116,8 @@ pub fn saw_reviews(app: &AppHandle, queue: &ReviewQueue) {
     if fresh.is_empty() || !announce_now(app) {
         return;
     }
-    if fresh.len() > BATCH {
-        let body = format!("{} pull requests are waiting on a review", fresh.len());
-        let _ = banner(app, "Reviews".into(), body, "reviews".into());
-        return;
-    }
-    for (pr, title) in fresh {
-        let _ = banner(app, "Review requested".into(), format!("{pr} — {title}"), "reviews".into());
+    for (title, body, target) in review_banners(&fresh) {
+        let _ = banner(app, title, body, target);
     }
 }
 
@@ -131,14 +127,37 @@ pub fn saw_tickets(app: &AppHandle, issues: &[crate::integrations::jira::Issue])
     if fresh.is_empty() || !announce_now(app) {
         return;
     }
+    for (title, body, target) in ticket_banners(&fresh) {
+        let _ = banner(app, title, body, target);
+    }
+}
+
+/// Banners for new review requests: title, body and what a click opens.
+fn review_banners(fresh: &[(String, String)]) -> Vec<(String, String, String)> {
+    if fresh.len() > BATCH {
+        let body = format!("{} pull requests are waiting on a review", fresh.len());
+        return vec![("Reviews".into(), body, Target::Reviews.to_string())];
+    }
+    fresh
+        .iter()
+        .map(|(pr, title)| {
+            ("Review requested".into(), format!("{pr} — {title}"), Target::Review(pr).to_string())
+        })
+        .collect()
+}
+
+/// Banners for new tickets: title, body and what a click opens.
+fn ticket_banners(fresh: &[(String, String)]) -> Vec<(String, String, String)> {
     if fresh.len() > BATCH {
         let body = format!("{} tickets were assigned to you", fresh.len());
-        let _ = banner(app, "Tickets".into(), body, "tickets".into());
-        return;
+        return vec![("Tickets".into(), body, Target::Tickets.to_string())];
     }
-    for (key, summary) in fresh {
-        let _ = banner(app, "New ticket".into(), format!("{key} — {summary}"), "tickets".into());
-    }
+    fresh
+        .iter()
+        .map(|(key, summary)| {
+            ("New ticket".into(), format!("{key} — {summary}"), Target::Ticket(key).to_string())
+        })
+        .collect()
 }
 
 /// Look for news while the window is away, for as long as the app runs.
@@ -242,5 +261,15 @@ mod tests {
         assert!(seen.tickets(&[issue("ACME-1"), issue("ACME-2")]).is_empty());
         seen.forget();
         assert!(seen.tickets(&[issue("ACME-3")]).is_empty(), "after forgetting, a snapshot again");
+    }
+
+    #[test]
+    fn a_new_review_opens_that_pull_request() {
+        let one = [("o/a#7".to_string(), "Fix it".to_string())];
+        assert_eq!(review_banners(&one)[0].2, "review:o/a#7");
+        let many: Vec<_> = (0..4).map(|i| (format!("o/a#{i}"), String::new())).collect();
+        assert_eq!(review_banners(&many)[0].2, "reviews");
+        let ticket = [("ACME-3".to_string(), "Do it".to_string())];
+        assert_eq!(ticket_banners(&ticket)[0].2, "ticket:ACME-3");
     }
 }

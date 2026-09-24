@@ -70,8 +70,7 @@ pub fn set_ui_prefs(state: State<AppState>, ui: UiPrefs) -> Result<()> {
 }
 
 /// A banner, and what a click on it should open: `target` is handed back
-/// untouched in `system-notify-click` — a view name (`reviews`, `tickets`,
-/// `chat`, `work`) or `task:<id>`.
+/// untouched in `system-notify-click`, as `target::Target` wrote it.
 ///
 /// The notification plugin's desktop backend shows the banner and drops the
 /// click — `show` never waits for it — so a click could focus the app and

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api";
+import { useFocusedPane } from "../lib/goto";
 import { read, write } from "../lib/persist";
 import { useStore } from "../store";
 import { CHAT_TASK_ID, paneState } from "../lib/derive";
@@ -51,6 +52,8 @@ export function ChatView() {
       setActive(panes[i].id);
     }
   }, [panes, active]);
+
+  useFocusedPane(panes, setActive);
 
   useEffect(() => {
     const i = panes.findIndex((p) => p.id === active);

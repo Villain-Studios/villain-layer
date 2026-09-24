@@ -493,7 +493,7 @@ const DEFAULT_CEILING = 600;
  * rather than in a new one.
  */
 const CEILINGS: Record<string, number> = {
-  "src/styles.css": 1650,
+  "src/styles.css": 1800,
   "src/components/DiffView.tsx": 1100,
   "src/components/PrPanel.tsx": 800,
   "src/store.ts": 800,

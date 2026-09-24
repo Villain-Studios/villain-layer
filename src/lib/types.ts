@@ -532,11 +532,20 @@ export interface Settings {
 }
 
 /**
- * What a click on a banner opens, handed back in `system-notify-click`. Every
- * banner is the backend's: reviews and tickets from `news.rs`, agents from
- * `attention.rs`.
+ * What a click on a banner, a toast or a message opens (NOTE-4), as
+ * `target.rs` writes it; `lib/target.ts` routes it. Banners hand it back in
+ * `system-notify-click`.
  */
-export type NotifyTarget = "reviews" | "tickets" | "work" | "chat" | `task:${string}`;
+export type Target =
+  | "reviews"
+  | "tickets"
+  | "work"
+  | "chat"
+  | `task:${string}`
+  | `pane:${string}:${string}`
+  | `pr:${string}`
+  | `ticket:${string}`
+  | `review:${string}`;
 
 /** Queued before the UI was listening — drained once on boot. */
 export interface AppNotice {

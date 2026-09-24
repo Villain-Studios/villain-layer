@@ -11,6 +11,7 @@ mod previous;
 mod pty;
 mod secrets;
 mod shellenv;
+mod target;
 
 use commands::AppState;
 use config::ConfigStore;

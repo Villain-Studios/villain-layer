@@ -17,6 +17,7 @@ import { Settings } from "./components/Settings";
 import { UpdateFromBase } from "./components/UpdateFromBase";
 import { GearIcon, SidebarToggle } from "./components/ui";
 import { Watchers } from "./Watchers";
+import { goTo } from "./lib/goto";
 
 /** The view switcher, with a count on each view worth one. */
 function TopBar() {
@@ -228,7 +229,15 @@ function Toasts() {
   return (
     <div className="toasts">
       {toasts.map((t) => (
-        <div key={t.id} className={`toast ${t.kind}`} onClick={() => dismissToast(t.id)}>
+        <div
+          key={t.id}
+          className={`toast ${t.kind}${t.target ? " linked" : ""}`}
+          title={t.target ? "Open" : undefined}
+          onClick={() => {
+            if (t.target) goTo(t.target);
+            dismissToast(t.id);
+          }}
+        >
           {t.text}
         </div>
       ))}

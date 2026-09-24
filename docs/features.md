@@ -572,8 +572,14 @@ Code: `commands/github.rs` (`review_queue`), `ReviewsView.tsx`.
   nothing, so the next success does not announce it all again.
 - **NOTE-3** More than three at once MUST become one banner. The same pane
   is not announced again within two minutes.
-- **NOTE-4** Clicking a banner MUST open what it is about: the task, the
-  Chat view, Reviews or Tickets.
+- **NOTE-4** Clicking a banner or a toast MUST open exactly what it is
+  about, by one route (`lib/target.ts`): an agent's opens its task with that
+  pane selected (a chat's, Chat with that chat); pull request news opens the
+  task's Pull requests tab; a ticket opens Tickets on that key; a review
+  request opens Reviews with that pull request highlighted. What has gone
+  since falls back: a pane (every restart gives panes new ids) to its task,
+  a task to the Work overview. A toast about nothing in particular only
+  closes.
 - **NOTE-5** Slack posts MUST pass the backend's switches: "Send anything"
   first, then one per kind. Nothing routes around them. A webhook URL is a
   secret and never appears in an error.

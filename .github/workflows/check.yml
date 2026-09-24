@@ -10,6 +10,10 @@ on:
   # A release runs this first, on the tagged commit.
   workflow_call:
 
+# Reading the code is all it does.
+permissions:
+  contents: read
+
 jobs:
   check:
     runs-on: macos-latest

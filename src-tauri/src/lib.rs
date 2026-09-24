@@ -7,6 +7,7 @@ mod git;
 mod integrations;
 mod mcp;
 mod news;
+mod previous;
 mod pty;
 mod secrets;
 mod shellenv;
@@ -98,6 +99,7 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle();
             secrets::use_service(&app.config().identifier);
+            previous::adopt(handle);
             let state = AppState {
                 config: ConfigStore::load(handle)?,
                 ptys: PtyManager::default(),

@@ -209,9 +209,9 @@ second `tauri dev` fights the first over the same files. If one is running,
 use it: the mock harness is served by it too.
 
 **Two copies of the app never share state.** The dev build has its own
-identifier (`dev.villain.layer.dev`), config folder and keychain item. Each
-copy reads its config once at launch and writes it back whole, so two copies
-on one file erase each other's tasks. `release:mac` refuses to run while the
+identifier (`eu.codevillain.villain-layer.dev`), config folder and keychain
+item. Each copy reads its config once at launch and writes it back whole, so
+two copies on one file erase each other's tasks. `release:mac` refuses to run while the
 installed app is open. Replacing the bundle under a running app kills it
 and every agent in it. `cargo` relinking `target/debug` under a running dev
 build does the same.

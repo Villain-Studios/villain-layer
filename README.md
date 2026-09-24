@@ -106,12 +106,12 @@ blocked by Gatekeeper, since it is not signed yet: right-click → Open, once.
   default), the app marks its own task folders as trusted, so Claude Code
   does not stop to ask. It touches nothing else in that file, and never a
   folder outside the task folder location.
-- **Tokens** are kept in the macOS keychain (item `dev.villain.layer`).
+- **Tokens** are kept in the macOS keychain (item `eu.codevillain.villain-layer`).
   They are never written to a file. Until the app is signed, macOS asks
   for keychain access again after every update: *Always Allow* is tied to
   the exact binary.
 - **Settings and tasks** are in
-  `~/Library/Application Support/dev.villain.layer/config.json`.
+  `~/Library/Application Support/eu.codevillain.villain-layer/config.json`.
 
 The complete list is in [`docs/features.md`](docs/features.md#14-what-the-app-writes-on-your-machine).
 

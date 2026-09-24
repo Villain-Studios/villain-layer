@@ -14,7 +14,7 @@ use std::sync::OnceLock;
 use crate::error::Result;
 
 /// The release build's identifier, and the service its tokens were saved under.
-const SERVICE: &str = "dev.villain.layer";
+const SERVICE: &str = "eu.codevillain.villain-layer";
 static SERVICE_NAME: OnceLock<String> = OnceLock::new();
 
 /// Keep tokens under this build's own identifier. The dev build has its own
@@ -136,4 +136,22 @@ pub fn delete(key: &str) -> Result<()> {
     let mut bundle = load()?;
     bundle.remove(key);
     store(bundle)
+}
+
+/// Copy the tokens `from`, another identifier, saved into this build's own
+/// item, unless this build has one already (DISK-4). Reading another
+/// identifier's item is what prompts, once.
+pub fn adopt(from: &str) -> Result<()> {
+    let _writing = WRITING.lock();
+    if read_item(BUNDLE)?.is_some() {
+        return Ok(());
+    }
+    let saved = match keyring::Entry::new(from, BUNDLE)?.get_password() {
+        Ok(v) => v,
+        Err(keyring::Error::NoEntry) => return Ok(()),
+        Err(e) => return Err(e.into()),
+    };
+    write_item(BUNDLE, &saved)?;
+    *cache().lock() = None;
+    Ok(())
 }

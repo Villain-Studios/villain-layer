@@ -647,15 +647,15 @@ Known gaps:
 
 | Where | What |
 |---|---|
-| `~/Library/Application Support/dev.villain.layer/` | `config.json`: repos, tasks, settings, saved panes. At agent launch also `.mcp.json` (0600), `claude-hooks.json`, `copilot-plugin/`, `opencode-plugin.js` |
-| Keychain, service `dev.villain.layer` | one item holding every token |
+| `~/Library/Application Support/eu.codevillain.villain-layer/` | `config.json`: repos, tasks, settings, saved panes. At agent launch also `.mcp.json` (0600), `claude-hooks.json`, `copilot-plugin/`, `opencode-plugin.js` |
+| Keychain, service `eu.codevillain.villain-layer` | one item holding every token |
 | `~/.villain-worktrees/` (settable) | task folders, `_chat/` rooms, and `.repos/`: the app's own copy of each repo (REPO-4) |
 | a task folder | the worktrees, `AGENTS.md` and `CLAUDE.md` (task context), `.mcp.json`, and `.gemini/settings.json`, `PR_DESCRIPTION.md`, `PR_FEEDBACK.md`, and hand-offs too long to type (`CONFLICTS.md`, `REVIEW_COMMENTS.md`, `PR_DRAFT_REQUEST.md`, `FIRST_PROMPT.md`, PANE-11) as they come up |
 | `~/.claude.json` | trust entries for the app's own folders only (PANE-10) |
 | `~/Library/Logs/villain-layer/panic.log` | a crash's location and backtrace |
 
-The dev build uses `dev.villain.layer.dev` for its config folder and
-keychain item instead.
+The dev build uses `eu.codevillain.villain-layer.dev` for its config folder
+and keychain item instead.
 
 - **DISK-1** Nothing generated MUST ever be written inside a worktree,
   where it would end up in a commit.
@@ -667,6 +667,15 @@ keychain item instead.
 - **DISK-3** `config.json` MUST be written whole, via a temp file and
   rename. A file from a newer build is copied aside before an older build
   touches it. An unreadable one is kept as `config.json.unreadable`.
+- **DISK-4** The first launch under an identifier, while its config folder
+  does not exist yet, MUST start from the config and tokens saved under the
+  identifier the app had before (`dev.villain.layer`, and
+  `dev.villain.layer.dev` for the dev build). They are copied, never moved.
+  A config folder that exists adopts nothing, even without its
+  `config.json`, so starting over stays started over and a disconnected
+  token stays gone.
+
+Code: `previous.rs`, `secrets.rs` (`adopt`).
 
 ---
 

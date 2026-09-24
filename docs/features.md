@@ -583,7 +583,7 @@ Code: `commands/github.rs` (`review_queue`), `ReviewsView.tsx`.
   request opens Reviews with that pull request highlighted. What has gone
   since falls back: a pane (every restart gives panes new ids) to its task,
   a task to the Work overview. A toast about nothing in particular only
-  closes.
+  closes. A banner also brings the window forward, minimized or not.
 - **NOTE-5** Slack posts MUST pass the backend's switches: "Send anything"
   first, then one per kind. Nothing routes around them. A webhook URL is a
   secret and never appears in an error.

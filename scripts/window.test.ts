@@ -13,6 +13,13 @@ describe("the window", () => {
     expect(caps.permissions).toContain("core:window:allow-start-dragging");
   });
 
+  test("may be brought forward, for a banner that was clicked (NOTE-4)", () => {
+    const caps = JSON.parse(read("src-tauri/capabilities/default.json"));
+    for (const p of ["show", "unminimize", "set-focus"]) {
+      expect(caps.permissions).toContain(`core:window:allow-${p}`);
+    }
+  });
+
   test("is not left relying on CSS that macOS's WebKit ignores", () => {
     expect(read("src/styles.css")).not.toContain("-webkit-app-region");
   });

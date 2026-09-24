@@ -4,6 +4,7 @@ import { useStore } from "../../store";
 import type { AgentStatus, JiraIssue, JiraTransition, Project } from "../../lib/types";
 import { Combo, Field, Modal } from "../ui";
 import { RepoPicker } from "../RepoPicker";
+import { suggestBase } from "../../lib/derive";
 import { IssueTypeIcon, type TypeMap } from "../IssueType";
 
 export function StartWorkDialog({
@@ -83,9 +84,9 @@ export function StartWorkDialog({
     const defaults = [...new Set(selected.map((p) => p.default_branch))];
     // Suggest, do not overwrite: a base typed by hand survives adding another
     // repository. Only a box still showing the last suggestion follows it.
-    const suggested = defaults.length === 1 ? defaults[0] : "";
-    setBase((cur) => (cur === "" || cur === autoBase.current ? suggested : cur));
-    autoBase.current = suggested;
+    const last = autoBase.current;
+    setBase((cur) => suggestBase(cur, last, defaults));
+    autoBase.current = suggestBase("", "", defaults);
     let cancelled = false;
     Promise.all(selected.map((p) => api.projectBranches(p.id).catch(() => [] as string[])))
       .then((lists) => {

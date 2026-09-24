@@ -5,6 +5,7 @@
 import { useEffect } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useStore } from "../store";
+import { api } from "./api";
 import { route } from "./target";
 import type { PaneInfo, Target } from "./types";
 
@@ -39,6 +40,9 @@ export function goTo(target: Target | string, opts: { raise?: boolean } = {}) {
         break;
     }
   }
+  // Whatever else was said about the same thing has been seen now too.
+  const seen = s.messages.filter((m) => !m.read && m.target === target).map((m) => m.id);
+  if (seen.length) void api.markMessagesRead(seen).catch(() => {});
   if (opts.raise) {
     const win = getCurrentWindow();
     void win.unminimize().catch(() => {});

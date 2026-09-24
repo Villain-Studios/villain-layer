@@ -7,6 +7,7 @@ import type {
   CheckoutPr,
   JiraIssue,
   JiraIssueType,
+  Message,
   PaneInfo,
   Project,
   RepoHealth,
@@ -110,6 +111,9 @@ interface State {
   refreshPrs: () => Promise<void>;
   /** `quiet` is a timer tick: no toast, and no spinner if a queue is already shown. */
   refreshReviewQueue: (opts?: { quiet?: boolean }) => Promise<void>;
+  /** The message center's log (MSG-1), newest first. */
+  messages: Message[];
+  refreshMessages: () => Promise<void>;
   /** Replace one task's PR rows, for a panel that fetched them itself. */
   setTaskPrs: (taskId: string, rows: CheckoutPr[]) => void;
   refreshSettings: () => Promise<void>;
@@ -185,6 +189,13 @@ async function coalesce(slot: Slot, poll: boolean, work: () => Promise<void>): P
 const tasksSlot: Slot = { get: () => tasksInflight, set: (p) => { tasksInflight = p; } };
 const panesSlot: Slot = { get: () => panesInflight, set: (p) => { panesInflight = p; } };
 const reviewsSlot: Slot = { get: () => reviewsInflight, set: (p) => { reviewsInflight = p; } };
+let messagesInflight: Promise<void> | null = null;
+const messagesSlot: Slot = { get: () => messagesInflight, set: (p) => { messagesInflight = p; } };
+
+function sameMessages(a: Message[], b: Message[]): boolean {
+  return a.length === b.length
+    && a.every((m, i) => m.id === b[i].id && m.at === b[i].at && m.read === b[i].read && m.count === b[i].count);
+}
 
 /**
  * When each task's PR rows were last fetched. A sweep walks every task and
@@ -283,6 +294,7 @@ export const useStore = create<State>((set, get) => {
   panes: [],
   prs: {},
   reviewQueue: null,
+  messages: [],
   reviewQueueLoading: false,
   reviewQueueError: null,
   agents: [],
@@ -490,6 +502,12 @@ export const useStore = create<State>((set, get) => {
         }
       },
     ),
+
+  refreshMessages: () =>
+    coalesce(messagesSlot, false, async () => {
+      const messages = await api.listMessages();
+      if (!sameMessages(get().messages, messages)) set({ messages });
+    }),
 
   refreshIssues: async (opts) => {
     if (!get().settings?.jira_connected) return;

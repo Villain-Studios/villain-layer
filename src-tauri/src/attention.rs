@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
 
 use crate::commands::{banner, AppState, CHAT_TASK_ID};
+use crate::messages::{self, Kind, Level, New};
 use crate::pty::{Activity, PaneInfo, PaneKind};
 use crate::target::Target;
 
@@ -56,6 +57,8 @@ struct News {
     task_id: String,
     title: String,
     what: String,
+    /// A crash or a usage limit is bad news; a clean finish is good.
+    level: Level,
 }
 
 #[derive(Default)]
@@ -93,6 +96,11 @@ impl Watch {
                         task_id: info.task_id.clone(),
                         title: info.title.clone(),
                         what: what.to_string(),
+                        level: if info.notice.as_deref() == Some("usage_limit") {
+                            Level::Error
+                        } else {
+                            Level::Info
+                        },
                     });
                 }
             }
@@ -116,6 +124,7 @@ impl Watch {
                             code.map(|c| c.to_string()).unwrap_or_else(|| "?".into())
                         ),
                     },
+                    level: if info.exit_code == Some(0) { Level::Success } else { Level::Error },
                 });
             }
         }
@@ -152,6 +161,9 @@ pub fn spawn(app: AppHandle) -> std::io::Result<()> {
                 let state = app.state::<AppState>();
                 let on = state.config.read().ui.notify_waiting_agents;
                 let (count, news) = watch.pass(&state.ptys.attention(), Instant::now());
+                // Kept whatever the switch and wherever you are looking
+                // (MSG-2): the switch is about interrupting you.
+                messages::record_all(&app, record(&news, |id| task_name(&state, id)));
 
                 let Some(window) = app.get_webview_window("main") else {
                     continue;
@@ -185,6 +197,28 @@ fn task_name(state: &AppState, task_id: &str) -> String {
         .unwrap_or_else(|_| "a task".into())
 }
 
+/// The line a banner and a message both say about one agent.
+fn line(n: &News) -> String {
+    format!("{} {}", n.title, n.what)
+}
+
+fn open(n: &News) -> String {
+    Target::Pane { task: &n.task_id, pane: &n.pane_id }.to_string()
+}
+
+/// What a pass found, for the message center: one each, never batched.
+fn record(news: &[News], name: impl Fn(&str) -> String) -> Vec<New> {
+    news.iter()
+        .map(|n| New {
+            kind: Kind::Agent,
+            level: n.level,
+            title: name(&n.task_id),
+            body: line(n),
+            target: Some(open(n)),
+        })
+        .collect()
+}
+
 /// The banners for what a pass found: title, body and what a click opens.
 fn describe(news: &[News], name: impl Fn(&str) -> String) -> Vec<(String, String, String)> {
     if news.len() > BATCH {
@@ -200,15 +234,7 @@ fn describe(news: &[News], name: impl Fn(&str) -> String) -> Vec<(String, String
             target.to_string(),
         )];
     }
-    news.iter()
-        .map(|n| {
-            (
-                name(&n.task_id),
-                format!("{} {}", n.title, n.what),
-                Target::Pane { task: &n.task_id, pane: &n.pane_id }.to_string(),
-            )
-        })
-        .collect()
+    news.iter().map(|n| (name(&n.task_id), line(n), open(n))).collect()
 }
 
 #[cfg(test)]
@@ -342,7 +368,13 @@ mod tests {
     }
 
     fn news(task: &str, pane: &str) -> News {
-        News { pane_id: pane.into(), task_id: task.into(), title: "Claude Code".into(), what: "finished".into() }
+        News {
+            pane_id: pane.into(),
+            task_id: task.into(),
+            title: "Claude Code".into(),
+            what: "finished".into(),
+            level: Level::Success,
+        }
     }
 
     #[test]

@@ -547,6 +547,25 @@ export type Target =
   | `ticket:${string}`
   | `review:${string}`;
 
+export type MessageKind = "agent" | "review" | "ticket" | "pr" | "error" | "notice";
+export type MessageLevel = "info" | "success" | "error";
+
+/** One row of the message center (`messages.rs`), newest first. */
+export interface Message {
+  id: number;
+  /** Unix milliseconds of the latest time it was said. */
+  at: number;
+  kind: MessageKind;
+  level: MessageLevel;
+  title: string;
+  body: string;
+  /** Where a click goes (NOTE-4). A string: an older build's may not be a `Target` this one knows. */
+  target: string | null;
+  read: boolean;
+  /** Said this many times while unread, within ten minutes. */
+  count: number;
+}
+
 /** Queued before the UI was listening — drained once on boot. */
 export interface AppNotice {
   kind: string;

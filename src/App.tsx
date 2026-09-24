@@ -16,6 +16,7 @@ import { ReviewsView } from "./components/ReviewsView";
 import { Settings } from "./components/Settings";
 import { UpdateFromBase } from "./components/UpdateFromBase";
 import { GearIcon, SidebarToggle } from "./components/ui";
+import { MessageCenter } from "./components/MessageCenter";
 import { Watchers } from "./Watchers";
 import { goTo } from "./lib/goto";
 
@@ -86,6 +87,7 @@ function TopBar() {
             couldn&apos;t refresh
           </span>
         )}
+        <MessageCenter />
         <button className="icon-btn" title="Settings" onClick={() => toggleSettings(true)}>
           <GearIcon />
         </button>

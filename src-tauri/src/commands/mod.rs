@@ -25,6 +25,8 @@ pub struct AppState {
     pub status_cache: parking_lot::Mutex<HashMap<String, CachedStatus>>,
     /// Reviews and tickets already seen, so a banner is only for what is new.
     pub news: crate::news::Seen,
+    /// The message center's log (MSG-1).
+    pub messages: crate::messages::Messages,
 }
 
 /// Snapshot of one checkout's status, reused until it goes hot or ages out.
@@ -81,10 +83,16 @@ pub(crate) async fn off_runtime<T: Send + 'static>(
 /// not subscribed yet — so everything goes through the pending list and the
 /// frontend drains it when it is ready.
 pub fn push_notice(state: &AppState, kind: &str, text: impl Into<String>) {
-    state.pending_notices.lock().push(AppNotice {
-        kind: kind.into(),
-        text: text.into(),
+    let text = text.into();
+    // Kept too (MSG-1): a notice is a toast once, while you may be away.
+    state.messages.record(crate::messages::New {
+        kind: crate::messages::Kind::Notice,
+        level: if kind == "error" { crate::messages::Level::Error } else { crate::messages::Level::Info },
+        title: text.clone(),
+        body: String::new(),
+        target: None,
     });
+    state.pending_notices.lock().push(AppNotice { kind: kind.into(), text });
 }
 
 /// A notice raised after the UI may already have drained the queue, at any
@@ -94,6 +102,7 @@ pub fn notify(app: &tauri::AppHandle, kind: &str, text: impl Into<String>) {
     use tauri::{Emitter, Manager};
     push_notice(&app.state::<AppState>(), kind, text);
     let _ = app.emit("app:notices", ());
+    crate::messages::changed(app);
 }
 
 mod projects;
@@ -107,6 +116,7 @@ mod github;
 mod slack;
 mod settings;
 mod ticket_flow;
+mod messages;
 
 pub use projects::*;
 pub use repos::*;
@@ -119,6 +129,7 @@ pub use github::*;
 pub use slack::*;
 pub use settings::*;
 pub use ticket_flow::*;
+pub use messages::*;
 
 #[cfg(test)]
 mod tests {
@@ -474,6 +485,7 @@ mod tests {
             pending_notices: Default::default(),
             status_cache: Default::default(),
             news: Default::default(),
+            messages: crate::messages::Messages::for_tests(std::env::temp_dir().join("vl-test-messages.json")),
         };
 
         assert_eq!(super::adopt_worktrees(&state), (1, Vec::new()));

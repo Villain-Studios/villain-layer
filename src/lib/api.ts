@@ -41,6 +41,9 @@ import type {
   UpdateBy,
   AppNotice,
   Message,
+  MessageKind,
+  MessageLevel,
+  Target,
 } from "./types";
 
 export const api = {
@@ -263,6 +266,8 @@ export const api = {
   getSettings: () => invoke<Settings>("get_settings"),
   takeNotices: () => invoke<AppNotice[]>("take_notices"),
   listMessages: () => invoke<Message[]>("list_messages"),
+  addMessage: (kind: MessageKind, level: MessageLevel, title: string, target?: Target) =>
+    invoke<number>("add_message", { kind, level, title, target: target ?? null }),
   /** Every message when `ids` is left out. */
   markMessagesRead: (ids?: number[]) => invoke<void>("mark_messages_read", { ids: ids ?? null }),
   clearMessages: () => invoke<void>("clear_messages"),

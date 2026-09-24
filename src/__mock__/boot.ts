@@ -26,7 +26,7 @@
  */
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
-import type { Catchup, Cleaned, FlowStatus, PaneInfo, Project, RepoUpdate, Synced } from "../lib/types";
+import type { Catchup, Cleaned, FlowStatus, Message, PaneInfo, Project, RepoUpdate, Synced } from "../lib/types";
 import { ago, SCENARIOS } from "./world";
 
 type Args = Record<string, unknown>;
@@ -76,6 +76,16 @@ const answer: Record<string, Answer> = {
   get_settings: () => structuredClone(world.settings),
   take_notices: () => [],
   list_messages: () => structuredClone(world.messages),
+  add_message: (a) => {
+    const id = Math.max(0, ...world.messages.map((m) => m.id)) + 1;
+    world.messages.unshift({
+      id, at: Date.now(), kind: a.kind as Message["kind"], level: a.level as Message["level"],
+      title: a.title as string, body: "", target: (a.target as string | null) ?? null,
+      read: false, count: 1,
+    });
+    void emit("messages:changed");
+    return id;
+  },
   mark_messages_read: (a) => {
     const ids = a.ids as number[] | null;
     for (const m of world.messages) if (!ids || ids.includes(m.id)) m.read = true;

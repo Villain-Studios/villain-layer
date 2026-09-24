@@ -592,13 +592,18 @@ Center; this keeps what the app told you, newest first.
 
 - **MSG-1** The message center MUST keep every piece of news: an agent
   asking, finished or exited on its own (with a trust prompt or a usage
-  limit), a new review request, a new ticket, and a notice from the app.
+  limit), a new review request, a new ticket, a ticket the work moved, a
+  pull request approved, sent back, commented on or merged, a notice from
+  the app, and every error shown as a toast. Feedback on something you just
+  did ("Copied …") MUST NOT be kept.
 - **MSG-2** News MUST be recorded whether or not the window is focused and
   whether or not its banner is switched on. The switches decide banners and
   the dock count, nothing else. The first look is still a snapshot (NOTE-2).
 - **MSG-3** Each piece of news MUST be recorded once, by one source: agents
   by `attention.rs`, reviews and tickets by `news.rs`, notices by
-  `push_notice`. Its toast does not record it again. The same unread
+  `push_notice`; pull request news, ticket moves and errors by the UI's
+  toast (`add_message`), which is the only place they are seen. A toast of
+  something the backend recorded does not record it again. The same unread
   message again within ten minutes MUST count on the row already there
   (×N) rather than add another.
 - **MSG-4** The log MUST survive a restart: `messages.json` beside

@@ -259,7 +259,8 @@ export function Watchers() {
       state.toast(
         pane.exit_code === 0 ? "info" : "error",
         `${pane.title} ${how} in ${owner?.name ?? "a task"}`,
-        { target: `pane:${pane.task_id}:${pane.id}` },
+        // attention.rs keeps this one (MSG-3).
+        { target: `pane:${pane.task_id}:${pane.id}`, record: false },
       );
 
       if (state.settings?.slack_connected) {
@@ -302,7 +303,7 @@ export function Watchers() {
         state.toast(
           "info",
           `${pane.title} is asking whether to trust ${owner?.name ?? "the worktree"} — answer it in Terminals or it will not start.`,
-          { target },
+          { target, record: false },
         );
       } else if (e.payload.notice === "usage_limit") {
         // A chat has no handoff; a task's agent does.
@@ -311,7 +312,7 @@ export function Watchers() {
           pane.task_id === CHAT_TASK_ID
             ? `${pane.title} hit a usage limit in a chat — start another chat with a different agent.`
             : `${pane.title} hit a usage limit in ${owner?.name ?? "a task"} — open it to hand off to another agent.`,
-          { target },
+          { target, record: false },
         );
       }
     });
@@ -325,7 +326,8 @@ export function Watchers() {
     const show = (notices: { kind: string; text: string }[]) => {
       const toast = useStore.getState().toast;
       for (const n of notices) {
-        toast(n.kind === "error" ? "error" : "info", n.text);
+        // push_notice kept it already (MSG-3).
+        toast(n.kind === "error" ? "error" : "info", n.text, { record: false });
       }
     };
     void api.takeNotices().then(show).catch(() => {});
@@ -355,6 +357,7 @@ export function Watchers() {
       const owner = tasks.find((t) => t.id === taskId);
       const where = owner?.name ?? "a task";
       const target: Target = `pr:${taskId}`;
+      const news = { target, record: "pr" as const };
 
       for (const row of rows) {
         if (!row.pr) continue;
@@ -375,7 +378,7 @@ export function Watchers() {
         // check below, or the one closing worth a word would be the one
         // swallowed. Merged is only news when it was seen open here first.
         if (row.pr.state !== "open") {
-          if (was && now.merged && !was.merged) toast("success", `${pr} merged — ${where}`, { target });
+          if (was && now.merged && !was.merged) toast("success", `${pr} merged — ${where}`, news);
           seen.set(key, now);
           continue;
         }
@@ -393,12 +396,12 @@ export function Watchers() {
           .find((r) => r.state === "APPROVED" || r.state === "CHANGES_REQUESTED")?.author;
 
         if (now.verdict !== was.verdict && now.verdict === "approved") {
-          toast("success", `${pr} approved${by ? ` by ${by}` : ""} — ${where}`, { target });
+          toast("success", `${pr} approved${by ? ` by ${by}` : ""} — ${where}`, news);
         } else if (now.verdict !== was.verdict && now.verdict === "changes_requested") {
-          toast("error", `${pr}: changes requested${by ? ` by ${by}` : ""} — ${where}`, { target });
+          toast("error", `${pr}: changes requested${by ? ` by ${by}` : ""} — ${where}`, news);
         } else if (now.comments > was.comments) {
           const n = now.comments - was.comments;
-          toast("info", `${n} new comment${n === 1 ? "" : "s"} on ${pr} — ${where}`, { target });
+          toast("info", `${n} new comment${n === 1 ? "" : "s"} on ${pr} — ${where}`, news);
         }
       }
     }

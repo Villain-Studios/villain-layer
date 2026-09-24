@@ -168,7 +168,14 @@ the repo count, running agents, uncommitted changes and the review verdict.
   staging survives. A worktree mid-merge or mid-rebase is left for the
   next launch. A folder already cut off (TASK-11) is linked back at the
   commit the status poll last saw it on (`Checkout.last_head`), when the
-  copy has that commit. What could not be moved is reported.
+  copy has that commit. A folder that has become a clone of its own (its
+  `.git` a folder, as when it is cloned again in place) is linked back
+  too, when that loses nothing: it fetches from the same origin, is on the
+  task's branch, has nothing staged, no stash and no merge or rebase in
+  progress, every commit on its other branches is already in the copy, and
+  the copy's branch has no commit it lacks. Its commits come across, its
+  files are untouched (an edit stays an unstaged edit), and its own `.git`
+  folder goes. What could not be moved is reported, with the reason.
 
 Code: `commands/tasks.rs`, `sidebar/`, `FinishTask.tsx`,
 `CreateTaskDialog.tsx`.

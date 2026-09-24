@@ -171,7 +171,7 @@ pub fn run() {
                     commands::notify(
                         &restore,
                         "error",
-                        format!("Some task folders still depend on your clones: {}", problems.join("; ")),
+                        format!("Some task folders could not be linked to the app's own copies of their repositories: {}", problems.join("; ")),
                     );
                 }
                 commands::restore_panes(&restore);

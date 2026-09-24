@@ -223,7 +223,9 @@ before panes come back, `adopt_worktrees` moves any worktree still
 registered in a user's clone onto the copy, in place. The branch comes
 across first, and the index is copied so staging survives. A folder whose
 link is already gone is linked back at `Checkout.last_head`, which the
-status poll keeps current. Per-worktree operations (remove, prune, the
+status poll keeps current. A folder cloned again in place is linked back
+too (`reclaim_clone`), but only when that loses nothing: its branch must
+fast-forward the copy's, and it must hold nothing the copy would not keep. Per-worktree operations (remove, prune, the
 branch deleted at finish) ask the worktree which repository owns it
 (`owner_of`), so a worktree that could not be moved is still handled.
 

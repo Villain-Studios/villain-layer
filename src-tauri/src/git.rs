@@ -11,8 +11,8 @@ use crate::error::{Error, Result};
 mod store;
 mod upkeep;
 pub use store::{
-    adopt_worktree, belongs_to, copy_local_config, create_store, is_store_of, owner, relink_worktree,
-    take_branch_from_clone,
+    adopt_worktree, belongs_to, copy_local_config, create_store, is_own_clone, is_store_of, owner,
+    reclaim_clone, relink_worktree, take_branch_from_clone,
 };
 pub use upkeep::{
     branch_tips, delete_branch_at, fast_forward, fetch_store, holds, is_bare,

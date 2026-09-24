@@ -171,14 +171,18 @@ fn copy_branch(source: &Path, store: &Path, branch: &str) -> Result<()> {
         store,
         &["fetch", "--quiet", "--no-tags", "--", &from, &format!("+refs/heads/{branch}:refs/heads/{branch}")],
     )?;
-    // Where the branch pushes to, if it was pushed from the clone.
+    copy_upstream(source, store, branch);
+    Ok(())
+}
+
+/// Where `branch` pushes to, if it was pushed from `source`.
+fn copy_upstream(source: &Path, store: &Path, branch: &str) {
     for key in ["remote", "merge"] {
         let name = format!("branch.{branch}.{key}");
         if let Ok(v) = run(source, &["config", "--get", &name]) {
             let _ = run(store, &["config", &name, v.trim()]);
         }
     }
-    Ok(())
 }
 
 /// Bring `branch` over from the user's clone when only the clone has it:
@@ -216,6 +220,113 @@ pub fn relink_worktree(store: &Path, wt: &Path, branch: &str, head: &str) -> Res
     register_in_place(store, wt, branch, None)?;
     run(wt, &["reset", "--quiet"])?;
     Ok(())
+}
+
+/// Whether `wt` holds a repository of its own rather than a link to one.
+pub fn is_own_clone(wt: &Path) -> bool {
+    wt.join(".git").is_dir()
+}
+
+/// Link a task folder that has become a clone of its own back into
+/// `store`, on `branch`, leaving every file where it is (TASK-12).
+///
+/// Something cloned the repository again in place of a task's worktree.
+/// Git could still read the folder, but the app's copy no longer knew it,
+/// and every launch reported it as "not linked to any repository". Done
+/// only when it loses nothing, since the clone's own `.git` goes: its
+/// branch comes into the copy first, and anything the copy could not keep
+/// (staging, a stash, another branch's commits, a merge under way) leaves
+/// the folder as it is, with the reason.
+pub fn reclaim_clone(store: &Path, wt: &Path, branch: &str) -> Result<()> {
+    let refuse = |why: String| -> Result<()> {
+        Err(Error::Git(format!("{} is a clone of its own, and was left as it is: {why}", wt.display())))
+    };
+    if !is_own_clone(wt) {
+        return Err(Error::Git(format!("{} is not a clone of its own", wt.display())));
+    }
+    super::check_names(branch, "HEAD")?;
+    match (super::origin_url(wt), super::origin_url(store)) {
+        (Some(a), Some(b)) if super::same_remote(&a, &b) => {}
+        _ => return refuse("it does not fetch from where the app's copy does".into()),
+    }
+    if super::in_progress(wt).is_some() {
+        return refuse("a merge or rebase is under way".into());
+    }
+    let on = run(wt, &["symbolic-ref", "-q", "--short", "HEAD"]).map(|b| b.trim().to_string()).unwrap_or_default();
+    if on != branch {
+        let on = if on.is_empty() { "no branch".to_string() } else { on };
+        return refuse(format!("it is on {on}, not the task's branch {branch}"));
+    }
+    if super::status(wt)?.staged > 0 {
+        return refuse("something is staged; commit or unstage it".into());
+    }
+    if run(wt, &["rev-parse", "-q", "--verify", "refs/stash"]).is_ok() {
+        return refuse("it has a stash".into());
+    }
+    // Its other branches go with its `.git`, so each must be in the copy already.
+    let tips = run(wt, &["for-each-ref", "--format=%(refname:short) %(objectname)", "refs/heads"])?;
+    for (name, sha) in tips.lines().filter_map(|l| l.split_once(' ')) {
+        let kept = name == branch
+            || (run(store, &["cat-file", "-e", &format!("{sha}^{{commit}}")]).is_ok()
+                && run(store, &["for-each-ref", "--count=1", "--contains", sha, "refs"])
+                    .is_ok_and(|o| !o.trim().is_empty()));
+        if !kept {
+            return refuse(format!("its branch {name} has commits the app's copy does not"));
+        }
+    }
+
+    // The branch comes across first, and only as a fast-forward of the
+    // copy's: commits made in the folder before it was cloned again stay.
+    let taken = format!("refs/villain-reclaiming/{branch}");
+    let from = wt.to_string_lossy();
+    run(store, &["fetch", "--quiet", "--no-tags", "--", &from, &format!("+refs/heads/{branch}:{taken}")])?;
+    let moved = (|| -> Result<()> {
+        let new = run(store, &["rev-parse", "--verify", &taken])?.trim().to_string();
+        let local = format!("refs/heads/{branch}");
+        match run(store, &["rev-parse", "-q", "--verify", &local]) {
+            Ok(old) if !super::is_ancestor(store, old.trim(), &new) => {
+                refuse(format!("the app's copy has commits on {branch} that it does not"))
+            }
+            Ok(old) => run(store, &["update-ref", &local, &new, old.trim()]).map(|_| ()),
+            Err(_) => run(store, &["branch", "--", branch, &new]).map(|_| ()),
+        }
+    })();
+    let _ = run(store, &["update-ref", "-d", &taken]);
+    moved?;
+    copy_upstream(wt, store, branch);
+
+    // The copy still lists the folder from before, holding the branch there.
+    if let Some(stale) = registration_for(store, wt) {
+        std::fs::remove_dir_all(stale)?;
+    }
+    // Moved out of the folder rather than deleted until the link is in
+    // place, so a failure can put it back, and a crash leaves nothing in
+    // the worktree to be committed (DISK-1).
+    let own = wt.join(".git");
+    let aside_dir = store.join("villain-replaced");
+    std::fs::create_dir_all(&aside_dir)?;
+    let aside = aside_dir.join(uuid::Uuid::new_v4().to_string());
+    std::fs::rename(&own, &aside)?;
+    if let Err(e) = register_in_place(store, wt, branch, None) {
+        let _ = std::fs::rename(&aside, &own);
+        return Err(e);
+    }
+    // Nothing was staged, so an index rebuilt from the commit is the one it had.
+    run(wt, &["reset", "--quiet"])?;
+    let _ = std::fs::remove_dir_all(&aside);
+    let _ = std::fs::remove_dir(&aside_dir);
+    Ok(())
+}
+
+/// The registration `store` still keeps for the folder `wt`, if any.
+fn registration_for(store: &Path, wt: &Path) -> Option<PathBuf> {
+    let want = std::fs::canonicalize(wt).ok()?;
+    std::fs::read_dir(store.join("worktrees")).ok()?.flatten().map(|e| e.path()).find(|admin| {
+        std::fs::read_to_string(admin.join("gitdir"))
+            .ok()
+            .and_then(|g| Path::new(g.trim()).parent().and_then(|d| std::fs::canonicalize(d).ok()))
+            .is_some_and(|d| d == want)
+    })
 }
 
 /// Register `wt` in `store` on `branch` without checking anything out, and
@@ -426,6 +537,97 @@ mod tests {
         std::fs::write(&merge_head, format!("{}\n", head(&wt))).unwrap();
         assert!(adopt_worktree(&store, &wt).is_err());
         assert!(!belongs_to(&wt, &store));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// A task's worktree of the copy, with one commit pushed.
+    fn pushed_task(root: &Path, store: &Path) -> PathBuf {
+        let wt = root.join("task/clone");
+        super::super::add_worktree(store, &wt, "task", "main").unwrap();
+        std::fs::write(wt.join("a.txt"), "pushed\n").unwrap();
+        run(&wt, &["commit", "-qam", "pushed"]).unwrap();
+        run(&wt, &["push", "-q", "origin", "task"]).unwrap();
+        wt
+    }
+
+    /// The folder replaced by a fresh clone of the remote, on the same branch.
+    fn clone_in_place(root: &Path, remote: &Path, wt: &Path) {
+        std::fs::remove_dir_all(wt).unwrap();
+        run(root, &["clone", "-q", "-b", "task", remote.to_str().unwrap(), wt.to_str().unwrap()]).unwrap();
+        run(wt, &["config", "user.email", "me@work.example"]).unwrap();
+        run(wt, &["config", "user.name", "Me"]).unwrap();
+    }
+
+    #[test]
+    fn a_task_folder_cloned_again_in_place_is_linked_back_with_its_commits_and_edits() {
+        let root = sandbox();
+        let (remote, clone) = user_clone(&root);
+        let store = root.join("store/clone.git");
+        create_store(&clone, &store).unwrap();
+        let wt = pushed_task(&root, &store);
+        clone_in_place(&root, &remote, &wt);
+        // Worked on there: a commit never pushed, an edit, a new file.
+        std::fs::write(wt.join("a.txt"), "unpushed\n").unwrap();
+        run(&wt, &["commit", "-qam", "unpushed"]).unwrap();
+        let last = head(&wt);
+        std::fs::write(wt.join("a.txt"), "edited\n").unwrap();
+        std::fs::write(wt.join("new.txt"), "new\n").unwrap();
+        assert!(is_own_clone(&wt) && !belongs_to(&wt, &store));
+
+        reclaim_clone(&store, &wt, "task").unwrap();
+        assert!(!is_own_clone(&wt) && belongs_to(&wt, &store));
+        assert_eq!(head(&wt), last);
+        assert_eq!(run(&store, &["rev-parse", "refs/heads/task"]).unwrap().trim(), last, "the unpushed commit is in the copy");
+        let st = super::super::status(&wt).unwrap();
+        assert_eq!((st.branch.as_str(), st.staged, st.unstaged, st.untracked), ("task", 0, 1, 1));
+        assert_eq!(std::fs::read_to_string(wt.join("a.txt")).unwrap(), "edited\n");
+        let listed = run(&store, &["worktree", "list", "--porcelain"]).unwrap();
+        assert_eq!(listed.lines().filter(|l| l.starts_with("worktree ")).count(), 2, "the copy, and the folder once");
+        assert!(!store.join("villain-replaced").exists(), "the old .git is gone once the link holds");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_folder_cloned_again_is_left_alone_while_linking_it_would_lose_something() {
+        let root = sandbox();
+        let (remote, clone) = user_clone(&root);
+        let store = root.join("store/clone.git");
+        create_store(&clone, &store).unwrap();
+        let wt = pushed_task(&root, &store);
+        // Committed in the worktree before it was cloned again, never pushed.
+        std::fs::write(wt.join("a.txt"), "only in the copy\n").unwrap();
+        run(&wt, &["commit", "-qam", "only in the copy"]).unwrap();
+        let kept = head(&wt);
+        clone_in_place(&root, &remote, &wt);
+        let refused = |why: &str| {
+            let e = reclaim_clone(&store, &wt, "task").unwrap_err().to_string();
+            assert!(e.contains(why), "{e}");
+            assert!(is_own_clone(&wt), "left as it is");
+        };
+
+        run(&wt, &["switch", "-q", "-c", "other"]).unwrap();
+        refused("not the task's branch task");
+        run(&wt, &["switch", "-q", "task"]).unwrap();
+
+        std::fs::write(wt.join("b.txt"), "staged\n").unwrap();
+        run(&wt, &["add", "b.txt"]).unwrap();
+        refused("something is staged");
+        run(&wt, &["reset", "-q"]).unwrap();
+
+        run(&wt, &["stash", "push", "-q", "-u"]).unwrap();
+        refused("it has a stash");
+        run(&wt, &["stash", "pop", "-q"]).unwrap();
+
+        run(&wt, &["switch", "-q", "other"]).unwrap();
+        run(&wt, &["commit", "-q", "--allow-empty", "-m", "only on other"]).unwrap();
+        run(&wt, &["switch", "-q", "task"]).unwrap();
+        refused("its branch other has commits the app's copy does not");
+        run(&wt, &["branch", "-q", "-D", "other"]).unwrap();
+
+        refused("the app's copy has commits on task that it does not");
+        assert_eq!(run(&store, &["rev-parse", "refs/heads/task"]).unwrap().trim(), kept, "the copy's commit stays");
+        assert!(run(&store, &["rev-parse", "-q", "--verify", "refs/villain-reclaiming/task"]).is_err());
+        assert_eq!(std::fs::read_to_string(wt.join("b.txt")).unwrap(), "staged\n");
         std::fs::remove_dir_all(&root).ok();
     }
 }

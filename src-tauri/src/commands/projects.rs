@@ -357,7 +357,8 @@ pub(crate) fn owner_of(project: &Project, worktree: &str) -> PathBuf {
 
 /// Move every task's worktrees onto the app's copies, making the copies as
 /// needed; a folder whose link is gone is linked back at its last seen
-/// commit where the copy has it. Returns how many moved, and what could
+/// commit where the copy has it, and one cloned again in place is linked
+/// back when that loses nothing. Returns how many moved, and what could
 /// not be. Run before any pane comes back, so no agent is working in a
 /// folder while its link is swapped; after the first launch there is
 /// nothing to do but check.
@@ -380,6 +381,10 @@ pub fn adopt_worktrees(state: &AppState) -> (usize, Vec<String>) {
             }
             let task = cfg.tasks.iter().find(|t| t.id == checkout.task_id);
             let result = match (git::unlinked(wt), task, checkout.last_head.as_deref()) {
+                _ if git::is_own_clone(wt) => match task {
+                    Some(task) => git::reclaim_clone(&store, wt, &task.branch),
+                    None => Err(Error::Git(format!("{} belongs to no task", wt.display()))),
+                },
                 (None, _, _) => git::adopt_worktree(&store, wt),
                 (Some(_), Some(task), Some(head)) => git::relink_worktree(&store, wt, &task.branch, head),
                 (Some(why), _, _) => Err(Error::Git(why)),

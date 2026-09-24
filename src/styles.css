@@ -988,7 +988,6 @@ textarea { resize: vertical; font-family: var(--mono); }
   padding: 0 12px 0 84px; /* leaves room for the macOS traffic lights */
   border-bottom: 1px solid var(--border);
   background: var(--panel);
-  -webkit-app-region: drag;
 }
 .topbar-left { display: flex; align-items: center; min-width: 0; }
 .topbar-center { display: flex; align-items: center; gap: 2px; padding: 3px; border-radius: 8px; background: var(--bg); border: 1px solid var(--border); }
@@ -1001,7 +1000,6 @@ textarea { resize: vertical; font-family: var(--mono); }
   padding: 3px 8px;
   user-select: none;
 }
-.topbar button, .topbar .brand { -webkit-app-region: no-drag; }
 .topbar .brand { margin-right: 14px; font-size: 14px; }
 
 .viewtab {

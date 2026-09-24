@@ -748,6 +748,22 @@ Code: `previous.rs`, `secrets.rs` (`adopt`).
 
 ---
 
+## 15. The window
+
+The window has no native title bar: the app's top bar takes its place,
+under the traffic lights.
+
+- **WIN-1** The window MUST move when you drag any empty part of the top
+  bar, and zoom when you double-click it, as a native title bar does. Its
+  tabs and buttons stay clickable. This is Tauri's `data-tauri-drag-region`
+  with the `core:window:allow-start-dragging` permission; the CSS
+  `-webkit-app-region` does nothing in macOS's WebKit, and a window built on
+  it could not be moved at all.
+
+Code: `App.tsx` (`TopBar`), `src-tauri/capabilities/default.json`.
+
+---
+
 ## Template for a new area or feature
 
 ```markdown

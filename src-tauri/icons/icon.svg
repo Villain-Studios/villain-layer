@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Villain Layer's icon: three layers, the top one with a villain's eyes.
+       Colours are the app's own accent, #a78bfa, on its background, #0c0c11 (src/styles.css).
+       Regenerate the app's icons with `bun tauri icon src-tauri/icons/icon.svg`. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#23203a"/>
+      <stop offset="1" stop-color="#0c0c11"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="512" cy="410" r="420" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#a78bfa" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#a78bfa" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="face" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#d6caff"/>
+      <stop offset="1" stop-color="#a78bfa"/>
+    </linearGradient>
+    <radialGradient id="shadow" cx="512" cy="928" r="400" gradientTransform="translate(0 835) scale(1 0.1)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#000" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#000" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <ellipse cx="512" cy="928" rx="400" ry="40" fill="url(#shadow)"/>
+  <rect x="100" y="100" width="824" height="824" rx="184" fill="url(#bg)"/>
+  <rect x="100" y="100" width="824" height="824" rx="184" fill="url(#glow)"/>
+  <rect x="101.5" y="101.5" width="821" height="821" rx="182.5" fill="none" stroke="#ffffff" stroke-opacity="0.08" stroke-width="3"/>
+  <path d="M222,593 L512,760 L512,798 L222,631 Z" fill="#2d2849"/>
+  <path d="M802,593 L512,760 L512,798 L802,631 Z" fill="#24203b"/>
+  <path d="M512,426 L802,593 L512,760 L222,593 Z" fill="#3d3760"/>
+  <path d="M222,493 L512,660 L512,698 L222,531 Z" fill="#43397a"/>
+  <path d="M802,493 L512,660 L512,698 L802,531 Z" fill="#352d62"/>
+  <path d="M512,326 L802,493 L512,660 L222,493 Z" fill="#5a4d99"/>
+  <path d="M222,393 L512,560 L512,598 L222,431 Z" fill="#7c66d0"/>
+  <path d="M802,393 L512,560 L512,598 L802,431 Z" fill="#5f4fa0"/>
+  <path d="M512,226 L802,393 L512,560 L222,393 Z" fill="url(#face)"/>
+  <g transform="translate(512 393) scale(1.115) translate(-512 -405)" fill="#0c0c11">
+    <path d="M376,378 L494,414 Q486,446 446,444 Q396,438 376,378 Z"/>
+    <path d="M648,378 L530,414 Q538,446 578,444 Q628,438 648,378 Z"/>
+  </g>
+</svg>

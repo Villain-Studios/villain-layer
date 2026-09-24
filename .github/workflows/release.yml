@@ -104,7 +104,7 @@ jobs:
             echo "kills it, and every agent running in it."
             if [ "$SIGNING" = ad-hoc ]; then
               echo
-              echo "This build is not notarised yet, so macOS stops it the first time with"
+              echo "This build is not notarised by Apple, so macOS stops it the first time with"
               echo "\"Apple could not verify…\". Choose Done, then System Settings → Privacy &"
               echo "Security → Open Anyway. macOS also asks for keychain access again after"
               echo "each update."

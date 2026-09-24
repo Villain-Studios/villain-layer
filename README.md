@@ -65,9 +65,9 @@ open it, and drag Villain Layer to Applications. It runs on Apple silicon
 and Intel Macs. To update, quit Villain Layer first: replacing the app
 while it runs kills it, and every agent running in it.
 
-A release that is not notarised yet says so in its notes. macOS stops it
-the first time with "Apple could not verify…": choose Done, then System
-Settings → Privacy & Security → *Open Anyway*.
+Releases are not notarised by Apple, so macOS stops the app the first
+time with "Apple could not verify…": choose Done, then System Settings →
+Privacy & Security → *Open Anyway*. Once is enough.
 
 ### Build it yourself
 

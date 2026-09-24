@@ -2,7 +2,10 @@
 name = "villain-layer"
 version = "0.1.0"
 description = "Villain Layer - an agent development environment"
-authors = ["Code Villain"]
+authors = ["Code Villain <codevillain@proton.me>"]
+license = "MIT OR Apache-2.0"
+homepage = "https://codevillain.eu/"
+repository = "https://github.com/codevillain/villain-layer"
 edition = "2021"
 
 [lib]

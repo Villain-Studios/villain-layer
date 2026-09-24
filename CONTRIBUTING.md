@@ -75,3 +75,9 @@ The subject is a sentence about what is better for the user, in the
 imperative, with a full stop: *Keep new files when a task is finished.* The
 body says why: what went wrong before, and why the fix is shaped the way it
 is. Name requirement ids where they apply.
+
+## License
+
+A contribution is licensed as the project is, under MIT or Apache-2.0 at
+the user's option (see the README), unless you say otherwise when you
+submit it.

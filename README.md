@@ -137,3 +137,14 @@ coding agents alike, and every agent CLI reads it on its own. Then:
 - [`docs/recipes.md`](docs/recipes.md): how to make the common changes
 - [`docs/testing.md`](docs/testing.md): how to verify a change, including
   the UI in a browser
+
+## License
+
+Villain Layer is made by [Code Villain](https://codevillain.eu/). You may
+use it under either of these licenses, whichever you prefer:
+
+- the Apache License, Version 2.0 ([`LICENSE-APACHE`](LICENSE-APACHE))
+- the MIT license ([`LICENSE-MIT`](LICENSE-MIT))
+
+Unless you say otherwise, a contribution you submit for inclusion is
+licensed the same way, with no additional terms or conditions.

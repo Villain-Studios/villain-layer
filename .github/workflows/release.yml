@@ -1,0 +1,99 @@
+# A release, from a version tag: `git tag v0.2.0 && git push origin v0.2.0`
+# (docs/releasing.md). Runs `bun run check` on the tagged commit, builds one
+# universal app for Apple silicon and Intel, and puts its .dmg on a draft
+# GitHub release, to be read over and published by hand.
+#
+# Signed with the Developer ID and notarised when the Apple secrets are set.
+# Without them the app is signed ad hoc, and the release notes say how to
+# open it.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    uses: ./.github/workflows/check.yml
+
+  release:
+    needs: check
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: bun install --frozen-lockfile
+
+      # src-tauri/Cargo.toml is the only place the version is written; the
+      # app, its About line and the MCP server all read it from there.
+      - name: The tag is the version
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' src-tauri/Cargo.toml | head -1)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tagged $GITHUB_REF_NAME, but src-tauri/Cargo.toml says $version."
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Build
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          # A secret that is not set arrives as an empty string, and Tauri
+          # signs and notarises as soon as the variable exists, empty or not.
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            [ -n "${!name}" ] || unset "$name"
+          done
+          if [ -n "${APPLE_CERTIFICATE:-}" ]; then
+            echo "SIGNING=developer-id" >> "$GITHUB_ENV"
+          else
+            # Ad hoc, not unsigned: macOS offers Open Anyway for an app it
+            # cannot check, but calls an unsigned download "damaged".
+            export APPLE_SIGNING_IDENTITY=-
+            echo "SIGNING=ad-hoc" >> "$GITHUB_ENV"
+          fi
+          bun tauri build --target universal-apple-darwin --bundles app,dmg
+
+      - name: Draft the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          out=$RUNNER_TEMP/release
+          mkdir -p "$out"
+          dmg="$out/Villain-Layer-$VERSION-universal.dmg"
+          cp src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg "$dmg"
+          (cd "$out" && shasum -a 256 "$(basename "$dmg")" > SHA256SUMS.txt)
+
+          {
+            echo "Open the .dmg and drag Villain Layer to Applications."
+            echo "Quit Villain Layer before replacing it: replacing the app while it runs"
+            echo "kills it, and every agent running in it."
+            if [ "$SIGNING" = ad-hoc ]; then
+              echo
+              echo "This build is not notarised yet, so macOS stops it the first time with"
+              echo "\"Apple could not verify…\". Choose Done, then System Settings → Privacy &"
+              echo "Security → Open Anyway. macOS also asks for keychain access again after"
+              echo "each update."
+            fi
+          } > "$out/notes.md"
+
+          gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
+            --title "Villain Layer $VERSION" \
+            --notes-file "$out/notes.md" --generate-notes \
+            "$dmg" "$out/SHA256SUMS.txt"

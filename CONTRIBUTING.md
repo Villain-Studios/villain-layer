@@ -76,6 +76,12 @@ imperative, with a full stop: *Keep new files when a task is finished.* The
 body says why: what went wrong before, and why the fix is shaped the way it
 is. Name requirement ids where they apply.
 
+## Releases
+
+A release is a version tag on `main`, built and drafted on GitHub by
+`release.yml`. The steps, and the Apple signing it needs, are in
+[`docs/releasing.md`](docs/releasing.md).
+
 ## License
 
 A contribution is licensed as the project is, under MIT or Apache-2.0 at

@@ -195,6 +195,9 @@ bun run dev            # Vite alone; the mock harness is at /mock.html
 bun run release:mac    # release build, installed over /Applications
 ```
 
+Releases for everyone else come from a version tag, on GitHub:
+[`docs/releasing.md`](docs/releasing.md).
+
 ```bash
 cd src-tauri
 cargo clippy --all-targets -- -D warnings

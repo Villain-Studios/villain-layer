@@ -9,7 +9,7 @@ It runs the agent CLIs you already use (Claude Code, GitHub Copilot CLI,
 OpenCode, Gemini CLI) in real terminals, and connects them to Jira, GitHub
 and Slack through the app, so no agent holds your credentials.
 
-**Status: beta, internal.** macOS only. Not signed or notarised yet.
+**Status: beta.** macOS only. By [Code Villain](https://codevillain.eu/).
 
 ## What it does
 
@@ -55,19 +55,28 @@ To build it, also:
 
 ## Install
 
+Download the `.dmg` from the
+[latest release](https://github.com/codevillain/villain-layer/releases/latest),
+open it, and drag Villain Layer to Applications. It runs on Apple silicon
+and Intel Macs. To update, quit Villain Layer first: replacing the app
+while it runs kills it, and every agent running in it.
+
+A release that is not notarised yet says so in its notes. macOS stops it
+the first time with "Apple could not verify…": choose Done, then System
+Settings → Privacy & Security → *Open Anyway*.
+
+### Build it yourself
+
 ```bash
-git clone <this repository>
+git clone https://github.com/codevillain/villain-layer.git
 cd villain-layer
 bun install
 bun run release:mac
 ```
 
 That builds the app and installs it as `/Applications/Villain Layer.app`.
-It refuses to run while the app is open, because replacing the app under
-itself would kill every agent in it. Quit it first.
-
-A copy you built yourself opens normally. A copy someone sends you is
-blocked by Gatekeeper, since it is not signed yet: right-click → Open, once.
+It refuses to run while the app is open, for the same reason. A copy you
+built yourself opens without a warning.
 
 ## Getting started
 
@@ -106,10 +115,11 @@ blocked by Gatekeeper, since it is not signed yet: right-click → Open, once.
   default), the app marks its own task folders as trusted, so Claude Code
   does not stop to ask. It touches nothing else in that file, and never a
   folder outside the task folder location.
-- **Tokens** are kept in the macOS keychain (item `eu.codevillain.villain-layer`).
-  They are never written to a file. Until the app is signed, macOS asks
-  for keychain access again after every update: *Always Allow* is tied to
-  the exact binary.
+- **Tokens** are kept in the macOS keychain (item
+  `eu.codevillain.villain-layer`). They are never written to a file. A
+  build without a Developer ID signature (one you built, or a release that
+  is not notarised) asks for keychain access again after every update:
+  *Always Allow* is tied to the exact binary.
 - **Settings and tasks** are in
   `~/Library/Application Support/eu.codevillain.villain-layer/config.json`.
 
@@ -137,6 +147,8 @@ coding agents alike, and every agent CLI reads it on its own. Then:
 - [`docs/recipes.md`](docs/recipes.md): how to make the common changes
 - [`docs/testing.md`](docs/testing.md): how to verify a change, including
   the UI in a browser
+- [`docs/releasing.md`](docs/releasing.md): cutting a release, and signing
+  it
 
 ## License
 

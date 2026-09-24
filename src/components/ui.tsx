@@ -2,6 +2,7 @@ import type { ReactNode, RefObject } from "react";
 import { useEffect, useRef, useState } from "react";
 
 import { useStore } from "../store";
+import { CloseIcon } from "./icons";
 
 export function Modal({
   title, children, footer, toolbar, onClose, wide, tall,
@@ -32,7 +33,7 @@ export function Modal({
         <div className="modal-head">
           {title}
           <div className="spacer" />
-          <button className="btn-sm" onClick={onClose}>✕</button>
+          <button className="btn-sm" onClick={onClose} title="Close"><CloseIcon /></button>
         </div>
         {toolbar && <div className="modal-toolbar">{toolbar}</div>}
         <div className="modal-body">{children}</div>
@@ -62,48 +63,6 @@ export function Spinner() {
   return <div className="spin" />;
 }
 
-/** A gear, drawn rather than typed: the ⚙ glyph renders small and varies by font. */
-export function GearIcon({ size = 18 }: { size?: number }) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      style={{ display: "block" }}
-      aria-hidden="true"
-    >
-      <circle cx="12" cy="12" r="3.2" />
-      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-    </svg>
-  );
-}
-
-/** A bell, for the message center. */
-export function BellIcon({ size = 18 }: { size?: number }) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      style={{ display: "block" }}
-      aria-hidden="true"
-    >
-      <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
-      <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
-    </svg>
-  );
-}
-
 /**
  * Show or hide the task list.
  *
@@ -122,8 +81,8 @@ export function SidebarToggle() {
       onClick={toggle}
     >
       <svg
-        width="17"
-        height="17"
+        width="19"
+        height="19"
         viewBox="0 0 24 24"
         fill="none"
         stroke="currentColor"

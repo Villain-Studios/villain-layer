@@ -5,6 +5,7 @@ import { copyText } from "../../lib/clipboard";
 import { useStore } from "../../store";
 import { isRunningAgent, needsYou, taskReview, taskTotals, type TaskReview } from "../../lib/derive";
 import type { JiraTransition, TaskView } from "../../lib/types";
+import { ChevronIcon, CloseIcon, PlusIcon } from "../icons";
 import { BusyOverlay, Confirm, ContextMenu, Field, Modal, Spinner, type MenuItem } from "../ui";
 import { RepoPicker } from "../RepoPicker";
 import { CreateTaskDialog } from "./CreateTaskDialog";
@@ -319,7 +320,7 @@ export function Sidebar() {
             disabled={projects.length === 0}
             onClick={() => setCreating(true)}
           >
-            +
+            <PlusIcon />
           </button>
         </div>
 
@@ -402,7 +403,7 @@ export function Sidebar() {
                       setExpanded((x) => ({ ...x, [task.id]: !isOpen }));
                     }}
                   >
-                    ▶
+                    <ChevronIcon />
                   </span>
                   {vanishing ? (
                     <Spinner />
@@ -456,7 +457,7 @@ export function Sidebar() {
                         askRemoveRepo(c.id, c.project_name, lose, task.checkouts.length === 1);
                       }}
                     >
-                      ✕
+                      <CloseIcon size={13} />
                     </span>
                   </div>
                 );

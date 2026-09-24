@@ -5,6 +5,7 @@ import { read, write } from "../lib/persist";
 import { useStore } from "../store";
 import { CHAT_TASK_ID, paneState } from "../lib/derive";
 import { TerminalPane } from "./Terminal";
+import { PlusIcon } from "./icons";
 import { ContextMenu, Confirm } from "./ui";
 import type { MenuItem } from "./ui";
 
@@ -125,7 +126,7 @@ export function ChatView() {
               })
             }
           >
-            +
+            <PlusIcon />
           </button>
         </div>
 

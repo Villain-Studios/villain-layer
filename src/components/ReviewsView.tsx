@@ -4,6 +4,7 @@ import { copyText } from "../lib/clipboard";
 import { ago } from "../lib/time";
 import { useStore } from "../store";
 import type { ReviewRequest, TeamReviews } from "../lib/types";
+import { ChevronIcon } from "./icons";
 import { ContextMenu, Spinner, type MenuItem } from "./ui";
 
 /** `@fe` when that is all we know; the team's own name when GitHub sent one. */
@@ -74,7 +75,7 @@ function ReviewList({
   return (
     <section className="review-list" title={title}>
       <button type="button" className="review-list-head" onClick={onToggle}>
-        <span className={`chev${open ? " open" : ""}`}>▶</span>
+        <span className={`chev${open ? " open" : ""}`}><ChevronIcon /></span>
         <span className="title">{heading}</span>
         {count !== undefined && <span className="count">{count}</span>}
       </button>

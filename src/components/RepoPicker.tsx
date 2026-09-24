@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { groupProjects } from "../lib/derive";
+import { ChevronIcon } from "./icons";
 import type { Project } from "../lib/types";
 
 /**
@@ -83,7 +84,7 @@ export function RepoPicker({
                 className="group-head"
                 onClick={() => setCollapsed((c) => ({ ...c, [g.group]: !isCollapsed }))}
               >
-                <span className={`chev${isCollapsed ? "" : " open"}`}>▶</span>
+                <span className={`chev${isCollapsed ? "" : " open"}`}><ChevronIcon /></span>
                 {g.label}
                 <span className="count">{g.projects.length}</span>
                 <div className="spacer" />

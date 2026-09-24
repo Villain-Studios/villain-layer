@@ -33,7 +33,9 @@ type Args = Record<string, unknown>;
 type Answer = (args: Args) => unknown;
 
 const params = new URLSearchParams(location.search);
-const world = (SCENARIOS[params.get("scenario") ?? "busy"] ?? SCENARIOS.busy)();
+// Own keys only: `?scenario=toString` found Object's method and built no world.
+const scenario = params.get("scenario") ?? "busy";
+const world = (Object.prototype.hasOwnProperty.call(SCENARIOS, scenario) ? SCENARIOS[scenario] : SCENARIOS.busy)();
 const calls: { cmd: string; args: Args }[] = [];
 const overrides = new Map<string, Answer>();
 

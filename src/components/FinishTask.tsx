@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, errMessage } from "../lib/api";
-import { taskTotals, useStore } from "../store";
+import { useStore } from "../store";
+import { taskTotals } from "../lib/derive";
 import type { JiraTransition, TaskView } from "../lib/types";
 import { Field, Modal, Spinner } from "./ui";
 import { flowOf, mergedTransition } from "./TicketFlow";

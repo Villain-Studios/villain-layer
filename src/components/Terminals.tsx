@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, errMessage } from "../lib/api";
 import { read, write } from "../lib/persist";
-import { markStopping, paneState, useStore } from "../store";
+import { markStopping, useStore } from "../store";
+import { paneState } from "../lib/derive";
 import type { PaneInfo, Resumable, TaskView } from "../lib/types";
 import { TerminalPane } from "./Terminal";
 import { ContextMenu, Field, Modal, Spinner } from "./ui";

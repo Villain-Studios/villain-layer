@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api } from "../lib/api";
-import { updateByFor, useStore } from "../store";
+import { useStore } from "../store";
+import { updateByFor } from "../lib/derive";
 import type { RepoUpdate, TaskView, UpdateBy } from "../lib/types";
 import { Modal, Spinner } from "./ui";
 import { AgentTargetFields, useAgentTarget } from "./AgentTarget";

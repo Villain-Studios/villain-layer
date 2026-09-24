@@ -3,7 +3,8 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api } from "./lib/api";
 import { prepareNotifications } from "./lib/notify";
-import { CHAT_TASK_ID, stoppedOnPurpose, useStore } from "./store";
+import { stoppedOnPurpose, useStore } from "./store";
+import { CHAT_TASK_ID } from "./lib/derive";
 import type { NotifyTarget } from "./lib/types";
 
 /**

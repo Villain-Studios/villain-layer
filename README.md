@@ -1,4 +1,8 @@
-# Villain Layer
+<p align="center">
+  <img src="src-tauri/icons/128x128@2x.png" width="128" height="128" alt="Villain Layer's icon: three stacked layers, the top one wearing a villain's mask">
+</p>
+
+<h1 align="center">Villain Layer</h1>
 
 A macOS desktop app for working with coding agents: one place to take a
 ticket, give an agent a fresh worktree of every repository the ticket

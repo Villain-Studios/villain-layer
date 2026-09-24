@@ -259,7 +259,7 @@ textarea { resize: vertical; font-family: var(--mono); }
 }
 .pane-tab:hover { background: var(--panel-2); }
 .pane-tab.active { color: var(--text); border-color: var(--accent-dim); background: var(--panel-2); }
-.pane-tab .x { color: var(--dimmer); font-size: 14px; line-height: 1; }
+.pane-tab .x { display: inline-flex; padding: 2px; margin: -2px 0; color: var(--dimmer); }
 .pane-tab .x:hover { color: var(--red); }
 
 .pane-stack { flex: 1; position: relative; overflow: hidden; }
@@ -789,21 +789,17 @@ textarea { resize: vertical; font-family: var(--mono); }
 .chev,
 .chev-spacer {
   flex: none;
-  width: 12px;
-  height: 12px;
+  width: 14px;
+  height: 14px;
 }
 .chev {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   color: var(--dimmer);
-  font-size: 8px;
-  line-height: 1;
-  /* The glyph sits high in its em box; nudge it onto the text midline. */
-  transform: translateY(0.5px);
   transition: transform 0.12s;
 }
-.chev.open { transform: translateY(0.5px) rotate(90deg); }
+.chev.open { transform: rotate(90deg); }
 
 .repo-row {
   display: flex;
@@ -817,7 +813,7 @@ textarea { resize: vertical; font-family: var(--mono); }
 }
 .repo-row:hover { background: var(--panel-2); color: var(--text); }
 .repo-row .rname { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.repo-row .x { color: var(--dimmer); }
+.repo-row .x { display: inline-flex; padding: 2px; color: var(--dimmer); }
 .repo-row .x:hover { color: var(--red); }
 
 .repo-picker {

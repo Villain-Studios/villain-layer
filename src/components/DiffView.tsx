@@ -5,6 +5,7 @@ import { useStore } from "../store";
 import type {
   ChangedFile, CommitInfo, DiffScope, RepoBranchFacts, RepoCommits, ReviewComment, TaskView,
 } from "../lib/types";
+import { ChevronIcon } from "./icons";
 import { Field, Modal, Spinner } from "./ui";
 import { read, write } from "../lib/persist";
 
@@ -421,7 +422,7 @@ export function DiffView({ task }: { task: TaskView }) {
               style={pad}
               onClick={() => setShut((c) => ({ ...c, [node.path]: !closed }))}
             >
-              <span className={`chev${closed ? "" : " open"}`}>▶</span>
+              <span className={`chev${closed ? "" : " open"}`}><ChevronIcon /></span>
               <span className="p">{node.name}</span>
             </div>
             {!closed && renderNodes(node.children, depth + 1)}

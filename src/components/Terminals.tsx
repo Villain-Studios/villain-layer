@@ -6,6 +6,7 @@ import { markStopping, useStore } from "../store";
 import { paneState } from "../lib/derive";
 import type { PaneInfo, Resumable, TaskView } from "../lib/types";
 import { TerminalPane } from "./Terminal";
+import { CloseIcon, PlusIcon, SwapIcon } from "./icons";
 import { ContextMenu, Field, Modal, Spinner } from "./ui";
 import type { MenuItem } from "./ui";
 
@@ -319,14 +320,14 @@ export function Terminals({ task }: { task: TaskView }) {
                 title="Hand off to another agent"
                 onClick={(e) => { e.stopPropagation(); startHandoff(p); }}
               >
-                ⇄
+                <SwapIcon />
               </span>
             )}
             {closing.has(p.id) ? (
               <Spinner />
             ) : (
               <span className="x" onClick={(e) => { e.stopPropagation(); void closePane(p); }}>
-                ✕
+                <CloseIcon />
               </span>
             )}
           </div>
@@ -368,7 +369,7 @@ export function Terminals({ task }: { task: TaskView }) {
             })
           }
         >
-          +
+          <PlusIcon />
         </button>
       </div>
 

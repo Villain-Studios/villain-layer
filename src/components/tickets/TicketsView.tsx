@@ -5,6 +5,7 @@ import { api } from "../../lib/api";
 import { useStore } from "../../store";
 import { groupByEpic } from "../../lib/derive";
 import type { JiraIssue, JiraPage } from "../../lib/types";
+import { ChevronIcon } from "../icons";
 import { ContextMenu, Spinner, type MenuItem } from "../ui";
 import { IssueTypeIcon, isEpicType, typeMap } from "../IssueType";
 import { BrowsePanel } from "./BrowsePanel";
@@ -451,7 +452,7 @@ export function TicketsView() {
                 });
               }}
             >
-              <span className={`chev${closed ? "" : " open"}`}>▶</span>
+              <span className={`chev${closed ? "" : " open"}`}><ChevronIcon /></span>
               {epic.key && <IssueTypeIcon types={types} name={epicTypeName} size={18} />}
               {epic.key ? <span className="key-chip">{epic.key}</span> : null}
               <span className="title">{epic.summary || (epic.key ? epic.key : "No epic")}</span>

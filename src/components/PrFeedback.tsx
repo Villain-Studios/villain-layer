@@ -4,6 +4,7 @@ import { api, errMessage } from "../lib/api";
 import { read, write } from "../lib/persist";
 import { useStore } from "../store";
 import type { CodeLine, FeedbackItem, FeedbackNote, RepoFeedback, TaskView } from "../lib/types";
+import { ChevronIcon, ExternalIcon } from "./icons";
 import { Modal, Spinner } from "./ui";
 import { AgentTargetFields, useAgentTarget } from "./AgentTarget";
 import { Markdown } from "./Markdown";
@@ -177,7 +178,7 @@ function EntryRow({ entry, on, onToggle }: { entry: Entry; on: boolean; onToggle
               aria-expanded={open}
               onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
             >
-              {open ? "▾" : "▸"}
+              <span className={`chev${open ? " open" : ""}`}><ChevronIcon /></span>
             </button>
           )}
           <span className={item.kind === "thread" || item.kind === "check" ? "fb-head mono" : "fb-head"}>{head}</span>
@@ -189,7 +190,7 @@ function EntryRow({ entry, on, onToggle }: { entry: Entry; on: boolean; onToggle
               title="Open on GitHub"
               onClick={(e) => { e.stopPropagation(); void openUrl(url).catch(() => {}); }}
             >
-              ↗
+              <ExternalIcon />
             </button>
           )}
         </div>

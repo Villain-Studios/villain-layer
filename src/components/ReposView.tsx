@@ -7,6 +7,7 @@ import { groupProjects, repoTrouble, updateByFor } from "../lib/derive";
 import type { Project, RepoHealth, Synced, UpdateBy } from "../lib/types";
 import { AddRepos } from "./AddRepos";
 import { CleanUp } from "./CleanUp";
+import { ChevronIcon } from "./icons";
 import { Combo, Confirm, Spinner } from "./ui";
 
 export function ReposView() {
@@ -212,7 +213,7 @@ export function ReposView() {
             style={{ marginBottom: closed ? 0 : 8, cursor: "pointer" }}
             onClick={() => setShut((c) => ({ ...c, [g.group]: !closed }))}
           >
-            <span className={`chev${closed ? "" : " open"}`}>▶</span>
+            <span className={`chev${closed ? "" : " open"}`}><ChevronIcon /></span>
             <h3 style={{ margin: 0 }}>{g.label}</h3>
             <span className="muted">{g.projects.length}</span>
             <div className="spacer" />

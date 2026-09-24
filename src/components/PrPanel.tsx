@@ -7,6 +7,7 @@ import { reportRepoResults } from "../lib/report";
 import { useStore } from "../store";
 import { reviewComments, taskReview, type TaskReview } from "../lib/derive";
 import type { CheckoutPr, CheckRun, Review, TaskView } from "../lib/types";
+import { ChevronIcon, CopyIcon, ExternalIcon, PlusIcon } from "./icons";
 import { Combo, Field, Modal, Spinner } from "./ui";
 import { PrFeedback } from "./PrFeedback";
 import { FinishTask } from "./FinishTask";
@@ -448,7 +449,7 @@ export function PrPanel({
             }
             onClick={() => setCreating(true)}
           >
-            +
+            <PlusIcon />
           </button>
         )}
       </div>
@@ -504,7 +505,7 @@ export function PrPanel({
               style={foldable ? { cursor: "pointer" } : undefined}
               onClick={foldable ? () => setCards((c) => ({ ...c, [key]: !shown })) : undefined}
             >
-              {foldable && <span className={`chev${shown ? " open" : ""}`}>▶</span>}
+              {foldable && <span className={`chev${shown ? " open" : ""}`}><ChevronIcon /></span>}
               <h3 style={{ margin: 0 }}>
                 <span style={{ color: "var(--dim)" }}>{row.repo}</span> #{pr.number} {pr.title}
               </h3>
@@ -530,14 +531,14 @@ export function PrPanel({
                 title="Open on GitHub"
                 onClick={(e) => { e.stopPropagation(); openPr(pr.url); }}
               >
-                ↗
+                <ExternalIcon />
               </button>
               <button
                 className="btn-sm"
                 title="Copy link"
                 onClick={(e) => { e.stopPropagation(); copyPr(pr.url, pr.number); }}
               >
-                ⧉
+                <CopyIcon />
               </button>
             </div>
 
@@ -573,7 +574,7 @@ export function PrPanel({
                           {REVIEW_WORDS[r.state] ?? r.state.toLowerCase()}
                         </span>
                         {r.url && (
-                          <button className="btn-sm" onClick={() => openPr(r.url)}>↗</button>
+                          <button className="btn-sm" onClick={() => openPr(r.url)}><ExternalIcon /></button>
                         )}
                       </div>
                     ))}
@@ -588,7 +589,7 @@ export function PrPanel({
                         <span className="name">{c.name}</span>
                         <span className="muted">{c.conclusion ?? c.status}</span>
                         {c.url && (
-                          <button className="btn-sm" onClick={() => openPr(c.url!)}>↗</button>
+                          <button className="btn-sm" onClick={() => openPr(c.url!)}><ExternalIcon /></button>
                         )}
                       </div>
                     ))}
@@ -607,7 +608,7 @@ export function PrPanel({
             style={{ cursor: "pointer" }}
             onClick={() => setShowPast((v) => !v)}
           >
-            <span className={`chev${showPast ? " open" : ""}`}>▶</span>
+            <span className={`chev${showPast ? " open" : ""}`}><ChevronIcon /></span>
             <h3 style={{ margin: 0 }}>Earlier pull requests</h3>
             <span className="muted">{earlier.length}</span>
           </div>
@@ -629,14 +630,14 @@ export function PrPanel({
                       : "closed without merging"}
                 </span>
                 <button className="btn-sm" title="Open on GitHub" onClick={() => openPr(pr.url)}>
-                  ↗
+                  <ExternalIcon />
                 </button>
                 <button
                   className="btn-sm"
                   title="Copy link"
                   onClick={() => copyPr(pr.url, pr.number)}
                 >
-                  ⧉
+                  <CopyIcon />
                 </button>
               </div>
             ))}

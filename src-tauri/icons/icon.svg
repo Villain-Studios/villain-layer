@@ -1,6 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
-  <!-- Villain Layer's icon: three layers, the top one with a villain's eyes.
-       Colours are the app's own accent, #a78bfa, on its background, #0c0c11 (src/styles.css).
+  <!-- Villain Layer's icon: three layers, the top one wearing a villain's
+       forged mask. Colours are the app's own (src/styles.css): the accent,
+       #a78bfa, on the background, #0c0c11, and its green, #4ade80, for the eyes.
        Regenerate the app's icons with `bun tauri icon src-tauri/icons/icon.svg`. -->
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
@@ -19,6 +20,11 @@
       <stop offset="0" stop-color="#000" stop-opacity="0.35"/>
       <stop offset="1" stop-color="#000" stop-opacity="0"/>
     </radialGradient>
+    <radialGradient id="eye" cx="0" cy="0" r="1">
+      <stop offset="0" stop-color="#bbf7d0"/>
+      <stop offset="0.35" stop-color="#4ade80"/>
+      <stop offset="1" stop-color="#4ade80" stop-opacity="0"/>
+    </radialGradient>
   </defs>
   <ellipse cx="512" cy="928" rx="400" ry="40" fill="url(#shadow)"/>
   <rect x="100" y="100" width="824" height="824" rx="184" fill="url(#bg)"/>
@@ -33,8 +39,16 @@
   <path d="M222,393 L512,560 L512,598 L222,431 Z" fill="#7c66d0"/>
   <path d="M802,393 L512,560 L512,598 L802,431 Z" fill="#5f4fa0"/>
   <path d="M512,226 L802,393 L512,560 L222,393 Z" fill="url(#face)"/>
-  <g transform="translate(512 393) scale(1.115) translate(-512 -405)" fill="#0c0c11">
-    <path d="M376,378 L494,414 Q486,446 446,444 Q396,438 376,378 Z"/>
-    <path d="M648,378 L530,414 Q538,446 578,444 Q628,438 648,378 Z"/>
+  <g>
+    <!-- A forged mask on the top layer: a heavy brow, two hard-edged slits
+         lower at the inner end, a nose ridge, and eyes glowing behind. -->
+    <path d="M358,362 L488,394 L484,432 L368,414 Z" fill="#0c0c11"/>
+    <path d="M666,362 L536,394 L540,432 L656,414 Z" fill="#0c0c11"/>
+    <ellipse cx="0" cy="0" rx="1" ry="1" fill="url(#eye)" transform="translate(438 404) rotate(13) scale(34 13)"/>
+    <ellipse cx="0" cy="0" rx="1" ry="1" fill="url(#eye)" transform="translate(586 404) rotate(-13) scale(34 13)"/>
+    <path d="M346,334 L492,368 L512,358 L532,368 L678,334 L684,356 L534,394 L512,386 L490,394 L340,356 Z" fill="#8b74e0"/>
+    <path d="M346,334 L492,368 L512,358 L532,368 L678,334" fill="none" stroke="#f1edff" stroke-opacity="0.8" stroke-width="6"/>
+    <path d="M512,386 L524,396 L519,478 L512,488 L505,478 L500,396 Z" fill="#8b74e0"/>
+    <path d="M512,386 L500,396 L505,478 L512,488 Z" fill="#f1edff" fill-opacity="0.5"/>
   </g>
 </svg>

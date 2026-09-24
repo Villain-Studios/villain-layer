@@ -16,6 +16,7 @@ use tauri::{AppHandle, Manager};
 
 use crate::commands::{banner, AppState, CHAT_TASK_ID};
 use crate::pty::{Activity, PaneInfo, PaneKind};
+use crate::target::Target;
 
 const TICK: Duration = Duration::from_secs(5);
 /// Past this many at once, one banner rather than a stack of them.
@@ -165,7 +166,7 @@ pub fn spawn(app: AppHandle) -> std::io::Result<()> {
                 if !on || news.is_empty() || window.is_focused().unwrap_or(false) {
                     continue;
                 }
-                for (title, body, target) in banners(&state, &news) {
+                for (title, body, target) in describe(&news, |id| task_name(&state, id)) {
                     let _ = banner(&app, title, body, target);
                 }
             }
@@ -173,32 +174,30 @@ pub fn spawn(app: AppHandle) -> std::io::Result<()> {
         .map(|_| ())
 }
 
-fn banners(state: &AppState, news: &[News]) -> Vec<(String, String, String)> {
-    let name = |task_id: &str| {
-        if task_id == CHAT_TASK_ID {
-            return "Chat".to_string();
-        }
-        state
-            .config
-            .task(task_id)
-            .map(|t| t.name)
-            .unwrap_or_else(|_| "a task".into())
-    };
-    // A chat has no task to open; its banner opens the chats.
-    let open = |task_id: &str| {
-        if task_id == CHAT_TASK_ID { "chat".to_string() } else { format!("task:{task_id}") }
-    };
+fn task_name(state: &AppState, task_id: &str) -> String {
+    if task_id == CHAT_TASK_ID {
+        return "Chat".to_string();
+    }
+    state
+        .config
+        .task(task_id)
+        .map(|t| t.name)
+        .unwrap_or_else(|_| "a task".into())
+}
+
+/// The banners for what a pass found: title, body and what a click opens.
+fn describe(news: &[News], name: impl Fn(&str) -> String) -> Vec<(String, String, String)> {
     if news.len() > BATCH {
         let tasks: HashSet<&str> = news.iter().map(|n| n.task_id.as_str()).collect();
         // One task: open it. Several: the Work overview lists every agent.
         let target = match tasks.iter().next() {
-            Some(only) if tasks.len() == 1 => open(only),
-            _ => "work".to_string(),
+            Some(only) if tasks.len() == 1 => Target::task(only),
+            _ => Target::Work,
         };
         return vec![(
             "Agents waiting".into(),
             format!("{} agents have stopped and may need you", news.len()),
-            target,
+            target.to_string(),
         )];
     }
     news.iter()
@@ -206,7 +205,7 @@ fn banners(state: &AppState, news: &[News]) -> Vec<(String, String, String)> {
             (
                 name(&n.task_id),
                 format!("{} {}", n.title, n.what),
-                open(&n.task_id),
+                Target::Pane { task: &n.task_id, pane: &n.pane_id }.to_string(),
             )
         })
         .collect()
@@ -340,5 +339,33 @@ mod tests {
         let mut fresh = Watch::default();
         let (_, news) = fresh.pass(&[(a, false)], at);
         assert!(news.is_empty());
+    }
+
+    fn news(task: &str, pane: &str) -> News {
+        News { pane_id: pane.into(), task_id: task.into(), title: "Claude Code".into(), what: "finished".into() }
+    }
+
+    #[test]
+    fn a_banner_for_one_agent_opens_its_pane() {
+        let out = describe(&[news("t1", "p1")], |_| "Login".into());
+        assert_eq!(out, [("Login".into(), "Claude Code finished".into(), "pane:t1:p1".into())]);
+    }
+
+    #[test]
+    fn a_chat_agent_opens_its_chat() {
+        let out = describe(&[news(CHAT_TASK_ID, "c1")], |_| "Chat".into());
+        assert_eq!(out[0].2, "pane:chat:c1");
+        let many: Vec<News> = (0..4).map(|i| news(CHAT_TASK_ID, &format!("c{i}"))).collect();
+        assert_eq!(describe(&many, |_| String::new())[0].2, "chat");
+    }
+
+    #[test]
+    fn several_agents_in_one_task_open_the_task() {
+        let one: Vec<News> = (0..4).map(|i| news("t1", &format!("p{i}"))).collect();
+        let out = describe(&one, |_| String::new());
+        assert_eq!(out.len(), 1, "past three, one banner");
+        assert_eq!(out[0].2, "task:t1");
+        let mixed: Vec<News> = (0..4).map(|i| news(&format!("t{i}"), "p")).collect();
+        assert_eq!(describe(&mixed, |_| String::new())[0].2, "work");
     }
 }

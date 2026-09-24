@@ -12,6 +12,7 @@ import type {
   RepoHealth,
   ReviewQueue,
   Settings,
+  Target,
   TaskView,
   TicketMove,
 } from "./lib/types";
@@ -25,6 +26,8 @@ interface Toast {
   id: number;
   kind: "info" | "error" | "success";
   text: string;
+  /** Where a click on it goes (NOTE-4); without one a click only dismisses. */
+  target?: Target;
 }
 
 interface State {
@@ -59,6 +62,10 @@ interface State {
   settingsOpen: boolean;
   /** Ticket key to scroll to and highlight in the Tickets view, then clear. */
   focusIssueKey: string | null;
+  /** Pane to select once its task or chat is on screen, then clear (NOTE-4). */
+  focusPane: string | null;
+  /** Review request (`owner/repo#n`) to scroll to and highlight, then clear. */
+  focusReview: string | null;
   toasts: Toast[];
   /** Background task/pane polls have failed repeatedly — not a toast every few seconds. */
   watchFailing: boolean;
@@ -78,9 +85,14 @@ interface State {
   /** Jump to Tickets and highlight this key — for a task that already has one. */
   showIssue: (key: string) => void;
   clearFocusIssue: () => void;
+  showPane: (paneId: string) => void;
+  clearFocusPane: () => void;
+  /** Jump to Reviews and highlight this pull request. */
+  showReview: (id: string) => void;
+  clearFocusReview: () => void;
   setAppActive: (active: boolean) => void;
 
-  toast: (kind: Toast["kind"], text: string) => void;
+  toast: (kind: Toast["kind"], text: string, opts?: { target?: Target }) => void;
   dismissToast: (id: number) => void;
   fail: (e: unknown) => void;
 
@@ -187,8 +199,9 @@ const askedFlow = new Set<string>();
 /** Say what the PR sweep did about tickets (TKT-8). */
 function reportTickets(moves: TicketMove[], toast: State["toast"]) {
   for (const m of moves) {
-    if (m.moved_to) toast("success", `${m.key} → ${m.moved_to}`);
-    else if (m.error) toast("error", m.error);
+    const target: Target = `ticket:${m.key}`;
+    if (m.moved_to) toast("success", `${m.key} → ${m.moved_to}`, { target });
+    else if (m.error) toast("error", m.error, { target });
     else if (m.unchosen) {
       const project = m.key.split("-")[0];
       if (askedFlow.has(`${project}:${m.stage}`)) continue;
@@ -288,6 +301,8 @@ export const useStore = create<State>((set, get) => {
   sidebarHidden: read("sidebarHidden", false),
   settingsOpen: false,
   focusIssueKey: null,
+  focusPane: null,
+  focusReview: null,
   toasts: [],
   watchFailing: false,
   cursorIde: false,
@@ -301,6 +316,10 @@ export const useStore = create<State>((set, get) => {
   toggleSettings: (open) => set((s) => ({ settingsOpen: open ?? !s.settingsOpen })),
   showIssue: (key) => set({ view: "tickets", focusIssueKey: key }),
   clearFocusIssue: () => set({ focusIssueKey: null }),
+  showPane: (focusPane) => set({ focusPane }),
+  clearFocusPane: () => set({ focusPane: null }),
+  showReview: (id) => set({ view: "reviews", focusReview: id }),
+  clearFocusReview: () => set({ focusReview: null }),
   // Terminals watch this themselves: one that is no longer shown detaches,
   // and the backend stops sending its redraws to a webview nobody is
   // looking at.
@@ -309,9 +328,9 @@ export const useStore = create<State>((set, get) => {
     set({ appActive });
   },
 
-  toast: (kind, text) => {
+  toast: (kind, text, opts) => {
     const id = ++toastSeq;
-    set((s) => ({ toasts: [...s.toasts, { id, kind, text }] }));
+    set((s) => ({ toasts: [...s.toasts, { id, kind, text, target: opts?.target }] }));
     setTimeout(() => get().dismissToast(id), kind === "error" ? 8000 : 4000);
   },
   dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),

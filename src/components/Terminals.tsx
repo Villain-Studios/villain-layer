@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, errMessage } from "../lib/api";
+import { useFocusedPane } from "../lib/goto";
 import { read, write } from "../lib/persist";
 import { markStopping, useStore } from "../store";
 import { paneState } from "../lib/derive";
@@ -128,6 +129,8 @@ export function Terminals({ task }: { task: TaskView }) {
       setActive(panes[i].id);
     }
   }, [panes, active, task.id]);
+
+  useFocusedPane(panes, setActive);
 
   useEffect(() => {
     const i = panes.findIndex((p) => p.id === active);

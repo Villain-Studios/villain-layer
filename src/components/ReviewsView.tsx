@@ -1,4 +1,4 @@
-import { useState, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useState, type MouseEvent, type ReactNode } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { copyText } from "../lib/clipboard";
 import { ago } from "../lib/time";
@@ -17,18 +17,26 @@ function countOf(n: number, more: boolean): string {
   return more ? `${n}+` : String(n);
 }
 
+/** How a banner names a pull request: `owner/repo#n`, as `news.rs` writes it. */
+function identity(pr: ReviewRequest): string {
+  return pr.repo ? `${pr.repo}#${pr.number}` : `#${pr.number}`;
+}
+
 function ReviewCard({
   pr,
+  focused,
   onContextMenu,
 }: {
   pr: ReviewRequest;
+  focused: boolean;
   onContextMenu: (e: MouseEvent) => void;
 }) {
   const fail = useStore((s) => s.fail);
   return (
     <button
       type="button"
-      className="review-card"
+      className={`review-card${focused ? " focused" : ""}`}
+      data-review={identity(pr)}
       onClick={() => void openUrl(pr.url).catch(fail)}
       onContextMenu={onContextMenu}
       title={pr.url}
@@ -96,6 +104,28 @@ export function ReviewsView() {
   const [shut, setShut] = useState<Record<string, boolean>>({});
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
   const toggle = (id: string) => setShut((c) => ({ ...c, [id]: !c[id] }));
+  const focusReview = useStore((s) => s.focusReview);
+  const clearFocusReview = useStore((s) => s.clearFocusReview);
+
+  // A banner or a message about one pull request: open its list, bring it
+  // into view and light it up briefly. It waits for the queue to arrive; one
+  // no longer waiting on anybody simply is not there to find.
+  useEffect(() => {
+    if (!focusReview || !queue) return;
+    const inTeam = queue.team?.prs.some((pr) => identity(pr) === focusReview);
+    const inMine = queue.mine.some((pr) => identity(pr) === focusReview);
+    if (inMine || inTeam) setShut((c) => ({ ...c, [inMine ? "you" : "team"]: false }));
+    const scroll = window.setTimeout(() => {
+      document
+        .querySelector(`[data-review="${CSS.escape(focusReview)}"]`)
+        ?.scrollIntoView({ block: "center", behavior: "smooth" });
+    }, 80);
+    const clear = window.setTimeout(() => clearFocusReview(), 2200);
+    return () => {
+      window.clearTimeout(scroll);
+      window.clearTimeout(clear);
+    };
+  }, [focusReview, queue, clearFocusReview]);
 
   function copy(text: string, what: string) {
     void copyText(text)
@@ -104,7 +134,7 @@ export function ReviewsView() {
   }
 
   function prMenu(pr: ReviewRequest): MenuItem[] {
-    const key = pr.repo ? `${pr.repo}#${pr.number}` : `#${pr.number}`;
+    const key = identity(pr);
     return [
       { label: "Open in GitHub", onSelect: () => void openUrl(pr.url).catch(fail) },
       { label: "Copy link", onSelect: () => copy(pr.url, pr.url) },
@@ -164,6 +194,7 @@ export function ReviewsView() {
           <ReviewCard
             key={`${pr.repo}#${pr.number}`}
             pr={pr}
+            focused={focusReview === identity(pr)}
             onContextMenu={(e) => openMenu(e, pr)}
           />
         ))}
@@ -188,6 +219,7 @@ export function ReviewsView() {
               <ReviewCard
                 key={`${pr.repo}#${pr.number}`}
                 pr={pr}
+                focused={focusReview === identity(pr)}
                 onContextMenu={(e) => openMenu(e, pr)}
               />
             ))

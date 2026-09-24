@@ -202,7 +202,13 @@ export function Floating({
 
     const left = Math.max(8, Math.min(x, window.innerWidth - origin.width - 8));
     const top = Math.max(8, Math.min(y, window.innerHeight - origin.height - 8));
-    setPos({ left: (left - origin.left) / sx, top: (top - origin.top) / sy });
+    const placed = { left: (left - origin.left) / sx, top: (top - origin.top) / sy };
+    // Onto the element as well as into state: measuring moved it, and when
+    // the place comes out the same as last time React sees nothing to change
+    // and leaves it where the measuring put it, 100px from the corner.
+    el.style.left = `${placed.left}px`;
+    el.style.top = `${placed.top}px`;
+    setPos(placed);
   }, [x, y, measureKey]);
 
   useEffect(() => {

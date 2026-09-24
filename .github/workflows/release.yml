@@ -3,9 +3,10 @@
 # universal app for Apple silicon and Intel, and puts its .dmg on a draft
 # GitHub release, to be read over and published by hand.
 #
-# Signed with the Developer ID and notarised when the Apple secrets are set.
-# Without them the app is signed ad hoc, and the release notes say how to
-# open it.
+# Signed with the Developer ID and notarised when all six Apple secrets are
+# set, and checked by Gatekeeper before it is drafted. With none set, the app
+# is signed ad hoc, and the release notes say how to open it. With some but
+# not all, it stops.
 name: release
 
 on:
@@ -57,18 +58,33 @@ jobs:
         run: |
           # A secret that is not set arrives as an empty string, and Tauri
           # signs and notarises as soon as the variable exists, empty or not.
+          set=0
           for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
-            [ -n "${!name}" ] || unset "$name"
+            if [ -n "${!name}" ]; then set=$((set + 1)); else unset "$name"; fi
           done
-          if [ -n "${APPLE_CERTIFICATE:-}" ]; then
+          if [ "$set" -eq 6 ]; then
             echo "SIGNING=developer-id" >> "$GITHUB_ENV"
-          else
+          elif [ "$set" -eq 0 ]; then
             # Ad hoc, not unsigned: macOS offers Open Anyway for an app it
             # cannot check, but calls an unsigned download "damaged".
             export APPLE_SIGNING_IDENTITY=-
             echo "SIGNING=ad-hoc" >> "$GITHUB_ENV"
+          else
+            # Signed but not notarised is stopped by Gatekeeper all the same,
+            # and would go out without the notes saying how to open it.
+            echo "::error::$set of the 6 Apple secrets are set. Set all six to sign and notarise, or none to sign ad hoc (docs/releasing.md)."
+            exit 1
           fi
           bun tauri build --target universal-apple-darwin --bundles app,dmg
+
+      # What a Mac that downloads it will check, before anything is drafted.
+      - name: Gatekeeper accepts it
+        if: env.SIGNING == 'developer-id'
+        run: |
+          app="src-tauri/target/universal-apple-darwin/release/bundle/macos/Villain Layer.app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          xcrun stapler validate "$app"
+          spctl --assess --type execute --verbose=4 "$app"
 
       - name: Draft the release
         env:

@@ -50,23 +50,35 @@ What it takes:
    password.
 3. **An app-specific password** for notarisation, from account.apple.com →
    Sign-In and Security → App-Specific Passwords.
-4. **The repository secrets** (Settings → Secrets and variables → Actions):
+4. **The repository secrets.** Set them from a terminal with `gh`, which
+   asks for each value without echoing it and without leaving it in your
+   shell history. The certificate's name and team id are printed by
+   `security find-identity -v -p codesigning`, as
+   `Developer ID Application: <name> (TEAMID)`.
 
-   | Secret | Value |
-   |---|---|
-   | `APPLE_CERTIFICATE` | the `.p12`, as base64: `base64 -i cert.p12 \| pbcopy` |
-   | `APPLE_CERTIFICATE_PASSWORD` | the password the `.p12` was exported with |
-   | `APPLE_SIGNING_IDENTITY` | the certificate's name, `Developer ID Application: … (TEAMID)` |
-   | `APPLE_ID` | the Apple Account email of the membership |
-   | `APPLE_PASSWORD` | the app-specific password |
-   | `APPLE_TEAM_ID` | the ten-character team id, on developer.apple.com → Membership |
+   ```bash
+   R=Villain-Studios/villain-layer
+   base64 -i ~/Desktop/developer-id.p12 | gh secret set APPLE_CERTIFICATE -R $R
+   gh secret set APPLE_CERTIFICATE_PASSWORD -R $R   # the .p12's export password
+   gh secret set APPLE_SIGNING_IDENTITY -R $R       # Developer ID Application: <name> (TEAMID)
+   gh secret set APPLE_ID -R $R                     # the membership's Apple Account email
+   gh secret set APPLE_PASSWORD -R $R               # the app-specific password
+   gh secret set APPLE_TEAM_ID -R $R                # the ten characters in the brackets
+   ```
 
-The next tag builds signed and notarised. Check the first one on a Mac
-that has never run the app: download it, open it, and it should start
-without a warning. Then check the parts that the hardened runtime, which
-notarisation requires, could stop: a terminal pane starts an agent, a
-token is saved and read back, a notification arrives, and an agent reaches
-the app's MCP tools.
+   Then delete the `.p12` file: the secret holds it now.
+
+All six, or none. With some set and not others the workflow stops, rather
+than ship an app that is signed but not notarised, which macOS stops just
+the same. With all six, the next tag builds signed and notarised, and the
+workflow checks the result the way a Mac that downloads it will (`codesign`,
+`stapler validate`, `spctl`) before it drafts anything.
+
+Check the first one on a Mac that has never run the app: download it,
+open it, and it should start without a warning. Then check the parts that
+the hardened runtime, which notarisation requires, could stop: a terminal
+pane starts an agent, a token is saved and read back, a notification
+arrives, and an agent reaches the app's MCP tools.
 
 ## Moving the identifier
 

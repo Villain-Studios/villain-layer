@@ -102,7 +102,7 @@ Don't make the UI ask on a timer.
 
 1. **Emit it** from Rust: `let _ = app.emit("area:thing", payload);`, with
    a `Serialize` payload. Name it `area:thing`.
-2. **Listen once**, in `Watchers` in `src/App.tsx` for anything app-wide,
+2. **Listen once**, in `Watchers` in `src/Watchers.tsx` for anything app-wide,
    or in the component that needs it, and unlisten on cleanup:
 
    ```ts

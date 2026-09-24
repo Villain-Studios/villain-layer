@@ -235,7 +235,8 @@ build does the same.
 | `src-tauri/src/integrations/` | Jira, GitHub and Slack HTTP clients |
 | `src-tauri/src/secrets.rs` | tokens in the keychain |
 | `src-tauri/src/shellenv.rs` | the login shell's environment, for spawned processes |
-| `src/App.tsx` | the shell, top bar, and `Watchers` (every poll and event listener) |
+| `src/App.tsx` | the shell and the top bar |
+| `src/Watchers.tsx` | `Watchers`: every poll and event listener, and the toasts they raise |
 | `src/store.ts` | all frontend state, refresh actions, derived helpers (`paneState`, `needsYou`, …) |
 | `src/lib/api.ts` / `src/lib/types.ts` | the IPC surface, and the Rust types mirrored |
 | `src/components/ui.tsx` | `Modal`, `Field`, `Combo`, `Confirm`, `ContextMenu`, `Switch`, … |

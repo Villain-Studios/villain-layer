@@ -8,7 +8,7 @@ use tauri::{AppHandle, State};
 use crate::config::GithubConfig;
 use crate::error::{Error, Result};
 use crate::git;
-use crate::integrations::github::{self, GitHub};
+use crate::integrations::github::{self, CodeLine, GitHub};
 use crate::secrets;
 
 use super::diff::RepoResult;
@@ -607,6 +607,10 @@ pub enum FeedbackItem {
         path: String,
         line: Option<u64>,
         #[serde(default)]
+        start_line: Option<u64>,
+        #[serde(default)]
+        code: Vec<CodeLine>,
+        #[serde(default)]
         outdated: bool,
         url: String,
         comments: Vec<FeedbackNote>,
@@ -697,15 +701,24 @@ pub(crate) fn feedback_markdown(
         if !threads.is_empty() {
             md.push_str("\n### Review threads\n");
             for item in threads {
-                let FeedbackItem::Thread { path, line, outdated, url, comments, .. } = item else { continue };
+                let FeedbackItem::Thread { path, line, start_line, code, outdated, url, comments, .. } = item else {
+                    continue;
+                };
                 let at = if scope == Some(checkout) { path.clone() } else { format!("{repo}/{path}") };
-                let at = match line {
-                    Some(n) => format!("{at}:{n}"),
-                    None => at,
+                let at = match (start_line, line) {
+                    (Some(a), Some(b)) if a < b => format!("{at}:{a}-{b}"),
+                    (_, Some(n)) => format!("{at}:{n}"),
+                    _ => at,
                 };
                 md.push_str(&format!("\n#### `{at}`\n"));
                 if *outdated {
                     md.push_str("\nThe code here has changed since this was written — check whether it still applies.\n");
+                }
+                if !code.is_empty() {
+                    let diff: Vec<String> = code.iter().map(|c| format!("{}{}", c.op, c.text)).collect();
+                    // Longer than any run of backticks in the code, so the code cannot close it.
+                    let fence = "`".repeat(diff.iter().map(|l| l.matches('`').count()).max().unwrap_or(0).max(2) + 1);
+                    md.push_str(&format!("\nThe code it was left on:\n\n{fence}diff\n{}\n{fence}\n", diff.join("\n")));
                 }
                 for c in comments {
                     md.push_str(&format!("\n**{}**:\n{}\n", c.author, quoted(&c.body)));
@@ -1044,6 +1057,8 @@ mod tests {
             checkout_id: checkout.into(),
             path: path.into(),
             line,
+            start_line: None,
+            code: Vec::new(),
             outdated: false,
             url: "https://gh/t".into(),
             comments: vec![FeedbackNote { author: "ana".into(), body: "Off by one?\n\n- really".into() }],
@@ -1083,6 +1098,22 @@ mod tests {
     fn a_reviewers_markdown_stays_inside_the_quote() {
         let md = feedback_markdown("ACME-1", &[thread("c1", "a", Some(1))], None, name);
         assert!(md.contains("> Off by one?\n>\n> - really"));
+    }
+
+    #[test]
+    fn a_thread_on_a_range_names_the_range_and_carries_its_code() {
+        let mut item = thread("c1", "a.scss", Some(20));
+        if let FeedbackItem::Thread { start_line, code, .. } = &mut item {
+            *start_line = Some(19);
+            *code = vec![
+                CodeLine { n: Some(19), op: "+".into(), text: ".id {".into() },
+                CodeLine { n: Some(20), op: "+".into(), text: "  content: \"```\";".into() },
+            ];
+        }
+        let md = feedback_markdown("ACME-1", &[item], None, name);
+        assert!(md.contains("#### `api/a.scss:19-20`"));
+        // A fence the code's own backticks cannot close.
+        assert!(md.contains("````diff\n+.id {\n+  content: \"```\";\n````"));
     }
 
     #[test]

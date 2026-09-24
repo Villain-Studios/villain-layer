@@ -563,6 +563,12 @@ textarea { resize: vertical; font-family: var(--mono); }
   cursor: text;
 }
 .fb-note { font-size: 12.5px; padding-top: 6px; }
+/* Reuses the Diff tab's rows; `.ln` is not a click target here. */
+.fb-code {
+  margin-bottom: 8px; overflow-x: auto; background: var(--bg); font-family: var(--mono); font-size: 12px;
+  border: 1px solid var(--border-soft); border-radius: var(--radius); user-select: text;
+}
+.fb-code .ln, .fb-code .ln:hover { cursor: text; color: var(--dimmer); }
 .finish-list {
   margin: 0 0 14px;
   padding-left: 18px;

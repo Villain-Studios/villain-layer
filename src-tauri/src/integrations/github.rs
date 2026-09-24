@@ -8,6 +8,9 @@ use super::http_client;
 use crate::config::GithubConfig;
 use crate::error::{Error, Result};
 
+mod hunk;
+pub use hunk::CodeLine;
+
 pub struct GitHub {
     api_url: String,
     token: String,
@@ -310,8 +313,9 @@ impl GitHub {
               reviewThreads(first: 100, after: $after) {
                 pageInfo { hasNextPage endCursor }
                 nodes {
-                  isResolved isOutdated path line originalLine
+                  isResolved isOutdated path line originalLine startLine originalStartLine diffSide
                   comments(first: 100) { nodes { author { login __typename } body url createdAt } }
+                  hunk: comments(first: 1) { nodes { diffHunk } }
                 }
               }
               reviews(last: 100) @include(if: $first) { nodes { author { login __typename } state body url submittedAt } }
@@ -813,6 +817,10 @@ pub struct ReviewThread {
     pub path: String,
     /// Null when the line is gone from the current diff.
     pub line: Option<u64>,
+    /// Where a comment on a range of lines begins.
+    pub start_line: Option<u64>,
+    /// The lines it is on, as GitHub shows them above the comments.
+    pub code: Vec<CodeLine>,
     pub resolved: bool,
     /// The code under it has changed since, so it may already be answered.
     pub outdated: bool,
@@ -963,12 +971,20 @@ pub(crate) fn parse_feedback(v: &Value) -> Result<PrFeedback> {
                 .and_then(|n| n.as_array())
                 .map(|a| a.iter().map(parse_note).collect())
                 .unwrap_or_default();
+            let num = |k: &str| t.get(k).and_then(|x| x.as_u64());
+            let (line, start_line) = match num("line") {
+                Some(n) => (Some(n), num("startLine")),
+                None => (num("originalLine"), num("originalStartLine")),
+            };
+            let code = match (t.pointer("/hunk/nodes/0/diffHunk").and_then(|h| h.as_str()), num("originalLine")) {
+                (Some(h), Some(end)) => hunk::excerpt(h, num("originalStartLine"), end, s(t, "diffSide") == "LEFT"),
+                _ => Vec::new(),
+            };
             ReviewThread {
                 path: s(t, "path"),
-                line: t
-                    .get("line")
-                    .and_then(|x| x.as_u64())
-                    .or_else(|| t.get("originalLine").and_then(|x| x.as_u64())),
+                line,
+                start_line,
+                code,
                 resolved: t.get("isResolved").and_then(|x| x.as_bool()).unwrap_or(false),
                 outdated: t.get("isOutdated").and_then(|x| x.as_bool()).unwrap_or(false),
                 url: comments.first().map(|c| c.url.clone()).unwrap_or_default(),
@@ -1239,6 +1255,8 @@ mod tests {
             "author": { "login": "me" },
             "reviewThreads": { "nodes": [
                 { "isResolved": false, "isOutdated": false, "path": "src/a.ts", "line": 12, "originalLine": 10,
+                  "startLine": 11, "originalStartLine": 9, "diffSide": "RIGHT",
+                  "hunk": { "nodes": [{ "diffHunk": "@@ -1,2 +8,3 @@\n ctx\n+nine\n+ten" }] },
                   "comments": { "nodes": [
                     { "author": { "login": "ana", "__typename": "User" }, "body": "Off by one?", "url": "u1", "createdAt": "t" },
                     { "author": { "login": "me", "__typename": "User" }, "body": "Looking", "url": "u2", "createdAt": "t" }
@@ -1258,6 +1276,10 @@ mod tests {
         assert_eq!(fb.author, "me");
         assert_eq!(fb.threads.len(), 2);
         assert_eq!(fb.threads[0].line, Some(12));
+        assert_eq!(fb.threads[0].start_line, Some(11));
+        // Cut by where it was written, since that is what the hunk shows.
+        let code: Vec<_> = fb.threads[0].code.iter().map(|c| (c.n, c.text.as_str())).collect();
+        assert_eq!(code, [(Some(9), "nine"), (Some(10), "ten")]);
         assert_eq!(fb.threads[0].url, "u1");
         assert_eq!(fb.threads[0].comments.len(), 2);
         assert!(fb.threads[1].resolved && fb.threads[1].outdated);

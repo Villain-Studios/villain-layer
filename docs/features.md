@@ -442,6 +442,11 @@ finish a merged task.
   the text is someone else's: raw tags keep only their text, a link opens
   in the browser only for http(s) and mailto, and images are not loaded.
   Clicking an item's heading picks it; its text can be selected.
+  A review thread shows the code it is on above its comments, as GitHub
+  does: the lines it spans, or the line and the three above it, cut from
+  the hunk it was written against (so an outdated thread still shows the
+  code it meant). Its heading names the range, `file:16-20`, and the same
+  code goes to the agent.
 
 Code: `commands/github.rs`, `integrations/github.rs`, `PrPanel.tsx`,
 `PrFeedback.tsx`, `Markdown.tsx`, `lib/markdown.ts`.
@@ -454,6 +459,10 @@ Known gaps:
 - Two feedback sends for one task seconds apart overwrite each other's
   `PR_FEEDBACK.md`.
 - There is no rate-limit handling beyond pacing.
+- Copilot's title, severity badge and "suggested changeset" on a review
+  comment are not shown. GitHub does not return them with the comment,
+  and the suggestion is not in its body the way a reviewer's
+  ```` ```suggestion ```` block is.
 
 ## 9. Tickets
 

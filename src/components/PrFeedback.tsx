@@ -3,7 +3,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, errMessage } from "../lib/api";
 import { read, write } from "../lib/persist";
 import { useStore } from "../store";
-import type { FeedbackItem, FeedbackNote, RepoFeedback, TaskView } from "../lib/types";
+import type { CodeLine, FeedbackItem, FeedbackNote, RepoFeedback, TaskView } from "../lib/types";
 import { Modal, Spinner } from "./ui";
 import { AgentTargetFields, useAgentTarget } from "./AgentTarget";
 import { Markdown } from "./Markdown";
@@ -56,7 +56,8 @@ function entries(row: RepoFeedback, sent: Set<string>): { list: Entry[]; resolve
       preset: why.length === 0,
       why,
       item: {
-        kind: "thread", checkout_id, path: t.path, line: t.line, outdated: t.outdated, url: t.url,
+        kind: "thread", checkout_id, path: t.path, line: t.line, start_line: t.start_line, code: t.code,
+        outdated: t.outdated, url: t.url,
         comments: t.comments.map((c) => ({ author: c.author, body: c.body })),
       },
     });
@@ -101,6 +102,24 @@ const REVIEW_VERB: Record<string, string> = {
   COMMENTED: "reviewed",
 };
 
+const OP_CLASS = { "+": "add", "-": "del", " ": "" } as const;
+
+/** The lines a thread is on, above its comments, as GitHub shows them. */
+function Code({ lines }: { lines: CodeLine[] }) {
+  return (
+    <div className="fb-code">
+      <div className="diff-lines">
+        {lines.map((l, i) => (
+          <div key={i} className={`diff-line ${OP_CLASS[l.op] ?? ""}`}>
+            <span className="ln">{l.n ?? ""}</span>
+            <span className="tx">{l.op}{l.text}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function EntryRow({ entry, on, onToggle }: { entry: Entry; on: boolean; onToggle: () => void }) {
   const item = entry.item;
   let head: string;
@@ -108,13 +127,21 @@ function EntryRow({ entry, on, onToggle }: { entry: Entry; on: boolean; onToggle
   // All of it, as GitHub shows it: choosing what to send means reading it,
   // and a two-line preview behind "more" was a click per comment.
   if (item.kind === "thread") {
-    head = item.line ? `${item.path}:${item.line}` : item.path;
-    content = item.comments.map((c, n) => (
-      <div key={n} className="fb-comment">
-        <div className="fb-author">{c.author}</div>
-        <Markdown text={c.body} />
-      </div>
-    ));
+    const range = item.start_line && item.line && item.start_line < item.line
+      ? `${item.start_line}-${item.line}`
+      : item.line;
+    head = range ? `${item.path}:${range}` : item.path;
+    content = (
+      <>
+        {item.code.length > 0 && <Code lines={item.code} />}
+        {item.comments.map((c, n) => (
+          <div key={n} className="fb-comment">
+            <div className="fb-author">{c.author}</div>
+            <Markdown text={c.body} />
+          </div>
+        ))}
+      </>
+    );
   } else if (item.kind === "review") {
     head = `${item.author} ${REVIEW_VERB[item.state ?? ""] ?? "reviewed"}`;
     content = item.body && <Markdown text={item.body} />;

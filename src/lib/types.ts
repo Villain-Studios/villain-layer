@@ -390,9 +390,19 @@ export interface FeedbackNote {
   at: string | null;
 }
 
+/** A line of the code under a review thread; `n` is null on the other side. */
+export interface CodeLine {
+  n: number | null;
+  op: "+" | "-" | " ";
+  text: string;
+}
+
 export interface ReviewThread {
   path: string;
   line: number | null;
+  /** Where a comment on a range of lines begins. */
+  start_line: number | null;
+  code: CodeLine[];
   resolved: boolean;
   /** The code under it has changed since. */
   outdated: boolean;
@@ -429,7 +439,7 @@ export interface RepoFeedback {
 export type FeedbackItem =
   | {
       kind: "thread"; checkout_id: string; path: string; line: number | null;
-      outdated: boolean; url: string; comments: { author: string; body: string }[];
+      start_line: number | null; code: CodeLine[]; outdated: boolean; url: string; comments: { author: string; body: string }[];
     }
   | { kind: "review"; checkout_id: string; author: string; state: string | null; body: string; url: string }
   | { kind: "comment"; checkout_id: string; author: string; body: string; url: string }

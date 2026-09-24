@@ -252,10 +252,30 @@ const feedback: RepoFeedback[] = [
     url: "https://github.com/acme/api/pull/42", author: "you",
     threads: [
       {
-        path: "src/auth.ts", line: 42, resolved: false, outdated: false, url: "https://github.com/acme/api/pull/42#t1",
+        path: "src/auth.ts", line: 42, start_line: null, resolved: false, outdated: false, url: "https://github.com/acme/api/pull/42#t1",
+        code: [
+          { n: 39, op: " ", text: "export async function withRetry<T>(run: () => Promise<T>, tries: number) {" },
+          { n: null, op: "-", text: "  let attempt = 0;" },
+          { n: 40, op: "+", text: "  let attempt = 1;" },
+          { n: 41, op: " ", text: "  for (;;) {" },
+          { n: 42, op: " ", text: "    if (attempt >= tries) throw new Error(\"gave up\");" },
+        ],
         comments: [
           { author: "ana", bot: false, state: null, body: "The retry counter starts at `1`, so this makes **one attempt fewer** than configured.\n\n```ts\nlet attempt = 0;\n```", url: "", at: ago(1800) },
           { author: "you", bot: false, state: null, body: "Good catch — fixed in the next push.", url: "", at: ago(1700) },
+        ],
+      },
+      {
+        path: "src/table.scss", line: 20, start_line: 16, resolved: false, outdated: false, url: "https://github.com/acme/api/pull/42#t2",
+        code: [
+          { n: 16, op: "+", text: ".mat-column-id {" },
+          { n: 17, op: "+", text: "  font-size: var(--text-xs);" },
+          { n: 18, op: "+", text: "  line-height: var(--text-xs--line-height);" },
+          { n: 19, op: "+", text: "  word-break: break-all;" },
+          { n: 20, op: "+", text: "}" },
+        ],
+        comments: [
+          { author: "copilot-pull-request-reviewer", bot: true, state: null, url: "", at: ago(900), body: "This selector matches both the header and data cells. Scope these rules to `td.mat-column-id`." },
         ],
       },
     ],

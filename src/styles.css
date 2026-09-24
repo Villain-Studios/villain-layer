@@ -1673,6 +1673,7 @@ textarea { resize: vertical; font-family: var(--mono); }
 
 /* Work nobody has claimed is the point of looking, so it should catch the eye. */
 .ticket .bottom .free { color: var(--green); }
+.ticket .bottom .age { margin-left: auto; font-family: var(--mono); color: var(--dimmer); }
 
 /* Type toggles, above whichever list is showing. */
 .type-filter {

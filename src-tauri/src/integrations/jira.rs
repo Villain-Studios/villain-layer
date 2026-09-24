@@ -39,6 +39,8 @@ pub struct Issue {
     pub epic_key: Option<String>,
     pub epic_summary: Option<String>,
     pub url: String,
+    /// When it was filed, as RFC 3339 (TKT-11). None if Jira left it out.
+    pub created: Option<String>,
 }
 
 /// An issue type exactly as this Jira defines it. Nothing about types is
@@ -199,7 +201,7 @@ impl Jira {
     pub async fn search(&self, jql: &str, max: u32) -> Result<Page> {
         let mut fields = json!([
             "summary", "description", "status", "issuetype",
-            "priority", "assignee", "labels", "components", "parent",
+            "priority", "assignee", "labels", "components", "parent", "created",
         ]);
         // Asked for only when this site has one; its id differs per site.
         if let Some(field) = &self.epic_field {
@@ -569,6 +571,7 @@ impl Jira {
                 .pointer("/parent/fields/summary")
                 .and_then(|s| s.as_str())
                 .map(str::to_string),
+            created: f.get("created").and_then(|s| s.as_str()).and_then(jira_time),
         }
     }
 }
@@ -603,6 +606,16 @@ pub fn text_to_adf(text: &str) -> Value {
         .collect();
 
     json!({ "type": "doc", "version": 1, "content": content })
+}
+
+/// Jira's `2026-09-12T10:22:31.000+0200` as RFC 3339. The webview's
+/// `Date.parse` is WebKit's, which reads an offset without its colon as no
+/// date at all.
+fn jira_time(s: &str) -> Option<String> {
+    chrono::DateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.f%z")
+        .or_else(|_| chrono::DateTime::parse_from_rfc3339(s))
+        .ok()
+        .map(|t| t.with_timezone(&chrono::Utc).to_rfc3339())
 }
 
 fn str_at(v: &Value, key: &str) -> String {
@@ -833,6 +846,13 @@ pub fn browse_jql(
 #[cfg(test)]
 mod browse_tests {
     use super::*;
+
+    #[test]
+    fn a_ticket_s_date_reaches_the_webview_in_a_form_it_can_read() {
+        assert_eq!(jira_time("2026-09-12T10:22:31.000+0200").as_deref(), Some("2026-09-12T08:22:31+00:00"));
+        assert_eq!(jira_time("2026-09-12T08:22:31Z").as_deref(), Some("2026-09-12T08:22:31+00:00"));
+        assert_eq!(jira_time("last Tuesday"), None);
+    }
 
     #[test]
     fn only_a_key_goes_into_a_path() {

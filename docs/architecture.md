@@ -115,18 +115,18 @@ for, and the reverse, and that each is in this table.
 | Event | Payload | Emitted when | Listened in |
 |---|---|---|---|
 | `pty:output` | `{ pane_id, data: base64, end }` | a watched pane printed (batched, ~33ms) | `lib/ptyOutput.ts`, one listener for all panes |
-| `pty:activity` | pane id | a pane's state changed: a hook report, a keystroke, a notice cleared, a pane shown | `App.tsx` → `refreshPanes` |
-| `pty:notice` | `{ pane_id, notice }` | a usage-limit or trust prompt appeared | `App.tsx` → refresh and toast |
-| `pty:exit` | `{ pane_id, code }` | a pane's process ended | `App.tsx` → refresh, toast, Slack |
+| `pty:activity` | pane id | a pane's state changed: a hook report, a keystroke, a notice cleared, a pane shown | `Watchers.tsx` → `refreshPanes` |
+| `pty:notice` | `{ pane_id, notice }` | a usage-limit or trust prompt appeared | `Watchers.tsx` → refresh and toast |
+| `pty:exit` | `{ pane_id, code }` | a pane's process ended | `Watchers.tsx` → refresh, toast, Slack |
 | `pr:draft` | `{ task_id, text }` | a chunk of a drafted PR description | `PrPanel.tsx` |
 | `issue:draft` | `{ request_id, text }` | a chunk of an improved ticket description | `tickets/OptimizeDescription.tsx` |
-| `system-notify-click` | a `NotifyTarget` | a banner was clicked | `App.tsx` → open what it is about |
-| `app:notices` | none | a notice was queued after startup (`commands::notify`) | `App.tsx` → `takeNotices`, as toasts |
+| `system-notify-click` | a `NotifyTarget` | a banner was clicked | `Watchers.tsx` → open what it is about |
+| `app:notices` | none | a notice was queued after startup (`commands::notify`) | `Watchers.tsx` → `takeNotices`, as toasts |
 
 What still polls, and why, is marked at each `setInterval` with
 `// guard: allow poll — <reason>`. Everything polls only while the window is
 in front, and slower once nobody has touched it for 45 seconds
-(`Watchers` in `App.tsx`).
+(`Watchers.tsx`).
 
 ## Panes
 
@@ -276,7 +276,7 @@ push.
 
 ## The frontend
 
-- **`Watchers`** (in `App.tsx`) holds every poll and event listener and
+- **`Watchers`** (`Watchers.tsx`) holds every poll and event listener and
   draws nothing. It is kept apart from the views because together, a pane
   poll re-rendered whatever view was open.
 - **Refreshes go through `coalesce`** (`store.ts`). A poll that finds a

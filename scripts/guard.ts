@@ -497,7 +497,6 @@ const CEILINGS: Record<string, number> = {
   "src/components/DiffView.tsx": 1100,
   "src/components/PrPanel.tsx": 800,
   "src/store.ts": 800,
-  "src/App.tsx": 700,
   "src/components/Settings.tsx": 700,
   "src/components/Terminals.tsx": 700,
   "src-tauri/src/commands/jira.rs": 1400,

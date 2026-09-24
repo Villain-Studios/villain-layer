@@ -561,7 +561,7 @@ Code: `commands/github.rs` (`review_queue`), `ReviewsView.tsx`.
 | Dock count | agents that need you (STATE table) | `attention.rs`, every 5s |
 | Banner: agent | an agent starts needing you, or exits on its own, while the window is not focused | `attention.rs` |
 | Banner: review, ticket | a new review request or assigned ticket, while the window is not focused | `news.rs`, every 3 min while away |
-| Toast | PR approved, changes requested, new comments, merged; a pane that exited; errors | `App.tsx` |
+| Toast | PR approved, changes requested, new comments, merged; a pane that exited; errors | `Watchers.tsx` |
 | Slack | an agent finished, PRs opened, an agent's own post | `commands/slack.rs` |
 
 - **NOTE-1** Banners MUST be sent by the backend. A hidden webview's timers

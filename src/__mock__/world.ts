@@ -15,6 +15,7 @@ import type {
   JiraIssue,
   JiraIssueType,
   JiraTransition,
+  Message,
   PaneInfo,
   Project,
   RepoFeedback,
@@ -44,6 +45,8 @@ export interface World {
   feedback: RepoFeedback[];
   /** What each pane's terminal shows when it comes on screen. */
   output: Record<string, string>;
+  /** The message center's log, newest first. */
+  messages: Message[];
 }
 
 const now = Date.now();
@@ -367,7 +370,26 @@ function busy(): World {
       "pane-copilot": say(["● Done. The audit log page is behind the feature flag."]),
       "pane-chat": say(["> What is left on ACME-100?", "", "Looking at the epic's tickets…"]),
     },
+    messages: messages(),
   };
+}
+
+/** One of each kind the message center shows, and each way a click can land. */
+function messages(): Message[] {
+  const at = (seconds: number) => now - seconds * 1000;
+  const m = (id: number, seconds: number, rest: Partial<Message> & Pick<Message, "kind" | "title">): Message => ({
+    id, at: at(seconds), level: "info", body: "", target: null, read: false, count: 1, ...rest,
+  });
+  return [
+    m(8, 40, { kind: "agent", level: "info", title: "ACME-123 Fix login race", body: "Claude Code is asking for your permission", target: "pane:t-login:pane-claude" }),
+    m(7, 300, { kind: "pr", level: "success", title: "web #7 merged — ACME-130 Audit log page", target: "pr:t-audit" }),
+    m(6, 900, { kind: "review", title: "Review requested", body: "acme/web#88 — Speed up the search box", target: "review:acme/web#88" }),
+    m(5, 1500, { kind: "error", level: "error", title: "Jira did not answer: 503 Service Unavailable", count: 3 }),
+    m(4, 3600, { kind: "ticket", title: "New ticket", body: "ACME-141 — Rate-limit password resets", target: "ticket:ACME-141" }),
+    m(3, 7200, { kind: "agent", level: "error", title: "ACME-123 Fix login race", body: "Codex exited with 1", target: "pane:t-login:pane-from-last-launch" }),
+    m(2, 86400, { kind: "agent", level: "success", title: "Chat", body: "Claude Code finished", target: "pane:chat:pane-chat", read: true }),
+    m(1, 90000, { kind: "notice", title: "Moved 2 worktrees onto the app's own copies of their repositories.", read: true }),
+  ];
 }
 
 /** First launch: nothing added, nothing connected. */
@@ -376,6 +398,7 @@ function empty(): World {
     projects: [], health: [], cleanup: [], tasks: [], panes: [], agents, settings: disconnected, prs: [],
     reviews: { mine: [], mine_more: false, team: null },
     issues: [], issueTypes: [], transitions: [], requiredFields: [], changed: [], feedback: [], output: {},
+    messages: [],
   };
 }
 

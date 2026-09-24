@@ -75,6 +75,18 @@ const answer: Record<string, Answer> = {
   // setter just changed looked like no change to the store, and nothing redrew.
   get_settings: () => structuredClone(world.settings),
   take_notices: () => [],
+  list_messages: () => structuredClone(world.messages),
+  mark_messages_read: (a) => {
+    const ids = a.ids as number[] | null;
+    for (const m of world.messages) if (!ids || ids.includes(m.id)) m.read = true;
+    void emit("messages:changed");
+    return null;
+  },
+  clear_messages: () => {
+    world.messages = [];
+    void emit("messages:changed");
+    return null;
+  },
   cursor_ide_installed: () => false,
   list_projects: () => world.projects,
   list_tasks: () => world.tasks,

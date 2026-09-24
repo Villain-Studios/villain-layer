@@ -40,6 +40,7 @@ import type {
   UiPrefs,
   UpdateBy,
   AppNotice,
+  Message,
 } from "./types";
 
 export const api = {
@@ -261,6 +262,10 @@ export const api = {
   // settings
   getSettings: () => invoke<Settings>("get_settings"),
   takeNotices: () => invoke<AppNotice[]>("take_notices"),
+  listMessages: () => invoke<Message[]>("list_messages"),
+  /** Every message when `ids` is left out. */
+  markMessagesRead: (ids?: number[]) => invoke<void>("mark_messages_read", { ids: ids ?? null }),
+  clearMessages: () => invoke<void>("clear_messages"),
   setWorktreeRoot: (path: string | null) => invoke<void>("set_worktree_root", { path }),
   setUiPrefs: (ui: UiPrefs) => invoke<void>("set_ui_prefs", { ui }),
   disconnect: (which: "jira" | "github" | "slack") => invoke<void>("disconnect", { which }),

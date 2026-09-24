@@ -409,5 +409,13 @@ export function Watchers() {
     return () => { void p.then((un) => un()); };
   }, []);
 
+  // The message center's log: once now, then whenever the backend changes it.
+  useEffect(() => {
+    const refresh = () => void useStore.getState().refreshMessages().catch(() => {});
+    refresh();
+    const p = listen("messages:changed", refresh);
+    return () => { void p.then((un) => un()); };
+  }, []);
+
   return null;
 }

@@ -562,6 +562,7 @@ Code: `commands/github.rs` (`review_queue`), `ReviewsView.tsx`.
 | Banner: agent | an agent starts needing you, or exits on its own, while the window is not focused | `attention.rs` |
 | Banner: review, ticket | a new review request or assigned ticket, while the window is not focused | `news.rs`, every 3 min while away |
 | Toast | PR approved, changes requested, new comments, merged; a pane that exited; errors | `Watchers.tsx` |
+| Message center | all of the above but Slack and the dock, kept | `messages.rs`, `MessageCenter.tsx` |
 | Slack | an agent finished, PRs opened, an agent's own post | `commands/slack.rs` |
 
 - **NOTE-1** Banners MUST be sent by the backend. A hidden webview's timers
@@ -583,6 +584,33 @@ Code: `commands/github.rs` (`review_queue`), `ReviewsView.tsx`.
 - **NOTE-5** Slack posts MUST pass the backend's switches: "Send anything"
   first, then one per kind. Nothing routes around them. A webhook URL is a
   secret and never appears in an error.
+
+### Message center
+
+The bell left of Settings. Toasts go and banners pile up in Notification
+Center; this keeps what the app told you, newest first.
+
+- **MSG-1** The message center MUST keep every piece of news: an agent
+  asking, finished or exited on its own (with a trust prompt or a usage
+  limit), a new review request, a new ticket, and a notice from the app.
+- **MSG-2** News MUST be recorded whether or not the window is focused and
+  whether or not its banner is switched on. The switches decide banners and
+  the dock count, nothing else. The first look is still a snapshot (NOTE-2).
+- **MSG-3** Each piece of news MUST be recorded once, by one source: agents
+  by `attention.rs`, reviews and tickets by `news.rs`, notices by
+  `push_notice`. Its toast does not record it again. The same unread
+  message again within ten minutes MUST count on the row already there
+  (×N) rather than add another.
+- **MSG-4** The log MUST survive a restart: `messages.json` beside
+  `config.json`, the newest 200, written whole through a temp file and a
+  rename, never on the main thread or the async runtime. An unreadable file
+  is kept as `messages.json.unreadable`, and one entry this build cannot
+  read is dropped on its own.
+- **MSG-5** The bell MUST show how many are unread, and list them newest
+  first with when and how often each was said. A click on one opens it by
+  NOTE-4's route and marks every unread message about the same thing read.
+  One about nothing in particular is only marked read. "Mark all read" and
+  "Clear" act on the whole log; Clear asks first.
 
 Known gaps:
 - "An agent finished" is posted to Slack by the UI on `pty:exit`, so it
@@ -646,8 +674,8 @@ Known gaps:
 | Setting | Default | What it does |
 |---|---|---|
 | Interface scale | 100% | 80–160% |
-| New reviews and tickets | on | banners while the window is away (NOTE-*) |
-| Agents waiting on you | on | banners and the dock count |
+| New reviews and tickets | on | banners while the window is away (NOTE-*); the message center keeps them either way (MSG-2) |
+| Agents waiting on you | on | banners and the dock count; the message center keeps them either way (MSG-2) |
 | Put terminals back when the app reopens | on | PANE-7 |
 | Let agents read terminal output | **off** | MCP `pane_output`, `handoff_prompt` |
 | Move the ticket when work starts | on | TKT-1 |
@@ -680,7 +708,7 @@ Known gaps:
 
 | Where | What |
 |---|---|
-| `~/Library/Application Support/eu.codevillain.villain-layer/` | `config.json`: repos, tasks, settings, saved panes. At agent launch also `.mcp.json` (0600), `claude-hooks.json`, `copilot-plugin/`, `opencode-plugin.js` |
+| `~/Library/Application Support/eu.codevillain.villain-layer/` | `config.json`: repos, tasks, settings, saved panes. `messages.json`: the message center (MSG-4). At agent launch also `.mcp.json` (0600), `claude-hooks.json`, `copilot-plugin/`, `opencode-plugin.js` |
 | Keychain, service `eu.codevillain.villain-layer` | one item holding every token |
 | `~/.villain-worktrees/` (settable) | task folders, `_chat/` rooms, and `.repos/`: the app's own copy of each repo (REPO-4) |
 | a task folder | the worktrees, `AGENTS.md` and `CLAUDE.md` (task context), `.mcp.json`, and `.gemini/settings.json`, `PR_DESCRIPTION.md`, `PR_FEEDBACK.md`, and hand-offs too long to type (`CONFLICTS.md`, `REVIEW_COMMENTS.md`, `PR_DRAFT_REQUEST.md`, `FIRST_PROMPT.md`, PANE-11) as they come up |

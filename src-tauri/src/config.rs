@@ -379,6 +379,30 @@ pub fn default_worktree_root() -> PathBuf {
     home.join(".villain-worktrees")
 }
 
+/// Replace the file at `path` with `bytes`, whole: through a temp file
+/// beside it and a rename, so a crash leaves the old one or the new one and
+/// never half of either.
+pub(crate) fn write_whole(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
+    let tmp = path.with_extension("json.tmp");
+    let mut file = std::fs::File::create(&tmp)?;
+    file.write_all(bytes)?;
+    // On disk before it replaces the old one, or a crash straight after
+    // the rename can leave a config with nothing in it. Plain fsync, not
+    // `sync_all`: on macOS that is F_FULLFSYNC, a drive-cache flush that
+    // costs tens of milliseconds, and some writes come from the main
+    // thread — every step of a settings slider is one.
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+        // SAFETY: the descriptor belongs to `file`, which is open here.
+        unsafe { libc::fsync(file.as_raw_fd()) };
+    }
+    drop(file);
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
+
 pub struct ConfigStore {
     path: PathBuf,
     inner: RwLock<AppConfig>,
@@ -478,24 +502,12 @@ impl ConfigStore {
     }
 
     fn persist(&self, cfg: &AppConfig) -> Result<()> {
-        use std::io::Write;
-        let tmp = self.path.with_extension("json.tmp");
-        let mut file = std::fs::File::create(&tmp)?;
-        file.write_all(&serde_json::to_vec_pretty(cfg)?)?;
-        // On disk before it replaces the old one, or a crash straight after
-        // the rename can leave a config with nothing in it. Plain fsync, not
-        // `sync_all`: on macOS that is F_FULLFSYNC, a drive-cache flush that
-        // costs tens of milliseconds, and some writes come from the main
-        // thread — every step of a settings slider is one.
-        #[cfg(unix)]
-        {
-            use std::os::fd::AsRawFd;
-            // SAFETY: the descriptor belongs to `file`, which is open here.
-            unsafe { libc::fsync(file.as_raw_fd()) };
-        }
-        drop(file);
-        std::fs::rename(&tmp, &self.path)?;
-        Ok(())
+        write_whole(&self.path, &serde_json::to_vec_pretty(cfg)?)
+    }
+
+    /// The folder `config.json` is in, where the app keeps its other files.
+    pub fn folder(&self) -> &std::path::Path {
+        self.path.parent().unwrap_or(std::path::Path::new("."))
     }
 
     pub fn worktree_root(&self) -> PathBuf {

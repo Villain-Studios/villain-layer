@@ -13,6 +13,7 @@ use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
 use crate::commands::{banner, AppState, ReviewQueue};
+use crate::messages::{self, Kind, Level, New};
 use crate::target::Target;
 
 /// How often to look while the window is away. The same three minutes the
@@ -92,8 +93,12 @@ impl Seen {
         fresh
     }
 
-    /// Start again from a snapshot: banners were turned off, or the
-    /// connection changed and the old list says nothing about the new one.
+    /// Start again from a snapshot: the connection changed, and the old
+    /// list says nothing about the new one.
+    ///
+    /// Not when banners are turned off, which it once was: the message
+    /// center keeps these either way (MSG-2), and a snapshot every three
+    /// minutes made nearly every new ticket part of one.
     pub fn forget(&self) {
         *self.reviews.lock() = None;
         *self.team_primed.lock() = false;
@@ -113,10 +118,12 @@ fn announce_now(app: &AppHandle) -> bool {
 /// A review queue has come in, from wherever it was asked for.
 pub fn saw_reviews(app: &AppHandle, queue: &ReviewQueue) {
     let fresh = app.state::<AppState>().news.reviews(queue);
-    if fresh.is_empty() || !announce_now(app) {
+    let news = review_news(&fresh);
+    messages::record_all(app, news.clone());
+    if news.is_empty() || !announce_now(app) {
         return;
     }
-    for (title, body, target) in review_banners(&fresh) {
+    for (title, body, target) in banners(news, "Reviews", "pull requests are waiting on a review", Target::Reviews) {
         let _ = banner(app, title, body, target);
     }
 }
@@ -124,39 +131,52 @@ pub fn saw_reviews(app: &AppHandle, queue: &ReviewQueue) {
 /// Your ticket list has come in, from wherever it was asked for.
 pub fn saw_tickets(app: &AppHandle, issues: &[crate::integrations::jira::Issue]) {
     let fresh = app.state::<AppState>().news.tickets(issues);
-    if fresh.is_empty() || !announce_now(app) {
+    let news = ticket_news(&fresh);
+    messages::record_all(app, news.clone());
+    if news.is_empty() || !announce_now(app) {
         return;
     }
-    for (title, body, target) in ticket_banners(&fresh) {
+    for (title, body, target) in banners(news, "Tickets", "tickets were assigned to you", Target::Tickets) {
         let _ = banner(app, title, body, target);
     }
 }
 
-/// Banners for new review requests: title, body and what a click opens.
-fn review_banners(fresh: &[(String, String)]) -> Vec<(String, String, String)> {
-    if fresh.len() > BATCH {
-        let body = format!("{} pull requests are waiting on a review", fresh.len());
-        return vec![("Reviews".into(), body, Target::Reviews.to_string())];
-    }
+/// New review requests, as the message center keeps them.
+fn review_news(fresh: &[(String, String)]) -> Vec<New> {
     fresh
         .iter()
-        .map(|(pr, title)| {
-            ("Review requested".into(), format!("{pr} — {title}"), Target::Review(pr).to_string())
+        .map(|(pr, title)| New {
+            kind: Kind::Review,
+            level: Level::Info,
+            title: "Review requested".into(),
+            body: format!("{pr} — {title}"),
+            target: Some(Target::Review(pr).to_string()),
         })
         .collect()
 }
 
-/// Banners for new tickets: title, body and what a click opens.
-fn ticket_banners(fresh: &[(String, String)]) -> Vec<(String, String, String)> {
-    if fresh.len() > BATCH {
-        let body = format!("{} tickets were assigned to you", fresh.len());
-        return vec![("Tickets".into(), body, Target::Tickets.to_string())];
-    }
+/// New tickets, as the message center keeps them.
+fn ticket_news(fresh: &[(String, String)]) -> Vec<New> {
     fresh
         .iter()
-        .map(|(key, summary)| {
-            ("New ticket".into(), format!("{key} — {summary}"), Target::Ticket(key).to_string())
+        .map(|(key, summary)| New {
+            kind: Kind::Ticket,
+            level: Level::Info,
+            title: "New ticket".into(),
+            body: format!("{key} — {summary}"),
+            target: Some(Target::Ticket(key).to_string()),
         })
+        .collect()
+}
+
+/// A banner each, or one for the lot past `BATCH`: title, body and what a
+/// click opens.
+fn banners(news: Vec<New>, heading: &str, many: &str, all: Target) -> Vec<(String, String, String)> {
+    if news.len() > BATCH {
+        return vec![(heading.into(), format!("{} {many}", news.len()), all.to_string())];
+    }
+    news.into_iter()
+        .map(|n| (n.title, n.body, n.target.unwrap_or_else(|| all.to_string())))
         .collect()
 }
 
@@ -169,10 +189,8 @@ pub fn spawn(app: AppHandle) {
         loop {
             tokio::time::sleep(EVERY).await;
             let state = app.state::<AppState>();
-            if !state.config.read().ui.system_notifications {
-                state.news.forget();
-                continue;
-            }
+            // Only while away with banners on: in front, the UI's own
+            // fetches keep `Seen` current and record what is new.
             if !announce_now(&app) {
                 continue;
             }
@@ -265,11 +283,20 @@ mod tests {
 
     #[test]
     fn a_new_review_opens_that_pull_request() {
+        let say = |fresh: &[(String, String)]| {
+            banners(review_news(fresh), "Reviews", "waiting", Target::Reviews)
+        };
         let one = [("o/a#7".to_string(), "Fix it".to_string())];
-        assert_eq!(review_banners(&one)[0].2, "review:o/a#7");
+        assert_eq!(say(&one), [("Review requested".into(), "o/a#7 — Fix it".into(), "review:o/a#7".into())]);
         let many: Vec<_> = (0..4).map(|i| (format!("o/a#{i}"), String::new())).collect();
-        assert_eq!(review_banners(&many)[0].2, "reviews");
+        assert_eq!(say(&many)[0].2, "reviews");
         let ticket = [("ACME-3".to_string(), "Do it".to_string())];
-        assert_eq!(ticket_banners(&ticket)[0].2, "ticket:ACME-3");
+        assert_eq!(ticket_news(&ticket)[0].target.as_deref(), Some("ticket:ACME-3"));
+    }
+
+    #[test]
+    fn every_new_review_is_kept_even_when_its_banner_is_one_of_many() {
+        let many: Vec<_> = (0..5).map(|i| (format!("o/a#{i}"), String::new())).collect();
+        assert_eq!(review_news(&many).len(), 5);
     }
 }

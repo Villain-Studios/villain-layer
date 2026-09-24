@@ -6,6 +6,7 @@ mod error;
 mod git;
 mod integrations;
 mod mcp;
+mod messages;
 mod news;
 mod previous;
 mod pty;
@@ -101,16 +102,20 @@ pub fn run() {
             let handle = app.handle();
             secrets::use_service(&app.config().identifier);
             previous::adopt(handle);
+            let config = ConfigStore::load(handle)?;
+            let (log, dirty) = messages::Messages::load(config.folder());
             let state = AppState {
-                config: ConfigStore::load(handle)?,
+                config,
                 ptys: PtyManager::default(),
                 jira_types: Default::default(),
                 epic_field_missing: Default::default(),
                 pending_notices: Default::default(),
                 status_cache: Default::default(),
                 news: Default::default(),
+                messages: log,
             };
             app.manage(state);
+            messages::spawn_writer(handle.clone(), dirty)?;
 
             // Agents reach the app's Jira, GitHub and Slack connections through
             // this rather than holding their own credentials. Bound before any
@@ -257,6 +262,9 @@ pub fn run() {
             commands::set_slack_prefs,
             commands::get_settings,
             commands::take_notices,
+            commands::list_messages,
+            commands::mark_messages_read,
+            commands::clear_messages,
             commands::set_worktree_root,
             commands::set_ui_prefs,
             commands::disconnect,
@@ -271,9 +279,10 @@ pub fn run() {
             // wrote their transcripts and nothing could be resumed next time.
             // Ask them to stop and give them a moment to save.
             if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
-                app.state::<AppState>()
-                    .ptys
-                    .shutdown(std::time::Duration::from_secs(5));
+                let state = app.state::<AppState>();
+                // Whatever the writer had not got to yet.
+                let _ = state.messages.flush();
+                state.ptys.shutdown(std::time::Duration::from_secs(5));
             }
         });
 }

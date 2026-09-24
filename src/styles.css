@@ -1379,6 +1379,98 @@ textarea { resize: vertical; font-family: var(--mono); }
 
 .epic-head .title { display: flex; align-items: center; gap: 7px; }
 
+/* ------------------------------------------------------- message center */
+
+.icon-btn.bell { position: relative; }
+.icon-btn.bell.open { border-color: var(--accent-dim); color: var(--text); }
+.bell-count {
+  position: absolute;
+  top: -5px;
+  right: -6px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--bg);
+  font: 600 10px/16px var(--mono);
+  text-align: center;
+}
+.messages {
+  position: fixed;
+  z-index: 200;
+  width: 380px;
+  max-width: calc(100vw - 16px);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+}
+.messages-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.messages-head .title { font-weight: 600; font-size: 13px; }
+.messages-head .spacer { flex: 1; }
+.messages-list { max-height: min(520px, 70vh); overflow-y: auto; padding: 4px; }
+.messages-empty { color: var(--dim); font-size: 12.5px; padding: 14px 10px; margin: 0; line-height: 1.5; }
+.message {
+  display: flex;
+  gap: 9px;
+  width: 100%;
+  text-align: left;
+  white-space: normal;
+  padding: 8px 9px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--dim);
+  cursor: default;
+}
+.message.linked { cursor: pointer; }
+.message:hover { background: var(--panel); }
+.message.unread { color: var(--text); }
+.message .dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  margin-top: 6px;
+  border-radius: 50%;
+  background: var(--blue);
+}
+.message.success .dot { background: var(--green); }
+.message.error .dot { background: var(--red); }
+/* Read is still there to find again, just no longer asking to be. */
+.message:not(.unread) .dot { opacity: 0.35; }
+.message .text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.message .line { display: flex; align-items: baseline; gap: 6px; font-size: 12.5px; }
+.message .what { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.message:not(.unread) .what { font-weight: 500; }
+/* An error is all title: cut to one line, it lost the part that said why. */
+.message.solo .what {
+  white-space: normal;
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+.message .times { font: 11px var(--mono); color: var(--dim); }
+.message .when { margin-left: auto; flex: none; font-size: 11px; color: var(--dimmer); }
+.message .body {
+  font-size: 12px;
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
 /* --------------------------------------------------------- context menu */
 
 .ctx-menu {

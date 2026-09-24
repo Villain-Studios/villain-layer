@@ -83,6 +83,27 @@ export function GearIcon({ size = 18 }: { size?: number }) {
   );
 }
 
+/** A bell, for the message center. */
+export function BellIcon({ size = 18 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      style={{ display: "block" }}
+      aria-hidden="true"
+    >
+      <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
+      <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+    </svg>
+  );
+}
+
 /**
  * Show or hide the task list.
  *
@@ -164,10 +185,12 @@ export interface MenuItem {
  * A press outside it or Escape closes it.
  */
 export function Floating({
-  x, y, onClose, ignore, measureKey, className, children,
+  x, y, align = "start", onClose, ignore, measureKey, className, children,
 }: {
   x: number;
   y: number;
+  /** Whether `x` is where its left edge goes, or its right edge. */
+  align?: "start" | "end";
   onClose: () => void;
   /**
    * An element whose clicks must not dismiss it, so the button that opened
@@ -200,7 +223,8 @@ export function Floating({
     const sx = (moved.left - origin.left) / 100 || 1;
     const sy = (moved.top - origin.top) / 100 || 1;
 
-    const left = Math.max(8, Math.min(x, window.innerWidth - origin.width - 8));
+    const want = align === "end" ? x - origin.width : x;
+    const left = Math.max(8, Math.min(want, window.innerWidth - origin.width - 8));
     const top = Math.max(8, Math.min(y, window.innerHeight - origin.height - 8));
     const placed = { left: (left - origin.left) / sx, top: (top - origin.top) / sy };
     // Onto the element as well as into state: measuring moved it, and when
@@ -209,7 +233,7 @@ export function Floating({
     el.style.left = `${placed.left}px`;
     el.style.top = `${placed.top}px`;
     setPos(placed);
-  }, [x, y, measureKey]);
+  }, [x, y, align, measureKey]);
 
   useEffect(() => {
     const close = (e: MouseEvent) => {

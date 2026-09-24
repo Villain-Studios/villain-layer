@@ -637,8 +637,14 @@ Known gaps:
   typed again.
 - **SET-2** Disconnecting MUST delete the token from the keychain and the
   integration's settings.
+- **SET-3** A Jira site or GitHub API URL MUST be `https://`, so a token
+  never travels unencrypted. Plain `http://` is refused, when connecting
+  and for one saved before this rule, except to this machine
+  (`localhost`, `127.0.0.1`, `::1`). Slack's addresses are fixed and
+  always https.
 
-Code: `commands/settings.rs`, `config.rs` (`UiPrefs`), `Settings.tsx`.
+Code: `commands/settings.rs`, `config.rs` (`UiPrefs`), `Settings.tsx`,
+`integrations/mod.rs` (`require_https`).
 
 Known gaps:
 - Changing Slack's channel needs the token pasted again.

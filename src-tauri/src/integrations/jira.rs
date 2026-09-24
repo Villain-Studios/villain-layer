@@ -77,15 +77,16 @@ pub struct Myself {
 }
 
 impl Jira {
-    pub fn new(cfg: &JiraConfig, token: &str) -> Self {
+    pub fn new(cfg: &JiraConfig, token: &str) -> Result<Self> {
+        super::require_https(&cfg.base_url, "The Jira site")?;
         let auth = base64::engine::general_purpose::STANDARD
             .encode(format!("{}:{}", cfg.email, token));
-        Self {
+        Ok(Self {
             base_url: cfg.base_url.trim_end_matches('/').to_string(),
             auth: format!("Basic {auth}"),
             client: http_client(),
             epic_field: cfg.epic_field.clone(),
-        }
+        })
     }
 
     fn req(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {

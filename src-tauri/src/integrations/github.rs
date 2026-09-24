@@ -55,12 +55,13 @@ pub struct CheckRun {
 }
 
 impl GitHub {
-    pub fn new(cfg: &GithubConfig, token: &str) -> Self {
-        Self {
+    pub fn new(cfg: &GithubConfig, token: &str) -> Result<Self> {
+        super::require_https(&cfg.api_url, "The GitHub API URL")?;
+        Ok(Self {
             api_url: cfg.api_url.trim_end_matches('/').to_string(),
             token: token.to_string(),
             client: http_client(),
-        }
+        })
     }
 
     fn req(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {

@@ -59,7 +59,7 @@ pub(crate) fn jira_client(state: &AppState) -> Result<(Jira, JiraConfig)> {
         .jira
         .ok_or(Error::NotConfigured("Jira"))?;
     let token = secrets::get(secrets::JIRA)?.ok_or(Error::NotConfigured("Jira"))?;
-    Ok((Jira::new(&cfg, &token), cfg))
+    Ok((Jira::new(&cfg, &token)?, cfg))
 }
 
 #[tauri::command]
@@ -87,7 +87,7 @@ pub async fn jira_connect(
     let was = before.as_ref().map(|j| j.base_url.clone());
     let token = stored_or(secrets::JIRA, &token, "Jira", was.as_deref(), &cfg.base_url)?;
     // Verify before persisting, so a typo never looks like a working setup.
-    let client = Jira::new(&cfg, &token);
+    let client = Jira::new(&cfg, &token)?;
     let who = client.myself().await?;
     // Asked once, here, because the id differs on every site.
     cfg.epic_field = client.epic_link_field().await.ok().flatten();

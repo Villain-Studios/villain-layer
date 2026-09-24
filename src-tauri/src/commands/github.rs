@@ -26,7 +26,7 @@ pub(crate) fn github_client(state: &AppState) -> Result<(GitHub, GithubConfig)> 
         .github
         .ok_or(Error::NotConfigured("GitHub"))?;
     let token = secrets::get(secrets::GITHUB)?.ok_or(Error::NotConfigured("GitHub"))?;
-    Ok((GitHub::new(&cfg, &token), cfg))
+    Ok((GitHub::new(&cfg, &token)?, cfg))
 }
 
 #[tauri::command]
@@ -46,7 +46,7 @@ pub async fn github_connect(
     };
     let was = state.config.read().github.as_ref().map(|g| g.api_url.clone());
     let token = stored_or(secrets::GITHUB, &token, "GitHub", was.as_deref(), &cfg.api_url)?;
-    let login = GitHub::new(&cfg, &token).login().await?;
+    let login = GitHub::new(&cfg, &token)?.login().await?;
     secrets::set(secrets::GITHUB, &token)?;
     state.config.update(|c| c.github = Some(cfg))?;
     Ok(login)

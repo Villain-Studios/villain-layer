@@ -63,6 +63,10 @@ struct Watch {
     /// records: whatever is already waiting at launch is not news.
     waiting: Option<HashSet<String>>,
     running: HashSet<String>,
+    /// Every pane at the last pass. An agent that dies on start-up can come
+    /// and go between two looks: never seen running, so without this its
+    /// exit, the one failure you most need to hear about, was never news.
+    known: HashSet<String>,
     announced: HashMap<String, Instant>,
 }
 
@@ -71,9 +75,12 @@ impl Watch {
     fn pass(&mut self, panes: &[(PaneInfo, bool)], at: Instant) -> (usize, Vec<News>) {
         let mut quiet = HashSet::new();
         let mut running = HashSet::new();
+        let mut known = HashSet::new();
         let mut news = Vec::new();
+        let primed = self.waiting.is_some();
 
         for (info, stopping) in panes {
+            known.insert(info.id.clone());
             if info.running {
                 running.insert(info.id.clone());
             }
@@ -95,7 +102,7 @@ impl Watch {
                 && !stopping
                 && info.kind == PaneKind::Agent
                 && info.task_id != CHAT_TASK_ID
-                && self.running.contains(&info.id);
+                && (self.running.contains(&info.id) || (primed && !self.known.contains(&info.id)));
             if exited {
                 news.push(News {
                     pane_id: info.id.clone(),
@@ -127,6 +134,7 @@ impl Watch {
         let count = quiet.len();
         self.waiting = Some(quiet);
         self.running = running;
+        self.known = known;
         (count, news)
     }
 }
@@ -311,5 +319,26 @@ mod tests {
         assert_eq!(news.len(), 1);
         assert_eq!(news[0].pane_id, "a");
         assert_eq!(news[0].what, "finished");
+    }
+
+    #[test]
+    fn an_agent_that_dies_between_two_looks_is_still_news() {
+        let at = Instant::now();
+        let mut w = Watch::default();
+        w.pass(&[], at);
+
+        let mut a = pane("a", Activity::Idle);
+        a.running = false;
+        a.exit_code = Some(127);
+        let (_, news) = w.pass(&[(a.clone(), false)], at + TICK);
+        assert_eq!(news.len(), 1);
+        assert_eq!(news[0].what, "exited with 127");
+        let (_, news) = w.pass(&[(a.clone(), false)], at + TICK * 2);
+        assert!(news.is_empty(), "once is enough");
+
+        // Already dead when the app looked first: restored, not news.
+        let mut fresh = Watch::default();
+        let (_, news) = fresh.pass(&[(a, false)], at);
+        assert!(news.is_empty());
     }
 }

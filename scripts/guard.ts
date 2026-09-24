@@ -151,18 +151,23 @@ function maskRust(src: string): string {
  */
 function withoutTests(masked: string): string {
   const lines = masked.split("\n");
+  // Blanked, not emptied: an index in this is read back out of the raw
+  // source. Emptied, everything after a test-only method mid-file (a
+  // `for_tests` constructor) moved, and an event emitted below one was read
+  // as whatever text sat that many characters earlier.
+  const drop = (k: number) => { lines[k] = " ".repeat(lines[k].length); };
   for (let i = 0; i < lines.length; i++) {
     if (lines[i].trim() !== "#[cfg(test)]") continue;
     const close = lines[i].slice(0, lines[i].indexOf("#")) + "}";
     let j = i + 1;
     while (j < lines.length && lines[j].trim().startsWith("#[")) j++;
     if (lines[j]?.trimEnd().endsWith(";")) {
-      for (let k = i; k <= j; k++) lines[k] = "";
+      for (let k = i; k <= j; k++) drop(k);
       i = j;
       continue;
     }
     while (j < lines.length && !lines[j].startsWith(close)) j++;
-    for (let k = i; k <= j && k < lines.length; k++) lines[k] = "";
+    for (let k = i; k <= j && k < lines.length; k++) drop(k);
     i = j;
   }
   return lines.join("\n");

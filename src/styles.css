@@ -499,6 +499,7 @@ textarea { resize: vertical; font-family: var(--mono); }
 .fb-item input[type="checkbox"] { width: auto; margin-top: 3px; flex: none; }
 .fb-main { flex: 1; min-width: 0; }
 .fb-pick { cursor: pointer; }
+.fb-fold { padding: 0 5px; margin-right: 2px; font-size: 13px; line-height: 1.2; }
 .fb-content { margin-top: 6px; }
 .fb-comment + .fb-comment { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-soft); }
 .fb-author { color: var(--dim); font-size: 12px; font-weight: 500; margin-bottom: 2px; }

@@ -447,6 +447,11 @@ finish a merged task.
   the hunk it was written against (so an outdated thread still shows the
   code it meant). Its heading names the range, `file:16-20`, and the same
   code goes to the agent.
+  A resolved thread is the one exception to "in full": it is listed last
+  in its repo, shut to its heading with a `resolved` chip, and opens with
+  one click on its arrow. It is never picked for you, and "All" leaves it
+  out. One ticked on purpose goes to the agent marked as resolved, with a
+  warning not to undo what was settled.
 
 Code: `commands/github.rs`, `integrations/github.rs`, `PrPanel.tsx`,
 `PrFeedback.tsx`, `Markdown.tsx`, `lib/markdown.ts`.

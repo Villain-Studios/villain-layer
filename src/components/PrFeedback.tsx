@@ -16,6 +16,8 @@ interface Entry {
   preset: boolean;
   /** Why it was not picked, when that is not obvious. */
   why: string[];
+  /** A thread the reviewer accepted: listed last, shut, and never picked for you. */
+  resolved: boolean;
 }
 
 /**
@@ -28,19 +30,14 @@ interface Entry {
 const SENT_LIMIT = 500;
 const sentKey = (taskId: string) => `feedbackSent.${taskId}`;
 
-function entries(row: RepoFeedback, sent: Set<string>): { list: Entry[]; resolved: number } {
+/** `open` is `list` without its resolved threads: what "All" picks. */
+function entries(row: RepoFeedback, sent: Set<string>): { list: Entry[]; open: Entry[]; resolved: number } {
   const out: Entry[] = [];
+  const done: Entry[] = [];
   const checkout_id = row.checkout_id;
   const person = (n: FeedbackNote) => !n.bot && n.author !== row.author;
 
-  let resolved = 0;
   for (const t of row.threads) {
-    // A resolved thread is one the reviewer accepted. Listing it invites the
-    // agent to redo work that was already signed off.
-    if (t.resolved) {
-      resolved += 1;
-      continue;
-    }
     const last = t.comments[t.comments.length - 1];
     // By its newest comment, not its first: a thread keyed on where it began
     // stayed "sent before" when the reviewer answered the fix with "still
@@ -51,13 +48,19 @@ function entries(row: RepoFeedback, sent: Set<string>): { list: Entry[]; resolve
     if (t.outdated) why.push("outdated");
     if (last && last.author === row.author) why.push("you replied last");
     if (t.comments.every((c) => c.bot)) why.push("bot");
-    out.push({
+    // A resolved thread is one the reviewer accepted, and sending it invites
+    // the agent to redo work already signed off. It stays in sight, though:
+    // hidden, it left no way to check what had been settled, or to send one
+    // back on purpose.
+    if (t.resolved) why.unshift("resolved");
+    (t.resolved ? done : out).push({
       key,
       preset: why.length === 0,
       why,
+      resolved: t.resolved,
       item: {
         kind: "thread", checkout_id, path: t.path, line: t.line, start_line: t.start_line, code: t.code,
-        outdated: t.outdated, url: t.url,
+        outdated: t.outdated, resolved: t.resolved, url: t.url,
         comments: t.comments.map((c) => ({ author: c.author, body: c.body })),
       },
     });
@@ -68,7 +71,7 @@ function entries(row: RepoFeedback, sent: Set<string>): { list: Entry[]; resolve
     if (sent.has(key)) why.push("sent before");
     if (!person(r)) why.push(r.bot ? "bot" : "yours");
     out.push({
-      key, preset: why.length === 0, why,
+      key, preset: why.length === 0, why, resolved: false,
       item: { kind: "review", checkout_id, author: r.author, state: r.state, body: r.body, url: r.url },
     });
   }
@@ -78,7 +81,7 @@ function entries(row: RepoFeedback, sent: Set<string>): { list: Entry[]; resolve
     if (sent.has(key)) why.push("sent before");
     if (!person(c)) why.push(c.bot ? "bot" : "yours");
     out.push({
-      key, preset: why.length === 0, why,
+      key, preset: why.length === 0, why, resolved: false,
       item: { kind: "comment", checkout_id, author: c.author, body: c.body, url: c.url },
     });
   }
@@ -86,14 +89,14 @@ function entries(row: RepoFeedback, sent: Set<string>): { list: Entry[]; resolve
     const key = `k:${k.url ?? `${checkout_id}:${k.name}`}`;
     const why = sent.has(key) ? ["sent before"] : [];
     out.push({
-      key, preset: why.length === 0, why,
+      key, preset: why.length === 0, why, resolved: false,
       item: {
         kind: "check", checkout_id, name: k.name, conclusion: k.conclusion,
         url: k.url, summary: k.summary, log: k.log,
       },
     });
   }
-  return { list: out, resolved };
+  return { list: [...out, ...done], open: out, resolved: done.length };
 }
 
 const REVIEW_VERB: Record<string, string> = {
@@ -122,6 +125,7 @@ function Code({ lines }: { lines: CodeLine[] }) {
 
 function EntryRow({ entry, on, onToggle }: { entry: Entry; on: boolean; onToggle: () => void }) {
   const item = entry.item;
+  const [open, setOpen] = useState(!entry.resolved);
   let head: string;
   let content: ReactNode;
   // All of it, as GitHub shows it: choosing what to send means reading it,
@@ -166,6 +170,16 @@ function EntryRow({ entry, on, onToggle }: { entry: Entry; on: boolean; onToggle
       <div className="fb-main">
         {/* The heading picks the item; the body is for reading, selecting and following links. */}
         <div className="row fb-pick" onClick={onToggle}>
+          {entry.resolved && (
+            <button
+              className="btn-sm fb-fold"
+              title={open ? "Hide the thread" : "Show the thread"}
+              aria-expanded={open}
+              onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
+            >
+              {open ? "▾" : "▸"}
+            </button>
+          )}
           <span className={item.kind === "thread" || item.kind === "check" ? "fb-head mono" : "fb-head"}>{head}</span>
           {entry.why.map((w) => <span key={w} className="chip">{w}</span>)}
           <div className="spacer" />
@@ -179,7 +193,7 @@ function EntryRow({ entry, on, onToggle }: { entry: Entry; on: boolean; onToggle
             </button>
           )}
         </div>
-        {content && <div className="fb-content">{content}</div>}
+        {open && content && <div className="fb-content">{content}</div>}
       </div>
     </div>
   );
@@ -227,6 +241,7 @@ export function PrFeedback({ task, onClose }: { task: TaskView; onClose: () => v
 
   const chosen = built.flatMap((b) => b.list.filter((e) => picked.has(e.key)));
   const total = built.reduce((n, b) => n + b.list.length, 0);
+  const resolvedTotal = built.reduce((n, b) => n + b.resolved, 0);
 
   function toggle(set: Set<string>, key: string): Set<string> {
     const next = new Set(set);
@@ -280,13 +295,13 @@ export function PrFeedback({ task, onClose }: { task: TaskView; onClose: () => v
       {rows && rows.length === 0 && (
         <div className="muted">No repository in this task has an open pull request.</div>
       )}
-      {rows && rows.length > 0 && total === 0 && !rows.some((r) => r.error) && (
+      {rows && rows.length > 0 && total === resolvedTotal && !rows.some((r) => r.error) && (
         <div className="muted" style={{ lineHeight: 1.6 }}>
           Nothing to answer: no open review threads, comments or failing checks
-          {built.some((b) => b.resolved > 0) ? " — every thread has been resolved" : ""}.
+          {resolvedTotal > 0 ? " — every thread has been resolved" : ""}.
         </div>
       )}
-      {built.map(({ row, list, resolved }) => (
+      {built.map(({ row, list, open }) => (
         <div key={row.checkout_id} className="fb-repo">
           <div className="row" style={{ marginBottom: 6 }}>
             <h3 style={{ margin: 0, fontSize: 13.5 }}>
@@ -294,14 +309,14 @@ export function PrFeedback({ task, onClose }: { task: TaskView; onClose: () => v
               {row.number > 0 && ` #${row.number} ${row.title}`}
             </h3>
             <div className="spacer" />
-            {list.length > 1 && (
+            {open.length > 1 && (
               <button
                 className="btn-sm"
                 onClick={() => {
-                  const all = list.every((e) => picked.has(e.key));
+                  const all = open.every((e) => picked.has(e.key));
                   setPicked((p) => {
                     const next = new Set(p);
-                    for (const e of list) {
+                    for (const e of open) {
                       if (all) next.delete(e.key);
                       else next.add(e.key);
                     }
@@ -309,7 +324,7 @@ export function PrFeedback({ task, onClose }: { task: TaskView; onClose: () => v
                   });
                 }}
               >
-                {list.every((e) => picked.has(e.key)) ? "None" : "All"}
+                {open.every((e) => picked.has(e.key)) ? "None" : "All"}
               </button>
             )}
           </div>
@@ -322,12 +337,7 @@ export function PrFeedback({ task, onClose }: { task: TaskView; onClose: () => v
               onToggle={() => setPicked((p) => toggle(p, e.key))}
             />
           ))}
-          {resolved > 0 && (
-            <div className="muted fb-note">
-              {resolved} resolved thread{resolved === 1 ? "" : "s"} not shown
-            </div>
-          )}
-          {!row.error && list.length === 0 && resolved === 0 && (
+          {!row.error && list.length === 0 && (
             <div className="muted fb-note">Nothing said here yet, and no check is failing.</div>
           )}
         </div>

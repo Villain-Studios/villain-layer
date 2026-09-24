@@ -439,7 +439,7 @@ export interface RepoFeedback {
 export type FeedbackItem =
   | {
       kind: "thread"; checkout_id: string; path: string; line: number | null;
-      start_line: number | null; code: CodeLine[]; outdated: boolean; url: string; comments: { author: string; body: string }[];
+      start_line: number | null; code: CodeLine[]; outdated: boolean; resolved: boolean; url: string; comments: { author: string; body: string }[];
     }
   | { kind: "review"; checkout_id: string; author: string; state: string | null; body: string; url: string }
   | { kind: "comment"; checkout_id: string; author: string; body: string; url: string }

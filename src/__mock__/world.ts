@@ -278,6 +278,13 @@ const feedback: RepoFeedback[] = [
           { author: "copilot-pull-request-reviewer", bot: true, state: null, url: "", at: ago(900), body: "This selector matches both the header and data cells. Scope these rules to `td.mat-column-id`." },
         ],
       },
+      {
+        path: "src/retry.ts", line: 8, start_line: null, resolved: true, outdated: true, url: "https://github.com/acme/api/pull/42#t3",
+        code: [{ n: 8, op: "+", text: "const DELAY = 100;" }],
+        comments: [
+          { author: "copilot-pull-request-reviewer", bot: true, state: null, url: "", at: ago(3600), body: "A fixed delay retries in lockstep; consider jitter." },
+        ],
+      },
     ],
     reviews: [{ author: "ana", bot: false, state: "CHANGES_REQUESTED", body: "Needs a test for the retry path.", url: "", at: ago(1800) }],
     comments: [

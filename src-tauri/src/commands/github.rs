@@ -612,6 +612,8 @@ pub enum FeedbackItem {
         code: Vec<CodeLine>,
         #[serde(default)]
         outdated: bool,
+        #[serde(default)]
+        resolved: bool,
         url: String,
         comments: Vec<FeedbackNote>,
     },
@@ -701,7 +703,8 @@ pub(crate) fn feedback_markdown(
         if !threads.is_empty() {
             md.push_str("\n### Review threads\n");
             for item in threads {
-                let FeedbackItem::Thread { path, line, start_line, code, outdated, url, comments, .. } = item else {
+                let FeedbackItem::Thread { path, line, start_line, code, outdated, resolved, url, comments, .. } = item
+                else {
                     continue;
                 };
                 let at = if scope == Some(checkout) { path.clone() } else { format!("{repo}/{path}") };
@@ -711,6 +714,9 @@ pub(crate) fn feedback_markdown(
                     _ => at,
                 };
                 md.push_str(&format!("\n#### `{at}`\n"));
+                if *resolved {
+                    md.push_str("\nResolved on GitHub: the reviewer accepted it as it stands. It was sent on purpose, so read it, but do not undo what was settled.\n");
+                }
                 if *outdated {
                     md.push_str("\nThe code here has changed since this was written — check whether it still applies.\n");
                 }
@@ -1060,6 +1066,7 @@ mod tests {
             start_line: None,
             code: Vec::new(),
             outdated: false,
+            resolved: false,
             url: "https://gh/t".into(),
             comments: vec![FeedbackNote { author: "ana".into(), body: "Off by one?\n\n- really".into() }],
         }
@@ -1114,6 +1121,16 @@ mod tests {
         assert!(md.contains("#### `api/a.scss:19-20`"));
         // A fence the code's own backticks cannot close.
         assert!(md.contains("````diff\n+.id {\n+  content: \"```\";\n````"));
+    }
+
+    #[test]
+    fn a_resolved_thread_sent_on_purpose_says_it_was_settled() {
+        let mut item = thread("c1", "a.ts", Some(3));
+        if let FeedbackItem::Thread { resolved, .. } = &mut item {
+            *resolved = true;
+        }
+        assert!(feedback_markdown("ACME-1", &[item], None, name).contains("Resolved on GitHub"));
+        assert!(!feedback_markdown("ACME-1", &[thread("c1", "a.ts", Some(3))], None, name).contains("Resolved"));
     }
 
     #[test]

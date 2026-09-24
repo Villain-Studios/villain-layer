@@ -1,0 +1,23 @@
+name: Feature request
+description: Something the app should do.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you are trying to do
+      description: The work, and where the app gets in the way. Not the solution yet.
+    validations:
+      required: true
+  - type: textarea
+    id: requirement
+    attributes:
+      label: What the app should do
+      description: >
+        If you can, as a requirement, the way docs/features.md writes them:
+        "Starting work MUST …".
+  - type: input
+    id: area
+    attributes:
+      label: Area
+      description: The section of docs/features.md it belongs to, if you know.

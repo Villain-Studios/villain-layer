@@ -1,0 +1,44 @@
+name: Bug report
+description: Something the app did wrong.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: And what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to make it happen
+      placeholder: |
+        1. Start work on a ticket with two repositories
+        2. …
+  - type: input
+    id: version
+    attributes:
+      label: Villain Layer version
+      description: Settings → General → Version.
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version, and Apple silicon or Intel
+    validations:
+      required: true
+  - type: input
+    id: agent
+    attributes:
+      label: Agent CLI and its version, if an agent is involved
+      placeholder: claude 2.1.0
+  - type: textarea
+    id: panic
+    attributes:
+      label: panic.log, if the app quit
+      description: >
+        From ~/Library/Logs/villain-layer/panic.log. Look it over before
+        pasting: it can hold paths and names from your machine.
+      render: text

@@ -56,7 +56,7 @@ To build it, also:
 ## Install
 
 Download the `.dmg` from the
-[latest release](https://github.com/codevillain/villain-layer/releases/latest),
+[latest release](https://github.com/Villain-Studios/villain-layer/releases/latest),
 open it, and drag Villain Layer to Applications. It runs on Apple silicon
 and Intel Macs. To update, quit Villain Layer first: replacing the app
 while it runs kills it, and every agent running in it.
@@ -68,7 +68,7 @@ Settings → Privacy & Security → *Open Anyway*.
 ### Build it yourself
 
 ```bash
-git clone https://github.com/codevillain/villain-layer.git
+git clone https://github.com/Villain-Studios/villain-layer.git
 cd villain-layer
 bun install
 bun run release:mac

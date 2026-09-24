@@ -9,7 +9,7 @@ privately.
 ## Reporting a vulnerability
 
 - **Report a vulnerability** on the repository's
-  [Security tab](https://github.com/codevillain/villain-layer/security/advisories/new),
+  [Security tab](https://github.com/Villain-Studios/villain-layer/security/advisories/new),
   or
 - email **codevillain@proton.me**.
 

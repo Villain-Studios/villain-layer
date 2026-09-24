@@ -5,7 +5,7 @@
   "license": "MIT OR Apache-2.0",
   "author": "Code Villain <codevillain@proton.me> (https://codevillain.eu/)",
   "homepage": "https://codevillain.eu/",
-  "repository": "github:codevillain/villain-layer",
+  "repository": "github:Villain-Studios/villain-layer",
   "type": "module",
   "scripts": {
     "dev": "vite",

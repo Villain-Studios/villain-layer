@@ -1,5 +1,5 @@
 blank_issues_enabled: true
 contact_links:
   - name: Report a security problem
-    url: https://github.com/codevillain/villain-layer/security/advisories/new
+    url: https://github.com/Villain-Studios/villain-layer/security/advisories/new
     about: Privately, not as an issue. See SECURITY.md.

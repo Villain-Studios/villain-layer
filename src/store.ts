@@ -8,6 +8,7 @@ import type {
   JiraIssue,
   JiraIssueType,
   Message,
+  MessageKind,
   PaneInfo,
   Project,
   RepoHealth,
@@ -29,6 +30,16 @@ interface Toast {
   text: string;
   /** Where a click on it goes (NOTE-4); without one a click only dismisses. */
   target?: Target;
+}
+
+interface ToastOpts {
+  target?: Target;
+  /**
+   * Keep it in the message center as this kind (MSG-1). Errors are kept
+   * unless this says otherwise; anything else only when it says so. False
+   * for news the backend has recorded already (MSG-3).
+   */
+  record?: MessageKind | false;
 }
 
 interface State {
@@ -93,7 +104,7 @@ interface State {
   clearFocusReview: () => void;
   setAppActive: (active: boolean) => void;
 
-  toast: (kind: Toast["kind"], text: string, opts?: { target?: Target }) => void;
+  toast: (kind: Toast["kind"], text: string, opts?: ToastOpts) => void;
   dismissToast: (id: number) => void;
   fail: (e: unknown) => void;
 
@@ -211,8 +222,8 @@ const askedFlow = new Set<string>();
 function reportTickets(moves: TicketMove[], toast: State["toast"]) {
   for (const m of moves) {
     const target: Target = `ticket:${m.key}`;
-    if (m.moved_to) toast("success", `${m.key} → ${m.moved_to}`, { target });
-    else if (m.error) toast("error", m.error, { target });
+    if (m.moved_to) toast("success", `${m.key} → ${m.moved_to}`, { target, record: "ticket" });
+    else if (m.error) toast("error", m.error, { target, record: "ticket" });
     else if (m.unchosen) {
       const project = m.key.split("-")[0];
       if (askedFlow.has(`${project}:${m.stage}`)) continue;
@@ -343,6 +354,9 @@ export const useStore = create<State>((set, get) => {
   toast: (kind, text, opts) => {
     const id = ++toastSeq;
     set((s) => ({ toasts: [...s.toasts, { id, kind, text, target: opts?.target }] }));
+    const keep = opts?.record ?? (kind === "error" ? "error" : false);
+    // Swallowed: failing to keep an error must not raise another.
+    if (keep) void api.addMessage(keep, kind, text, opts?.target).catch(() => {});
     setTimeout(() => get().dismissToast(id), kind === "error" ? 8000 : 4000);
   },
   dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),

@@ -263,6 +263,7 @@ pub fn run() {
             commands::get_settings,
             commands::take_notices,
             commands::list_messages,
+            commands::add_message,
             commands::mark_messages_read,
             commands::clear_messages,
             commands::set_worktree_root,

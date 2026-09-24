@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { groupProjects } from "../store";
+import { groupProjects } from "../lib/derive";
 import type { Project } from "../lib/types";
 
 /**

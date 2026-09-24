@@ -294,7 +294,7 @@ shows as a banner above the terminals.
 - **STATE-3** Done becomes idle once the pane has been on screen.
 - **STATE-4** Every view MUST agree: the sidebar, the task's pane bar, All
   agents, Chat and the "N need you" count use `paneState` / `needsYou` in
-  `store.ts`, and the dock count uses the same rule in `attention.rs`.
+  `lib/derive.ts`, and the dock count uses the same rule in `attention.rs`.
 - **STATE-5** A state change MUST reach the UI as an event (`pty:activity`)
   as it happens, not at the next poll.
 - **STATE-6** A usage-limit notice MUST NOT fire on prose that merely

@@ -237,7 +237,8 @@ build does the same.
 | `src-tauri/src/shellenv.rs` | the login shell's environment, for spawned processes |
 | `src/App.tsx` | the shell and the top bar |
 | `src/Watchers.tsx` | `Watchers`: every poll and event listener, and the toasts they raise |
-| `src/store.ts` | all frontend state, refresh actions, derived helpers (`paneState`, `needsYou`, …) |
+| `src/store.ts` | all frontend state and its refresh actions |
+| `src/lib/derive.ts` | pure helpers over that state (`paneState`, `needsYou`, …) |
 | `src/lib/api.ts` / `src/lib/types.ts` | the IPC surface, and the Rust types mirrored |
 | `src/components/ui.tsx` | `Modal`, `Field`, `Combo`, `Confirm`, `ContextMenu`, `Switch`, … |
 | `src/components/` | one file per view or dialog; `sidebar/`, `tickets/` for those areas |

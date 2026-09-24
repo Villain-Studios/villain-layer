@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api";
 import { read, write } from "../lib/persist";
-import { CHAT_TASK_ID, paneState, useStore } from "../store";
+import { useStore } from "../store";
+import { CHAT_TASK_ID, paneState } from "../lib/derive";
 import { TerminalPane } from "./Terminal";
 import { ContextMenu, Confirm } from "./ui";
 import type { MenuItem } from "./ui";

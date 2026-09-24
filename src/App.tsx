@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api } from "./lib/api";
-import { CHAT_TASK_ID, needsYou, repoTrouble, selectedTask, taskTotals, useStore, type View } from "./store";
+import { selectedTask, useStore, type View } from "./store";
+import { CHAT_TASK_ID, needsYou, repoTrouble, taskTotals } from "./lib/derive";
 import type { TaskView } from "./lib/types";
 import { Sidebar } from "./components/sidebar/Sidebar";
 import { Terminals } from "./components/Terminals";

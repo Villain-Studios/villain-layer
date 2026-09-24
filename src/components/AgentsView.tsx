@@ -2,7 +2,8 @@ import { useState } from "react";
 
 import { api } from "../lib/api";
 import { ago } from "../lib/time";
-import { CHAT_TASK_ID, markStopping, needsYou, paneState, useNow, useStore } from "../store";
+import { markStopping, useNow, useStore } from "../store";
+import { CHAT_TASK_ID, needsYou, paneState } from "../lib/derive";
 import { SidebarToggle, Spinner } from "./ui";
 
 export function AgentsView() {

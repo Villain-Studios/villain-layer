@@ -157,23 +157,27 @@ export interface MenuItem {
 }
 
 /**
- * A right-click menu anchored at the cursor.
+ * Something that floats over the window at a point: a menu, a panel.
  *
  * Shifts itself back on screen near an edge, since the sidebar is close to the
  * left and tasks near the bottom would otherwise open a menu below the window.
+ * A press outside it or Escape closes it.
  */
-export function ContextMenu({
-  x, y, items, onClose, ignore,
+export function Floating({
+  x, y, onClose, ignore, measureKey, className, children,
 }: {
   x: number;
   y: number;
-  items: MenuItem[];
   onClose: () => void;
   /**
-   * An element whose clicks must not dismiss the menu, so the button that
-   * opened it can close it again instead of closing and reopening.
+   * An element whose clicks must not dismiss it, so the button that opened
+   * it can close it again instead of closing and reopening.
    */
   ignore?: RefObject<HTMLElement | null>;
+  /** Changes when the contents may have changed size, to place it again. */
+  measureKey?: unknown;
+  className: string;
+  children: ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
@@ -199,15 +203,13 @@ export function ContextMenu({
     const left = Math.max(8, Math.min(x, window.innerWidth - origin.width - 8));
     const top = Math.max(8, Math.min(y, window.innerHeight - origin.height - 8));
     setPos({ left: (left - origin.left) / sx, top: (top - origin.top) / sy });
-    // Items can arrive after the menu opens — resumable agents are fetched —
-    // and a taller menu needs placing again or it runs off the bottom.
-  }, [x, y, items.length]);
+  }, [x, y, measureKey]);
 
   useEffect(() => {
     const close = (e: MouseEvent) => {
-      // A press inside the menu must not dismiss it: closing on mousedown
-      // detaches the item before the browser can deliver its click, and the
-      // item then does nothing at all.
+      // A press inside must not dismiss it: closing on mousedown detaches
+      // the item before the browser can deliver its click, and the item then
+      // does nothing at all.
       if (ref.current?.contains(e.target as Node)) return;
       if (ignore?.current?.contains(e.target as Node)) return;
       onClose();
@@ -225,11 +227,37 @@ export function ContextMenu({
   return (
     <div
       ref={ref}
-      className="ctx-menu"
+      className={className}
       // Hidden until measured, so it never flashes at the unadjusted spot.
       style={{ ...(pos ?? {}), visibility: pos ? "visible" : "hidden" }}
       onMouseDown={(e) => e.stopPropagation()}
       onContextMenu={(e) => e.preventDefault()}
+    >
+      {children}
+    </div>
+  );
+}
+
+/** A right-click menu anchored at the cursor. */
+export function ContextMenu({
+  x, y, items, onClose, ignore,
+}: {
+  x: number;
+  y: number;
+  items: MenuItem[];
+  onClose: () => void;
+  ignore?: RefObject<HTMLElement | null>;
+}) {
+  return (
+    <Floating
+      x={x}
+      y={y}
+      onClose={onClose}
+      ignore={ignore}
+      className="ctx-menu"
+      // Items can arrive after the menu opens — resumable agents are fetched —
+      // and a taller menu needs placing again or it runs off the bottom.
+      measureKey={items.length}
     >
       {items.map((item, i) => (
         <button
@@ -243,7 +271,7 @@ export function ContextMenu({
           {item.label}
         </button>
       ))}
-    </div>
+    </Floating>
   );
 }
 

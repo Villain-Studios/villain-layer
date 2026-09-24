@@ -1,5 +1,6 @@
 import type { MouseEvent } from "react";
 import type { JiraIssue } from "../../lib/types";
+import { age } from "../../lib/time";
 import { IssueTypeIcon, hierarchyClass, isEpicType, type TypeMap } from "../IssueType";
 import { statusClass } from "./status";
 
@@ -104,6 +105,11 @@ export function TicketCard({
         {issue.components.map((c) => (
           <span key={c} className="group-chip">{c}</span>
         ))}
+        {issue.created && (
+          <span className="age" title={`Created ${new Date(issue.created).toLocaleString()}`}>
+            {age(issue.created)}
+          </span>
+        )}
       </div>
     </div>
   );

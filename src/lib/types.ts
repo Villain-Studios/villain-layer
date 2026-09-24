@@ -238,6 +238,8 @@ export interface JiraIssue {
   epic_key: string | null;
   epic_summary: string | null;
   url: string;
+  /** When it was filed, RFC 3339 (TKT-11). */
+  created: string | null;
 }
 
 /** A field a project insists on before it will accept a new issue. */

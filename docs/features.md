@@ -521,6 +521,9 @@ offers Start work.
   once the task is gone.
 - **TKT-10** The task header MUST show its ticket's status, from your ticket
   list, so a ticket out of step with the work is seen where the work is.
+- **TKT-11** Every ticket card MUST say how long ago the ticket was created,
+  in its largest whole unit ("5m", "3h", "2d", "1w", "4mo", "2y"), with the
+  full date on hover.
 
 Code: `commands/jira.rs`, `commands/ticket_flow.rs`, `integrations/jira.rs`,
 `integrations/jira/flow.rs`, `components/tickets/`, `TicketFlow.tsx`,

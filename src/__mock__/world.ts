@@ -93,7 +93,7 @@ const issueTypes: JiraIssueType[] = [
 /** Shaped like a real workflow: Review shares In Progress's category, and two statuses are done. */
 const STATUS_IDS: Record<string, string> = { "To Do": "1", "In Progress": "3", Review: "10322", Done: "10002", Cancelled: "10016" };
 
-function issue(key: string, summary: string, status: string, category: string, epic: string | null): JiraIssue {
+function issue(key: string, summary: string, status: string, category: string, epic: string | null, days = 3): JiraIssue {
   return {
     key,
     summary,
@@ -109,6 +109,7 @@ function issue(key: string, summary: string, status: string, category: string, e
     epic_key: epic,
     epic_summary: epic ? "Sign-in overhaul" : null,
     url: `https://acme.atlassian.net/browse/${key}`,
+    created: ago(days * 86400),
   };
 }
 
@@ -336,8 +337,8 @@ function busy(): World {
     },
     issues: [
       issue("ACME-123", "Fix login race", "In Progress", "indeterminate", "ACME-100"),
-      issue("ACME-140", "Remember the last workspace", "To Do", "new", "ACME-100"),
-      issue("ACME-141", "Rate-limit password resets", "To Do", "new", null),
+      issue("ACME-140", "Remember the last workspace", "To Do", "new", "ACME-100", 12),
+      issue("ACME-141", "Rate-limit password resets", "To Do", "new", null, 0.1),
     ],
     issueTypes,
     transitions: [

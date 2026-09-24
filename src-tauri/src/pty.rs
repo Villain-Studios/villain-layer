@@ -742,9 +742,16 @@ impl PtyManager {
             pixel_height: 0,
         };
 
-        let pair = system
-            .openpty(size)
-            .map_err(|e| Error::Pty(format!("openpty: {e}")))?;
+        // One at a time. Panes start from several threads at once (restoring,
+        // MCP calls, the blocking pool), and macOS's openpty called from two
+        // threads together fails one of them with "Unknown error: -6": a
+        // third of forty racing spawns, in the pane-cap test.
+        static OPENING: Mutex<()> = Mutex::new(());
+        let pair = {
+            let _one = OPENING.lock();
+            system.openpty(size)
+        }
+        .map_err(|e| Error::Pty(format!("openpty: {e}")))?;
 
         let id = uuid::Uuid::new_v4().to_string();
         let mut cmd = CommandBuilder::new(&opts.program);
@@ -1796,6 +1803,7 @@ mod tests {
         let ptys = PtyManager::default();
         let dir = std::env::temp_dir().to_string_lossy().to_string();
         let ok = std::sync::atomic::AtomicUsize::new(0);
+        let refused = parking_lot::Mutex::new(Vec::new());
         std::thread::scope(|scope| {
             for _ in 0..40 {
                 scope.spawn(|| {
@@ -1818,15 +1826,18 @@ mod tests {
                             title_activity: None,
                         },
                     );
-                    if spawned.is_ok() {
-                        ok.fetch_add(1, Ordering::SeqCst);
+                    match spawned {
+                        Ok(_) => {
+                            ok.fetch_add(1, Ordering::SeqCst);
+                        }
+                        Err(e) => refused.lock().push(e.to_string()),
                     }
                 });
             }
         });
         let started = ok.load(Ordering::SeqCst);
         ptys.shutdown(Duration::from_secs(2));
-        assert_eq!(started, MAX_PANES);
+        assert_eq!(started, MAX_PANES, "refused: {:?}", refused.lock());
         assert_eq!(ptys.list(None).len(), MAX_PANES);
     }
 

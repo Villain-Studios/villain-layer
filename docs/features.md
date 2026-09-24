@@ -176,6 +176,11 @@ the repo count, running agents, uncommitted changes and the review verdict.
   the copy's branch has no commit it lacks. Its commits come across, its
   files are untouched (an edit stays an unstaged edit), and its own `.git`
   folder goes. What could not be moved is reported, with the reason.
+- **TASK-13** The new-task and Start work dialogs MUST fill in "Branch
+  from" with the default branch of the picked repos when they share one,
+  and leave it blank (each repo's own default) when they do not. The box
+  follows every change of repos while it still shows the dialog's own last
+  suggestion; a base typed by hand stays.
 
 Code: `commands/tasks.rs`, `sidebar/`, `FinishTask.tsx`,
 `CreateTaskDialog.tsx`.

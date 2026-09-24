@@ -235,3 +235,21 @@ export function reviewComments(rows: CheckoutPr[]): number {
     0,
   );
 }
+
+/**
+ * What the "Branch from" box should hold after the picked repos change:
+ * their shared default branch, or blank ("each repo's own default") when
+ * they disagree. A base typed by hand stays; a box still showing the last
+ * suggestion follows the new one.
+ *
+ * `last` is the suggestion made before this one. It is passed in, not read
+ * from a ref inside a state updater: the updater ran after the ref had
+ * already moved on, so the old suggestion looked typed and stuck. Pick
+ * customer-portal (base `dev`), swap it for two repos on `development`, and
+ * Start work cut both from `dev`: "fatal: invalid reference: dev".
+ */
+export function suggestBase(current: string, last: string, defaults: readonly string[]): string {
+  const unique = [...new Set(defaults)];
+  const suggested = unique.length === 1 ? unique[0] : "";
+  return current === "" || current === last ? suggested : current;
+}

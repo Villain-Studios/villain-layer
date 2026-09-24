@@ -52,7 +52,12 @@ function TopBar() {
   ];
 
   return (
-    <div className="topbar">
+    // The native title bar is hidden under this one (`titleBarStyle:
+    // Overlay`), so this is what the window is moved by. Tauri's attribute,
+    // not CSS: `-webkit-app-region` is Chromium's, and macOS's WebKit
+    // ignores it, which left a window nothing could grab. "deep" makes the
+    // bar's empty parts drag; its buttons stay buttons.
+    <div className="topbar" data-tauri-drag-region="deep">
       <div className="topbar-left">
         <div className="brand">villain<span>·</span>layer</div>
       </div>

@@ -92,11 +92,13 @@ jobs:
         run: |
           out=$RUNNER_TEMP/release
           mkdir -p "$out"
-          dmg="$out/Villain-Layer-$VERSION-universal.dmg"
+          dmg="$out/Villain-Layer-$VERSION-macos-universal.dmg"
           cp src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg "$dmg"
           (cd "$out" && shasum -a 256 "$(basename "$dmg")" > SHA256SUMS.txt)
 
           {
+            echo "For macOS: one universal app, for Apple silicon and Intel Macs."
+            echo
             echo "Open the .dmg and drag Villain Layer to Applications."
             echo "Quit Villain Layer before replacing it: replacing the app while it runs"
             echo "kills it, and every agent running in it."

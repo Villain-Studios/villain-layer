@@ -3,7 +3,7 @@
 A release is a version tag. Pushing `v0.2.0` runs
 [`release.yml`](../.github/workflows/release.yml): `bun run check` on the
 tagged commit, then one universal build (Apple silicon and Intel), then a
-**draft** GitHub release with `Villain-Layer-0.2.0-universal.dmg`, its
+**draft** GitHub release with `Villain-Layer-0.2.0-macos-universal.dmg`, its
 SHA-256, and notes generated from the pull requests since the last one.
 Nothing is public until you publish the draft.
 

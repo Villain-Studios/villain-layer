@@ -505,29 +505,31 @@ pub(crate) fn new_task(state: &AppState, req: NewTask) -> Result<Task> {
         .map(str::trim)
         .filter(|s| !s.is_empty());
 
-    // Every base at once, before any worktree: see `git::fetch_bases`.
+    // The copy's branch, else the clone's (`repo_for_branch`), else GitHub's
+    // (`fetch_for_task`), as TASK-3 orders them.
     let targets: Vec<(PathBuf, String)> = projects
         .iter()
-        .map(|p| (super::repo_for(state, p), base_for(p, base)))
+        .map(|p| (super::repo_for_branch(state, p, &task.branch), base_for(p, base)))
         .collect();
-    git::fetch_bases(&targets);
+    // Asked before GitHub's is taken, so that unwinding knows which branches
+    // are ours to take back — one GitHub still has is. Left behind, a retry
+    // with a different base found the branch already there, checked it out
+    // as it was, and measured it against the new base — the old base's
+    // commits then showed up in the diff.
+    let fresh: Vec<bool> = targets.iter().map(|(repo, _)| !git::branch_exists(repo, &task.branch)).collect();
+    // Every base at once, before any worktree: see `git::fetch_bases`.
+    git::fetch_for_task(&targets, &task.branch);
 
     let mut taken = Vec::new();
     let mut created = Vec::new();
-    for project in &projects {
-        // Asked first so that unwinding knows which branches are ours to take
-        // back. Left behind, a retry with a different base found the branch
-        // already there, checked it out as it was, and measured it against
-        // the new base — the old base's commits then showed up in the diff.
-        let repo = super::repo_for_branch(state, project, &task.branch);
-        let fresh_branch = !git::branch_exists(&repo, &task.branch);
+    for ((project, (repo, _)), &fresh_branch) in projects.iter().zip(&targets).zip(&fresh) {
         match create_checkout(state, &task, project, &mut taken, base, true) {
             Ok(c) => created.push((c, fresh_branch)),
             Err(e) => {
                 // Leave nothing half-built: unwind the worktrees we just made,
                 // and the branches with them.
-                if fresh_branch && git::branch_exists(&repo, &task.branch) {
-                    let _ = git::delete_branch(&repo, &task.branch);
+                if fresh_branch && git::branch_exists(repo, &task.branch) {
+                    let _ = git::delete_branch(repo, &task.branch);
                 }
                 for (c, fresh) in &created {
                     if let Ok(p) = state.config.project(&c.project_id) {

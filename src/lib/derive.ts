@@ -56,6 +56,22 @@ export function needsYou(pane: PaneInfo): boolean {
   );
 }
 
+/**
+ * What to call a pane (PANE-12): the name its CLI gave the conversation in
+ * place of the agent's, keeping the scope after " · ". Two Claude Codes in
+ * one task were two identical tabs.
+ */
+export function paneName(pane: PaneInfo): string {
+  if (!pane.topic) return pane.title;
+  const scope = paneScope(pane);
+  return scope ? `${pane.topic} · ${scope}` : pane.topic;
+}
+
+/** Where a pane works: the repo or task after " · " in its title. Null for a chat. */
+export function paneScope(pane: PaneInfo): string | null {
+  return pane.title.split(" · ")[1]?.replace(/ \(resumed\)$/, "") ?? null;
+}
+
 /** A running agent — what every "N running" in the app counts. */
 export function isRunningAgent(pane: PaneInfo): boolean {
   return pane.kind === "agent" && pane.running;

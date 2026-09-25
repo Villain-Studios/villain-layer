@@ -3,7 +3,7 @@ import { useState } from "react";
 import { api } from "../lib/api";
 import { ago } from "../lib/time";
 import { markStopping, useNow, useStore } from "../store";
-import { CHAT_TASK_ID, needsYou, paneState } from "../lib/derive";
+import { CHAT_TASK_ID, needsYou, paneScope, paneState } from "../lib/derive";
 import { SidebarToggle, Spinner } from "./ui";
 
 export function AgentsView() {
@@ -83,8 +83,8 @@ export function AgentsView() {
           <div key={pane.id} className="agent-card">
             <span className={`dot ${st.dot}`} />
             <div className="who">
-              <div className="name">
-                {agent?.name ?? pane.title}
+              <div className="name" title={pane.topic ?? undefined}>
+                {pane.topic ?? agent?.name ?? pane.title}
                 {pane.notice && (
                   <span style={{ color: "var(--amber)", marginLeft: 6 }} title={pane.notice}>
                     {pane.notice === "trust_prompt" ? "?" : "⚑"}
@@ -95,6 +95,7 @@ export function AgentsView() {
                 className="where"
                 style={pane.notice || needsYou(pane) ? { color: "var(--amber)" } : undefined}
               >
+                {pane.topic && `${agent?.name ?? pane.title} · `}
                 {st.label}
               </div>
             </div>
@@ -104,7 +105,7 @@ export function AgentsView() {
                 {isChat ? "Chat" : task?.name ?? "(task removed)"}
               </div>
               <div className="branch">
-                {isChat ? pane.cwd : `${task?.branch ?? "?"} · ${pane.title.split(" · ")[1] ?? ""}`}
+                {isChat ? pane.cwd : `${task?.branch ?? "?"} · ${paneScope(pane) ?? ""}`}
               </div>
             </div>
 

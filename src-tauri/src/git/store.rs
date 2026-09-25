@@ -406,6 +406,38 @@ fn register_in_place(store: &Path, wt: &Path, branch: &str, carry: Option<&Path>
     linked
 }
 
+/// The commit `branch`, a repository's default, is at as last heard from
+/// origin, or the branch itself where there is no origin to hear from. What
+/// a repo note is written and checked against (NOTE-2).
+pub fn default_tip(repo: &Path, branch: &str) -> Option<String> {
+    if branch.trim().is_empty() || branch.starts_with('-') {
+        return None;
+    }
+    [format!("refs/remotes/origin/{branch}"), format!("refs/heads/{branch}")]
+        .iter()
+        .find_map(|r| run(repo, &["rev-parse", "--verify", "--quiet", &format!("{r}^{{commit}}")]).ok())
+        .map(|sha| sha.trim().to_string())
+}
+
+/// Which files under `paths` differ between two commits: what tells a repo
+/// note it may be out of date (NOTE-3). A path is a file or a folder,
+/// relative to the repository's root, and taken literally: an agent wrote
+/// it, and `:(glob)` or `*` in it is not an instruction to git.
+pub fn changed_between(repo: &Path, from: &str, to: &str, paths: &[String]) -> Result<Vec<String>> {
+    if paths.is_empty() || from == to {
+        return Ok(Vec::new());
+    }
+    for sha in [from, to] {
+        if sha.is_empty() || sha.starts_with('-') {
+            return Err(Error::Git(format!("{sha:?} is not a commit")));
+        }
+    }
+    let mut args = vec!["--literal-pathspecs", "diff", "--no-ext-diff", "--name-only", "-z", from, to, "--"];
+    args.extend(paths.iter().map(String::as_str));
+    let out = run(repo, &args)?;
+    Ok(out.split('\0').filter(|p| !p.is_empty()).map(str::to_string).collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -673,5 +705,45 @@ mod tests {
         assert!(!take_branch_from_origin(&store, "pr-branch").unwrap(), "the copy's own branch wins");
         assert!(!take_branch_from_origin(&store, "nobody-pushed-this").unwrap());
         assert!(take_branch_from_origin(&store, "--upload-pack=touch x").is_err());
+    }
+
+    #[test]
+    fn a_note_hears_only_of_changes_to_the_files_it_is_about() {
+        let root = sandbox();
+        let (_remote, clone) = user_clone(&root);
+        std::fs::create_dir_all(clone.join("db")).unwrap();
+        std::fs::write(clone.join("db/schema.sql"), "create table a;\n").unwrap();
+        run(&clone, &["add", "-A"]).unwrap();
+        run(&clone, &["commit", "-qm", "schema"]).unwrap();
+        let written = head(&clone);
+
+        std::fs::write(clone.join("a.txt"), "two\n").unwrap();
+        run(&clone, &["commit", "-qam", "unrelated"]).unwrap();
+        let later = head(&clone);
+        let about_db = vec!["db".to_string()];
+        assert!(changed_between(&clone, &written, &later, &about_db).unwrap().is_empty());
+
+        std::fs::write(clone.join("db/schema.sql"), "create table b;\n").unwrap();
+        run(&clone, &["commit", "-qam", "schema again"]).unwrap();
+        let now = head(&clone);
+        assert_eq!(changed_between(&clone, &written, &now, &about_db).unwrap(), ["db/schema.sql"]);
+        assert_eq!(
+            changed_between(&clone, &written, &now, &["db/*".to_string()]).unwrap(),
+            Vec::<String>::new(),
+            "a star is a file name, not a glob"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn the_default_branch_is_read_where_origin_left_it() {
+        let root = sandbox();
+        let (_remote, clone) = user_clone(&root);
+        let pushed = head(&clone);
+        std::fs::write(clone.join("a.txt"), "local\n").unwrap();
+        run(&clone, &["commit", "-qam", "not pushed"]).unwrap();
+        assert_eq!(default_tip(&clone, "main"), Some(pushed));
+        assert_eq!(default_tip(&clone, "-main"), None);
+        std::fs::remove_dir_all(&root).ok();
     }
 }

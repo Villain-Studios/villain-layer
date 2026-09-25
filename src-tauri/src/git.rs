@@ -11,12 +11,13 @@ use crate::error::{Error, Result};
 mod store;
 mod upkeep;
 pub use store::{
-    adopt_worktree, belongs_to, copy_local_config, create_store, is_own_clone, is_store_of, owner,
-    reclaim_clone, relink_worktree, take_branch_from_clone, take_branch_from_origin,
+    adopt_worktree, belongs_to, changed_between, copy_local_config, create_store, default_tip,
+    is_own_clone, is_store_of, owner, reclaim_clone, relink_worktree, take_branch_from_clone, take_branch_from_origin,
 };
 pub use upkeep::{
     branch_tips, delete_branch_at, fast_forward, fetch_store, holds, is_bare,
-    list_worktrees, only_here, origin_url, same_remote, standing, synced_at, update_style, Forwarded,
+    list_worktrees, only_here, origin_url, remote_key, same_remote, standing, synced_at, update_style,
+    Forwarded,
 };
 
 fn command(dir: &Path, args: &[&str]) -> Command {

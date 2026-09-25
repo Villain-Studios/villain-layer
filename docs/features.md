@@ -712,6 +712,10 @@ credentials themselves.
 | `forget_repo` | unregister a repo (never deletes files) | yes |
 | `create_task` | a task with no ticket | |
 | `open_prs` | push and open PRs for a task | yes |
+| `repo_notes` | a repository's notes, with what changed since each was checked (NOTE-5) | |
+| `remember` | keep a lasting fact about a repository, after asking the user (NOTE-1) | yes |
+| `check_note` | say a note still holds, as of now | |
+| `forget_note` | remove a note that no longer holds, with a reason for the message center | yes |
 
 - **MCP-1** Every request MUST carry the bearer token. Loopback is not
   authorisation.
@@ -772,7 +776,7 @@ Known gaps:
 
 | Where | What |
 |---|---|
-| `~/Library/Application Support/eu.codevillain.villain-layer/` | `config.json`: repos, tasks, settings, saved panes. `messages.json`: the message center (MSG-4). At agent launch also `.mcp.json` (0600), `claude-hooks.json`, `copilot-plugin/`, `opencode-plugin.js` |
+| `~/Library/Application Support/eu.codevillain.villain-layer/` | `config.json`: repos, tasks, settings, saved panes. `messages.json`: the message center (MSG-4). `notes.json`: repo notes (NOTE-7). At agent launch also `.mcp.json` (0600), `claude-hooks.json`, `copilot-plugin/`, `opencode-plugin.js` |
 | Keychain, service `eu.codevillain.villain-layer` | one item holding every token |
 | `~/.villain-worktrees/` (settable) | task folders, `_chat/` rooms, and `.repos/`: the app's own copy of each repo (REPO-4) |
 | a task folder | the worktrees, `AGENTS.md` and `CLAUDE.md` (task context), `TICKET.md` (PANE-13), `.mcp.json`, and `.gemini/settings.json`, `PR_DESCRIPTION.md`, `PR_FEEDBACK.md`, and hand-offs too long to type (`CONFLICTS.md`, `REVIEW_COMMENTS.md`, `PR_DRAFT_REQUEST.md`, `FIRST_PROMPT.md`, PANE-11) as they come up |

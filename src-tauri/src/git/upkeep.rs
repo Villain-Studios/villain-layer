@@ -70,22 +70,26 @@ pub fn origin_url(repo: &Path) -> Option<String> {
 /// `https://github.com/org/api` are one repository cloned three ways, and a
 /// clone made again over https is still the clone it was over ssh.
 pub fn same_remote(a: &str, b: &str) -> bool {
-    fn key(url: &str) -> String {
-        let url = url.trim().trim_end_matches('/');
-        let url = url.strip_suffix(".git").unwrap_or(url);
-        let (host, path) = if let Some((_, rest)) = url.split_once("://") {
-            rest.split_once('/').unwrap_or((rest, ""))
-        } else if let Some(scp) = url.split_once(':').filter(|(host, _)| !host.contains('/')) {
-            scp
-        } else {
-            // A path on disk.
-            return url.to_string();
-        };
-        let host = host.rsplit_once('@').map_or(host, |(_, h)| h);
-        let host = host.split_once(':').map_or(host, |(h, _)| h);
-        format!("{}/{}", host.to_ascii_lowercase(), path.trim_start_matches('/'))
-    }
-    key(a) == key(b)
+    remote_key(a) == remote_key(b)
+}
+
+/// A remote URL spelled one way for every way of spelling it (`same_remote`):
+/// `host/org/api`, or the path itself for a remote on disk. What a repo note
+/// is kept by, so it outlives the repo's registration (NOTE-7).
+pub fn remote_key(url: &str) -> String {
+    let url = url.trim().trim_end_matches('/');
+    let url = url.strip_suffix(".git").unwrap_or(url);
+    let (host, path) = if let Some((_, rest)) = url.split_once("://") {
+        rest.split_once('/').unwrap_or((rest, ""))
+    } else if let Some(scp) = url.split_once(':').filter(|(host, _)| !host.contains('/')) {
+        scp
+    } else {
+        // A path on disk.
+        return url.to_string();
+    };
+    let host = host.rsplit_once('@').map_or(host, |(_, h)| h);
+    let host = host.split_once(':').map_or(host, |(h, _)| h);
+    format!("{}/{}", host.to_ascii_lowercase(), path.trim_start_matches('/'))
 }
 
 pub fn is_bare(repo: &Path) -> bool {

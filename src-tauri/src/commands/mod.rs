@@ -27,7 +27,7 @@ pub struct AppState {
     pub news: crate::news::Seen,
     /// The message center's log (MSG-1).
     pub messages: crate::messages::Messages,
-    /// What agents learned about each repository (NOTE-1).
+    /// What agents learned about each repository (MEM-1).
     pub notes: crate::notes::Notes,
 }
 

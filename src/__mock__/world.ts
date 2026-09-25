@@ -21,6 +21,7 @@ import type {
   Project,
   RepoFeedback,
   RepoHealth,
+  RepoNote,
   ReviewQueue,
   Settings,
   TaskPrs,
@@ -48,6 +49,8 @@ export interface World {
   output: Record<string, string>;
   /** The message center's log, newest first. */
   messages: Message[];
+  /** Repo notes by project id (MEM-6). */
+  notes: Record<string, RepoNote[]>;
 }
 
 const now = Date.now();
@@ -397,6 +400,23 @@ function busy(): World {
       "pane-chat": say(["> What is left on ACME-100?", "", "Looking at the epic's tickets…"]),
     },
     messages: messages(),
+    notes: notes(),
+  };
+}
+
+/** A note that holds, one whose files changed since, and one of yours. */
+function notes(): Record<string, RepoNote[]> {
+  const days = (d: number) => now - d * 86_400_000;
+  const n = (id: string, text: string, rest: Partial<RepoNote>): RepoNote => ({
+    id, repo: "github.com/acme/api", text, paths: [], written_at: days(40), source: "Claude Code in ACME-101 Session storage",
+    written_commit: "a1b2c3d", checked_at: days(40), checked_commit: "a1b2c3d", changed: null, ...rest,
+  });
+  return {
+    "p-api": [
+      n("n1", "Tests need Postgres: run `docker compose up -d db` before `bun test`, or every test times out.", { paths: ["docker-compose.yml"], checked_at: days(3), changed: [] }),
+      n("n2", "Migrations live in db/migrations and run with `bun run migrate`; never edit one that has shipped, add a new one.", { paths: ["db/migrations", "package.json"], changed: ["db/migrations/0042_sessions.sql", "package.json"] }),
+      n("n3", "The auth middleware caches sessions for 60s, so a revoked token keeps working that long.", { source: "you", written_at: days(120), checked_at: days(120) }),
+    ],
   };
 }
 
@@ -425,6 +445,7 @@ function empty(): World {
     reviews: { mine: [], mine_more: false, team: null, authored: { prs: [], more: false, error: null } },
     issues: [], issueTypes: [], transitions: [], requiredFields: [], changed: [], feedback: [], output: {},
     messages: [],
+    notes: {},
   };
 }
 

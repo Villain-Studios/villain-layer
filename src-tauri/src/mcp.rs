@@ -958,12 +958,14 @@ async fn call(app: &AppHandle, name: &str, args: Value) -> Result<Value> {
                 commands::remember_inner(state, &project, &text, paths, source)
             })
             .await?;
+            crate::notes::changed(app);
             Ok(json!({ "remembered": note.id }))
         }
 
         "check_note" => {
             let id = required(&args, "id")?.to_string();
             let note = commands::blocking(app.clone(), move |state| commands::check_note_inner(state, &id)).await?;
+            crate::notes::changed(app);
             Ok(commands::note_for_agent(&note, chrono::Utc::now().timestamp_millis()))
         }
 
@@ -980,6 +982,7 @@ async fn call(app: &AppHandle, name: &str, args: Value) -> Result<Value> {
                 body: format!("{}\n\nWhy: {reason}", note.text),
                 target: None,
             }]);
+            crate::notes::changed(app);
             Ok(json!({ "forgot": note.id }))
         }
 

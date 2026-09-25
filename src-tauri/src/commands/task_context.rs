@@ -9,7 +9,7 @@
 //! the app had already fetched.
 //!
 //! It also carries what earlier tasks learned about each repository here
-//! (NOTE-4), with how likely each note is to be out of date.
+//! (MEM-4), with how likely each note is to be out of date.
 
 use std::path::Path;
 
@@ -34,7 +34,7 @@ pub(crate) const TICKET_FILE: &str = "TICKET.md";
 /// read into every turn of every agent in the task.
 const MAX_DESCRIPTION: usize = 8_000;
 
-/// Bytes of notes per repository in the context file (NOTE-4). The rest are
+/// Bytes of notes per repository in the context file (MEM-4). The rest are
 /// counted, and `repo_notes` has them.
 const NOTES_PER_REPO: usize = 3 * 1024;
 
@@ -96,7 +96,7 @@ fn task_notes(state: &AppState, task: &Task) -> Vec<FolderNotes> {
         .collect()
 }
 
-/// What earlier tasks learned, and how to add to it (NOTE-4). Said even
+/// What earlier tasks learned, and how to add to it (MEM-4). Said even
 /// with no notes yet, since that is how an agent learns it can remember.
 fn notes_section(repos: &[FolderNotes], now: i64) -> String {
     let mut md = String::from("\n## What earlier tasks learned about these repositories\n\n");

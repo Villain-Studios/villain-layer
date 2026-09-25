@@ -1302,6 +1302,19 @@ textarea { resize: vertical; font-family: var(--mono); }
 .repo-synced.failed { color: var(--red); }
 .repo-manage input { width: 130px; }
 .trouble-text { color: var(--red); }
+.repo-line .btn.notes-stale { color: var(--amber); }
+.repo-notes { margin: 8px 0 2px 12px; padding-left: 10px; border-left: 2px solid var(--border-soft); }
+.repo-note { padding: 6px 0; border-bottom: 1px solid var(--border-soft); }
+.repo-note:last-of-type { border-bottom: none; }
+.repo-note .note-text { white-space: pre-wrap; line-height: 1.5; color: var(--text); }
+.repo-note .note-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 2px; color: var(--dimmer); font-size: 12px; }
+.repo-note .note-meta code { font-size: 11.5px; margin-right: 4px; }
+.repo-note .note-actions { display: flex; gap: 6px; margin-top: 5px; }
+.repo-note.stale { border-left: 2px solid var(--amber); padding-left: 8px; margin-left: -10px; }
+.repo-note-edit { display: flex; flex-direction: column; gap: 6px; padding: 6px 0; }
+.repo-note-edit textarea { min-height: 56px; font-family: inherit; }
+.repo-manage .repo-note-edit input { width: 100%; }
+.repo-note-edit .note-actions { display: flex; align-items: center; gap: 6px; }
 
 .cleanup-intro { color: var(--dim); font-size: 13px; line-height: 1.5; margin-bottom: 12px; }
 .cleanup-section { margin-bottom: 14px; }

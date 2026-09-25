@@ -1,8 +1,9 @@
-//! Repo notes as the agents' tools and the Repos view see them (NOTE-1…7):
+//! Repo notes as the agents' tools and the Repos view see them (MEM-1…7):
 //! each with what changed since it was last checked. All blocking: finding
 //! a repository's key and measuring a note both run git.
 
 use serde::Serialize;
+use tauri::AppHandle;
 
 use crate::config::{Project, Task};
 use crate::error::{Error, Result};
@@ -11,7 +12,7 @@ use crate::notes::{New, Note};
 
 use super::AppState;
 
-/// A note, and how likely it is to be out of date (NOTE-3).
+/// A note, and how likely it is to be out of date (MEM-3).
 #[derive(Debug, Clone, Serialize)]
 pub struct RepoNote {
     #[serde(flatten)]
@@ -23,7 +24,7 @@ pub struct RepoNote {
 }
 
 /// What a repository's notes are kept by: where it fetches from, spelled
-/// one way (NOTE-7), or its clone's path when it fetches from nowhere.
+/// one way (MEM-7), or its clone's path when it fetches from nowhere.
 pub(crate) fn repo_key(project: &Project) -> String {
     git::origin_url(&project.repo())
         .map(|url| git::remote_key(&url))
@@ -99,6 +100,58 @@ pub(crate) fn check_note_inner(state: &AppState, id: &str) -> Result<RepoNote> {
 
 pub(crate) fn forget_note_inner(state: &AppState, id: &str) -> Result<Note> {
     state.notes.forget(id)
+}
+
+fn edit_note_inner(state: &AppState, id: &str, text: &str, paths: &[String]) -> Result<Note> {
+    let project = project_of_key(state, &state.notes.get(id)?.repo);
+    state.notes.edit(id, text, paths, project.as_ref().and_then(tip))
+}
+
+/// One registered repository's notes, for the Repos view.
+#[derive(Debug, Serialize)]
+pub struct ProjectNotes {
+    pub project_id: String,
+    pub notes: Vec<RepoNote>,
+}
+
+/// Every registered repository's notes, each measured (MEM-6).
+#[tauri::command]
+pub async fn list_repo_notes(app: AppHandle) -> Result<Vec<ProjectNotes>> {
+    super::blocking(app, |state| {
+        Ok(state
+            .config
+            .read()
+            .projects
+            .iter()
+            .map(|p| ProjectNotes { project_id: p.id.clone(), notes: notes_of(state, p) })
+            .collect())
+    })
+    .await
+}
+
+/// A note written by hand in the Repos view.
+#[tauri::command]
+pub async fn add_repo_note(app: AppHandle, project_id: String, text: String, paths: Vec<String>) -> Result<()> {
+    super::blocking(app, move |state| {
+        let project = state.config.project(&project_id)?;
+        remember_inner(state, &project, &text, paths, "you".into()).map(|_| ())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn edit_repo_note(app: AppHandle, id: String, text: String, paths: Vec<String>) -> Result<()> {
+    super::blocking(app, move |state| edit_note_inner(state, &id, &text, &paths).map(|_| ())).await
+}
+
+#[tauri::command]
+pub async fn check_repo_note(app: AppHandle, id: String) -> Result<()> {
+    super::blocking(app, move |state| check_note_inner(state, &id).map(|_| ())).await
+}
+
+#[tauri::command]
+pub async fn delete_repo_note(app: AppHandle, id: String) -> Result<()> {
+    super::blocking(app, move |state| forget_note_inner(state, &id).map(|_| ())).await
 }
 
 /// "today", "3 days ago", "5 months ago": how old a note is, in words an

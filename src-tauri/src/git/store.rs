@@ -408,7 +408,7 @@ fn register_in_place(store: &Path, wt: &Path, branch: &str, carry: Option<&Path>
 
 /// The commit `branch`, a repository's default, is at as last heard from
 /// origin, or the branch itself where there is no origin to hear from. What
-/// a repo note is written and checked against (NOTE-2).
+/// a repo note is written and checked against (MEM-2).
 pub fn default_tip(repo: &Path, branch: &str) -> Option<String> {
     if branch.trim().is_empty() || branch.starts_with('-') {
         return None;
@@ -420,7 +420,7 @@ pub fn default_tip(repo: &Path, branch: &str) -> Option<String> {
 }
 
 /// Which files under `paths` differ between two commits: what tells a repo
-/// note it may be out of date (NOTE-3). A path is a file or a folder,
+/// note it may be out of date (MEM-3). A path is a file or a folder,
 /// relative to the repository's root, and taken literally: an agent wrote
 /// it, and `:(glob)` or `*` in it is not an instruction to git.
 pub fn changed_between(repo: &Path, from: &str, to: &str, paths: &[String]) -> Result<Vec<String>> {

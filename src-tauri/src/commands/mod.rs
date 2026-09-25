@@ -118,6 +118,7 @@ mod settings;
 mod ticket_flow;
 mod messages;
 mod pr_task;
+mod task_context;
 
 pub use projects::*;
 pub use repos::*;

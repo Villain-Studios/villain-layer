@@ -183,8 +183,9 @@ app's config folder and returns its extra arguments and environment.
   defined in `tools()` and handled in `call()`. Those in `DANGER` need
   `confirm: true`. The endpoint's `hook_token` is separate and accepted
   only by `/hook`.
-- **Context files.** `write_task_context` writes the same text as
-  `AGENTS.md` and `CLAUDE.md` into a task folder: the ticket, the layout,
+- **Context files.** `write_task_context` (`commands/task_context.rs`)
+  writes the same text as `AGENTS.md` and `CLAUDE.md` into a task folder:
+  the ticket (from the `TICKET.md` saved beside it, PANE-13), the layout,
   the tools. Chat rooms get their own version. Nothing goes into a
   worktree (DISK-1).
 

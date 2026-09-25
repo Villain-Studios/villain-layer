@@ -15,6 +15,7 @@ use crate::shellenv;
 
 use super::AppState;
 use super::panes::{agent_file_dir, resolve_scope, start_agent};
+use super::task_context::keep_ticket;
 use super::tasks::{new_task, NewTask};
 
 // -------------------------------------------------------------------- jira
@@ -334,8 +335,12 @@ pub(crate) fn task_repos(state: &AppState, task: &Task) -> Vec<(String, String)>
 /// started later gets the same briefing as the first one rather than just the
 /// task's title. `checkout_id` selects "start inside one repo" wording; omit
 /// it for the task-root layout.
+///
+/// The ticket fetched for it is kept for the context file too (PANE-13), so
+/// an agent started later still has it once its opening prompt is gone.
 #[tauri::command]
 pub async fn task_prompt(
+    app: AppHandle,
     state: State<'_, AppState>,
     task_id: String,
     checkout_id: Option<String>,
@@ -365,7 +370,9 @@ pub async fn task_prompt(
     if let Some(key) = task.issue_key.as_deref() {
         if let Ok((client, _)) = jira_client(&state) {
             if let Ok(issue) = client.issue(key).await {
-                return Ok(ticket_prompt(&issue, &task, &repos, at_task_root));
+                let prompt = ticket_prompt(&issue, &task, &repos, at_task_root);
+                keep_ticket(app, task, issue).await;
+                return Ok(prompt);
             }
         }
     }
@@ -893,7 +900,11 @@ pub fn take_pr_description(state: State<AppState>, task_id: String) -> Result<Op
 /// last of those comes from the pane's own scrollback, which matters because
 /// running out of budget is exactly when an agent cannot summarise itself.
 #[tauri::command]
-pub async fn handoff_prompt(state: State<'_, AppState>, pane_id: String) -> Result<String> {
+pub async fn handoff_prompt(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    pane_id: String,
+) -> Result<String> {
     let pane = state.ptys.info(&pane_id)?;
     let task = state.config.task(&pane.task_id)?;
 
@@ -903,7 +914,7 @@ pub async fn handoff_prompt(state: State<'_, AppState>, pane_id: String) -> Resu
     // The original briefing, scoped the same way the outgoing agent was, so a
     // handoff from a pinned repo does not claim the whole task folder.
     out.push_str(
-        &task_prompt(state.clone(), task.id.clone(), pane.checkout_id.clone()).await?,
+        &task_prompt(app, state.clone(), task.id.clone(), pane.checkout_id.clone()).await?,
     );
     out.push_str("\n\n---\n\n## What has happened so far\n\n");
 
@@ -1208,6 +1219,11 @@ pub async fn jira_create_task(
              is still there — start work on it from Tickets once that is sorted."
         ))
     })?;
+    // Read back rather than built from the request: Jira is what decides the
+    // type's name, the epic's title and how the description renders.
+    if let Ok(issue) = client.issue(&key).await {
+        keep_ticket(app.clone(), task.clone(), issue).await;
+    }
 
     let moved = sync_started(&state, &key).await;
     Ok(Started { task, moved })
@@ -1300,6 +1316,7 @@ pub async fn jira_start_work(
     };
     // Worktrees on the blocking pool, as in `create_task`.
     let task = super::blocking(app.clone(), move |state| new_task(state, new)).await?;
+    keep_ticket(app.clone(), task.clone(), issue.clone()).await;
 
     if let Some(agent_id) = agent_id {
         let repos = task_repos(&state, &task);

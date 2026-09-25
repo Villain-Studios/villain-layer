@@ -859,7 +859,7 @@ async fn call(app: &AppHandle, name: &str, args: Value) -> Result<Value> {
                         .into(),
                 ));
             }
-            Ok(Value::String(commands::handoff_prompt(state, pane_id).await?))
+            Ok(Value::String(commands::handoff_prompt(app.clone(), state, pane_id).await?))
         }
 
         "task_prs" => {

@@ -278,6 +278,19 @@ ones that need you first.
   Until then, and for a CLI that names nothing, it is the agent's name.
   Its scope (`· repo`) stays. A resumed conversation names itself again as
   it starts, so nothing is saved.
+- **PANE-13** An agent in a task that has a ticket MUST find the ticket in
+  the task folder's context file (`CLAUDE.md`/`AGENTS.md`): key, title,
+  type, priority, labels, components, epic, link and description. The
+  opening prompt carries it only into the first conversation, and only
+  until the CLI compacts it. An agent started with a prompt of its own,
+  or brought back at launch, had only the link, and spent its first calls
+  fetching what the app already had. The ticket is saved as `TICKET.md`
+  in the task folder whenever the app fetches it for the task (Start
+  work, filing a ticket and starting on it, the launch dialog's opening
+  prompt), and the context file is built from that. The description is
+  quoted line by line and introduced as written by whoever filed it: the
+  context file is read as instructions, and a ticket's text is someone
+  else's. A description past 8 KB is cut, and says so.
 
 Code: `pty.rs`, `agents.rs`, `commands/panes.rs`, `Terminals.tsx`,
 `Terminal.tsx`, `AgentsView.tsx`.
@@ -762,7 +775,7 @@ Known gaps:
 | `~/Library/Application Support/eu.codevillain.villain-layer/` | `config.json`: repos, tasks, settings, saved panes. `messages.json`: the message center (MSG-4). At agent launch also `.mcp.json` (0600), `claude-hooks.json`, `copilot-plugin/`, `opencode-plugin.js` |
 | Keychain, service `eu.codevillain.villain-layer` | one item holding every token |
 | `~/.villain-worktrees/` (settable) | task folders, `_chat/` rooms, and `.repos/`: the app's own copy of each repo (REPO-4) |
-| a task folder | the worktrees, `AGENTS.md` and `CLAUDE.md` (task context), `.mcp.json`, and `.gemini/settings.json`, `PR_DESCRIPTION.md`, `PR_FEEDBACK.md`, and hand-offs too long to type (`CONFLICTS.md`, `REVIEW_COMMENTS.md`, `PR_DRAFT_REQUEST.md`, `FIRST_PROMPT.md`, PANE-11) as they come up |
+| a task folder | the worktrees, `AGENTS.md` and `CLAUDE.md` (task context), `TICKET.md` (PANE-13), `.mcp.json`, and `.gemini/settings.json`, `PR_DESCRIPTION.md`, `PR_FEEDBACK.md`, and hand-offs too long to type (`CONFLICTS.md`, `REVIEW_COMMENTS.md`, `PR_DRAFT_REQUEST.md`, `FIRST_PROMPT.md`, PANE-11) as they come up |
 | `~/.claude.json` | trust entries for the app's own folders only (PANE-10) |
 | `~/Library/Logs/villain-layer/panic.log` | a crash's location and backtrace |
 

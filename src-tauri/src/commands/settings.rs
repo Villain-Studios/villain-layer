@@ -1,6 +1,6 @@
 //! UI prefs, worktree root, disconnect integrations.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde::Serialize;
@@ -150,17 +150,38 @@ fn disconnect_inner(state: &AppState, which: &str) -> Result<()> {
     }
 }
 
-/// Where Cursor.app lives, if it does. The shell `cursor` CLI is checked
-/// separately — either is enough to open a folder.
+/// Where Cursor.app lives, if it does: in an Applications folder, or wherever
+/// a `cursor` command on the login PATH points into.
+///
+/// A `cursor` command alone does not mean the IDE. The Cursor agent CLI puts a
+/// `cursor` shim in `~/.local/bin`, ahead of the IDE's own, and the shim looks
+/// for the IDE on the PATH it was started with. From an app opened in Finder
+/// that PATH has neither, so it exited with an error nobody read, and the
+/// button did nothing.
 fn cursor_app() -> Option<PathBuf> {
     let mut candidates = vec![PathBuf::from("/Applications/Cursor.app")];
     if let Some(home) = std::env::var_os("HOME") {
         candidates.push(PathBuf::from(home).join("Applications/Cursor.app"));
     }
-    candidates.into_iter().find(|p| p.is_dir())
+    candidates.into_iter().find(|p| p.is_dir()).or_else(|| {
+        shellenv::path()
+            .split(':')
+            .filter(|dir| !dir.is_empty())
+            .find_map(|dir| app_bundle_of(&Path::new(dir).join("cursor")))
+    })
 }
 
-/// True when the Cursor IDE is on this machine (the app, or its `cursor` CLI).
+/// The `.app` bundle a command really lives in, following links: the IDE's
+/// "Install 'cursor' command" links `/usr/local/bin/cursor` into its bundle.
+fn app_bundle_of(bin: &Path) -> Option<PathBuf> {
+    let real = std::fs::canonicalize(bin).ok()?;
+    real.ancestors()
+        .skip(1)
+        .find(|p| p.extension().is_some_and(|e| e == "app") && p.is_dir())
+        .map(Path::to_path_buf)
+}
+
+/// True when the Cursor IDE is on this machine.
 /// The editor, opened on a task's folder — not an agent CLI.
 ///
 /// Off the command thread for the login-shell PATH, as `list_agents` is: this
@@ -168,18 +189,14 @@ fn cursor_app() -> Option<PathBuf> {
 /// to be waiting on it.
 #[tauri::command]
 pub async fn cursor_ide_installed(app: AppHandle) -> Result<bool> {
-    super::blocking(app, |_| Ok(cursor_ide_present())).await
+    super::blocking(app, |_| Ok(cursor_app().is_some())).await
 }
 
-fn cursor_ide_present() -> bool {
-    shellenv::which("cursor").is_some() || cursor_app().is_some()
-}
-
-/// Open a folder in Cursor IDE. Prefers the `cursor` CLI (opens as a window);
-/// falls back to launching the .app on macOS.
+/// Open a folder in Cursor IDE, through Launch Services.
 ///
-/// Off the command thread: finding the CLI can wait on the login shell, and
-/// `open -a` is waited on until Launch Services answers.
+/// Off the command thread: finding the app can wait on the login shell, and
+/// `open -a` is waited on until Launch Services answers, so a failure is
+/// reported rather than lost.
 #[tauri::command]
 pub async fn open_in_cursor(app: AppHandle, path: String) -> Result<()> {
     super::blocking(app, move |_| open_in_cursor_inner(path)).await
@@ -190,32 +207,20 @@ fn open_in_cursor_inner(path: String) -> Result<()> {
     if !dir.is_dir() {
         return Err(Error::NotFound(format!("folder {path}")));
     }
-
-    if let Some(bin) = shellenv::which("cursor") {
-        Command::new(bin)
-            .arg(&dir)
-            .spawn()
-            .map_err(|e| Error::Other(format!("could not start Cursor: {e}")))?;
+    let app = cursor_app().ok_or_else(|| Error::Other("Cursor IDE is not installed".into()))?;
+    let out = Command::new("open")
+        .arg("-a")
+        .arg(&app)
+        .arg(&dir)
+        .output()
+        .map_err(|e| Error::Other(format!("could not open Cursor: {e}")))?;
+    if out.status.success() {
         return Ok(());
     }
-
-    if let Some(app) = cursor_app() {
-        let status = Command::new("open")
-            .arg("-a")
-            .arg(&app)
-            .arg(&dir)
-            .status()
-            .map_err(|e| Error::Other(format!("could not open Cursor: {e}")))?;
-        if status.success() {
-            return Ok(());
-        }
-        return Err(Error::Other(format!(
-            "open -a Cursor failed with {}",
-            status.code().unwrap_or(-1)
-        )));
-    }
-
-    Err(Error::Other("Cursor IDE is not installed".into()))
+    Err(Error::Other(format!(
+        "could not open Cursor: {}",
+        String::from_utf8_lossy(&out.stderr).trim()
+    )))
 }
 
 #[cfg(test)]
@@ -229,12 +234,25 @@ mod cursor_tests {
     }
 
     #[test]
-    fn detection_agrees_with_the_filesystem() {
-        let expected = PathBuf::from("/Applications/Cursor.app").is_dir()
-            || std::env::var_os("HOME")
-                .map(|h| PathBuf::from(h).join("Applications/Cursor.app").is_dir())
-                .unwrap_or(false)
-            || shellenv::which("cursor").is_some();
-        assert_eq!(cursor_ide_present(), expected);
+    fn a_cursor_command_counts_as_the_ide_only_when_it_lives_in_an_app() {
+        let root = std::env::temp_dir().join(format!("vl-cursor-{}", uuid::Uuid::new_v4()));
+        let inner = root.join("Cursor.app/Contents/Resources/app/bin");
+        std::fs::create_dir_all(&inner).unwrap();
+        std::fs::create_dir_all(root.join("local/bin")).unwrap();
+        std::fs::create_dir_all(root.join("usr/bin")).unwrap();
+        std::fs::write(inner.join("code"), "#!/bin/sh\n").unwrap();
+        // The agent CLI's shim: a script of its own, in no bundle.
+        let shim = root.join("local/bin/cursor");
+        std::fs::write(&shim, "#!/bin/sh\n").unwrap();
+        // The IDE's "Install 'cursor' command": a link into its bundle.
+        let linked = root.join("usr/bin/cursor");
+        std::os::unix::fs::symlink(inner.join("code"), &linked).unwrap();
+
+        assert_eq!(app_bundle_of(&shim), None);
+        assert_eq!(
+            app_bundle_of(&linked),
+            Some(std::fs::canonicalize(root.join("Cursor.app")).unwrap())
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

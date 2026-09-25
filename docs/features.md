@@ -558,9 +558,11 @@ Known gaps:
 
 ## 10. Reviews
 
-The Reviews view lists open PRs waiting on your review, excluding your own.
-When a review team is set, it also lists those waiting on that team. And
-the other side: the open PRs you opened, and where each one stands.
+The Reviews view has two tabs, one for each side of a review. "To review"
+lists open PRs waiting on your review, excluding your own, and, when a
+review team is set, those waiting on that team. "Opened by you" lists the
+open PRs you opened, and where each one stands. The tab last used is kept;
+a banner or message about a review request opens "To review".
 
 - **REV-1** A failed team lookup MUST NOT hide your own list. It shows as
   an error on the team section.

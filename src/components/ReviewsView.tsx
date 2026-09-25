@@ -1,9 +1,11 @@
 import { useEffect, useState, type MouseEvent, type ReactNode } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { copyText } from "../lib/clipboard";
+import { authoredStanding, taskOfPr } from "../lib/derive";
+import { goTo } from "../lib/goto";
 import { ago } from "../lib/time";
 import { useStore } from "../store";
-import type { ReviewRequest, TeamReviews } from "../lib/types";
+import type { AuthoredPr, ReviewRequest, TeamReviews } from "../lib/types";
 import { ChevronIcon } from "./icons";
 import { ContextMenu, Spinner, type MenuItem } from "./ui";
 
@@ -19,7 +21,7 @@ function countOf(n: number, more: boolean): string {
 }
 
 /** How a banner names a pull request: `owner/repo#n`, as `news.rs` writes it. */
-function identity(pr: ReviewRequest): string {
+function identity(pr: { repo: string; number: number }): string {
   return pr.repo ? `${pr.repo}#${pr.number}` : `#${pr.number}`;
 }
 
@@ -55,11 +57,75 @@ function ReviewCard({
   );
 }
 
+const TONE = { good: "add", bad: "del", wait: "warn", draft: "" } as const;
+
+/**
+ * One of your pull requests and where it stands (REV-4): a word for what is
+ * next, then each thing that decided it.
+ */
+function AuthoredCard({
+  pr,
+  task,
+  onContextMenu,
+}: {
+  pr: AuthoredPr;
+  task: { id: string; name: string } | null;
+  onContextMenu: (e: MouseEvent) => void;
+}) {
+  const fail = useStore((s) => s.fail);
+  const standing = authoredStanding(pr);
+  const who = (names: string[]) => (names.length ? ` by ${names.join(", ")}` : "");
+  return (
+    <button
+      type="button"
+      className="review-card"
+      data-review={identity(pr)}
+      onClick={() => void openUrl(pr.url).catch(fail)}
+      onContextMenu={onContextMenu}
+      title={pr.url}
+    >
+      <div className="top">
+        <span className="repo">{pr.repo}</span>
+        <span className="num">#{pr.number}</span>
+        <span className={`chip ${TONE[standing.tone]}`}>{standing.label}</span>
+        <span className="spacer" />
+        <span className="when">{ago(pr.updated_at)}</span>
+      </div>
+      <div className="title">{pr.title}</div>
+      <div className="chips standing">
+        {pr.checks === "failing" && <span className="chip del">checks failing</span>}
+        {pr.checks === "pending" && <span className="chip warn">checks running</span>}
+        {pr.checks === "passing" && <span className="chip add">checks pass</span>}
+        {pr.review === "changes_requested" && <span className="chip del">changes requested{who(pr.changes_by)}</span>}
+        {pr.review === "approved" && <span className="chip add">approved{who(pr.approved_by)}</span>}
+        {pr.review === "review_required" && pr.waiting_on.length === 0 && <span className="chip warn">needs a review</span>}
+        {pr.waiting_on.length > 0 && <span className="chip">waiting on {pr.waiting_on.join(", ")}</span>}
+        {pr.unresolved > 0 && (
+          <span className="chip warn">{pr.unresolved}{pr.unresolved_more ? "+" : ""} unresolved</span>
+        )}
+        {pr.conflicts && <span className="chip del">conflicts</span>}
+        {task && (
+          // Inside the card's button, so not a button of its own.
+          <span
+            className="chip task"
+            role="link"
+            title="Open the task's Pull requests tab"
+            onClick={(e) => { e.stopPropagation(); goTo(`pr:${task.id}`); }}
+          >
+            {task.name}
+          </span>
+        )}
+      </div>
+    </button>
+  );
+}
+
 function ReviewList({
   heading,
   title,
   count,
   more,
+  limit = 100,
   open,
   onToggle,
   children,
@@ -68,6 +134,8 @@ function ReviewList({
   title?: string;
   count?: string;
   more?: boolean;
+  /** How many GitHub was asked for, for the note when it had more. */
+  limit?: number;
   open: boolean;
   onToggle: () => void;
   children: ReactNode;
@@ -83,7 +151,7 @@ function ReviewList({
         <div className="review-list-body">
           {children}
           {more && (
-            <p className="review-note">Showing the 100 most recently updated.</p>
+            <p className="review-note">Showing the {limit} most recently updated.</p>
           )}
         </div>
       )}
@@ -107,6 +175,8 @@ export function ReviewsView() {
   const toggle = (id: string) => setShut((c) => ({ ...c, [id]: !c[id] }));
   const focusReview = useStore((s) => s.focusReview);
   const clearFocusReview = useStore((s) => s.clearFocusReview);
+  const tasks = useStore((s) => s.tasks);
+  const taskPrs = useStore((s) => s.prs);
 
   // A banner or a message about one pull request: open its list, bring it
   // into view and light it up briefly. It waits for the queue to arrive; one
@@ -134,19 +204,27 @@ export function ReviewsView() {
       .catch(() => toast("error", "Could not reach the clipboard"));
   }
 
-  function prMenu(pr: ReviewRequest): MenuItem[] {
+  function prMenu(pr: ReviewRequest | AuthoredPr, taskId?: string): MenuItem[] {
     const key = identity(pr);
     return [
       { label: "Open in GitHub", onSelect: () => void openUrl(pr.url).catch(fail) },
+      ...(taskId ? [{ label: "Open task", onSelect: () => goTo(`pr:${taskId}`) }] : []),
       { label: "Copy link", onSelect: () => copy(pr.url, pr.url) },
       { label: `Copy ${key}`, onSelect: () => copy(key, key) },
       { label: "Copy title", onSelect: () => copy(pr.title, key) },
     ];
   }
 
-  function openMenu(e: MouseEvent, pr: ReviewRequest) {
+  function openMenu(e: MouseEvent, pr: ReviewRequest | AuthoredPr, taskId?: string) {
     e.preventDefault();
-    setMenu({ x: e.clientX, y: e.clientY, items: prMenu(pr) });
+    setMenu({ x: e.clientX, y: e.clientY, items: prMenu(pr, taskId) });
+  }
+
+  /** The task a pull request of yours belongs to, if one of the app's made it. */
+  function taskOf(pr: AuthoredPr): { id: string; name: string } | null {
+    const id = taskOfPr(pr.url, taskPrs);
+    const task = id ? tasks.find((t) => t.id === id) : undefined;
+    return task ? { id: task.id, name: task.name } : null;
   }
 
   if (!settings) {
@@ -168,12 +246,13 @@ export function ReviewsView() {
   }
 
   const team = queue?.team ?? null;
+  const authored = queue?.authored ?? null;
 
   return (
     <div className="wide">
       <div className="wide-head">
         <h2>Reviews</h2>
-        <span className="sub">Pull requests waiting on a review</span>
+        <span className="sub">Waiting on your review, and yours waiting on others</span>
         <div className="spacer" />
         {loading && <Spinner />}
         <button type="button" className="btn btn-sm" onClick={() => void refresh()}>Refresh</button>
@@ -199,6 +278,34 @@ export function ReviewsView() {
             onContextMenu={(e) => openMenu(e, pr)}
           />
         ))}
+        {!queue && loading && <p className="review-note">Loading…</p>}
+      </ReviewList>
+
+      <ReviewList
+        heading="Opened by you"
+        count={authored && !authored.error ? countOf(authored.prs.length, authored.more) : undefined}
+        more={authored ? authored.more && !authored.error : false}
+        limit={50}
+        open={!shut.authored}
+        onToggle={() => toggle("authored")}
+      >
+        {authored?.error ? (
+          <p className="review-note warn">{authored.error}</p>
+        ) : authored && authored.prs.length === 0 ? (
+          <p className="review-note">You have no open pull requests.</p>
+        ) : (
+          authored?.prs.map((pr) => {
+            const task = taskOf(pr);
+            return (
+              <AuthoredCard
+                key={identity(pr)}
+                pr={pr}
+                task={task}
+                onContextMenu={(e) => openMenu(e, pr, task?.id)}
+              />
+            );
+          })
+        )}
         {!queue && loading && <p className="review-note">Loading…</p>}
       </ReviewList>
 

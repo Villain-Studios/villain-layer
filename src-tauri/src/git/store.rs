@@ -199,6 +199,24 @@ pub fn take_branch_from_clone(store: &Path, clone: &Path, branch: &str) -> Resul
     copy_branch(clone, store, branch)
 }
 
+/// Bring `branch` over from GitHub when neither the copy nor the user's
+/// clone has it: a pull request pushed from another machine, or a task
+/// finished and its branch cleaned up while the pull request stayed open.
+/// Without this a task on it cut a new branch of the same name from the
+/// base, which could never be pushed over the real one (TASK-3). Returns
+/// whether it came over; a branch GitHub does not have, or no network, is
+/// not an error, and the task starts it from the base as before.
+pub fn take_branch_from_origin(store: &Path, branch: &str) -> Result<bool> {
+    super::check_names(branch, "HEAD")?;
+    if super::branch_exists(store, branch) || super::fetch_tracking(store, branch).is_err() {
+        return Ok(false);
+    }
+    // Tracking it, as `git switch <branch>` would: `git status` in the task
+    // then says how it stands against the pull request.
+    run(store, &["branch", "--track", "--", branch, &format!("refs/remotes/origin/{branch}")])?;
+    Ok(true)
+}
+
 /// Link a worktree whose registration is gone back into `store`, at the
 /// commit it was last seen on, leaving every file where it is.
 ///
@@ -629,5 +647,31 @@ mod tests {
         assert!(run(&store, &["rev-parse", "-q", "--verify", "refs/villain-reclaiming/task"]).is_err());
         assert_eq!(std::fs::read_to_string(wt.join("b.txt")).unwrap(), "staged\n");
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_branch_only_github_has_comes_over_tracking_it_and_one_it_lacks_does_not() {
+        let root = sandbox();
+        let (_remote, clone) = user_clone(&root);
+        let store = root.join("store/clone.git");
+        create_store(&clone, &store).unwrap();
+        // Pushed from somewhere else, then gone from the clone: only GitHub has it.
+        run(&clone, &["switch", "-q", "-c", "pr-branch"]).unwrap();
+        std::fs::write(clone.join("b.txt"), "two\n").unwrap();
+        run(&clone, &["add", "-A"]).unwrap();
+        run(&clone, &["commit", "-qm", "work"]).unwrap();
+        run(&clone, &["push", "-q", "origin", "pr-branch"]).unwrap();
+        let pushed = head(&clone);
+        run(&clone, &["switch", "-q", "main"]).unwrap();
+        run(&clone, &["branch", "-qD", "pr-branch"]).unwrap();
+
+        assert!(take_branch_from_origin(&store, "pr-branch").unwrap());
+        let at = run(&store, &["rev-parse", "refs/heads/pr-branch"]).unwrap();
+        assert_eq!(at.trim(), pushed, "it goes on from what was pushed, not from the base");
+        let upstream = run(&store, &["config", "--get", "branch.pr-branch.merge"]).unwrap();
+        assert_eq!(upstream.trim(), "refs/heads/pr-branch");
+        assert!(!take_branch_from_origin(&store, "pr-branch").unwrap(), "the copy's own branch wins");
+        assert!(!take_branch_from_origin(&store, "nobody-pushed-this").unwrap());
+        assert!(take_branch_from_origin(&store, "--upload-pack=touch x").is_err());
     }
 }

@@ -12,7 +12,7 @@ mod store;
 mod upkeep;
 pub use store::{
     adopt_worktree, belongs_to, copy_local_config, create_store, is_own_clone, is_store_of, owner,
-    reclaim_clone, relink_worktree, take_branch_from_clone,
+    reclaim_clone, relink_worktree, take_branch_from_clone, take_branch_from_origin,
 };
 pub use upkeep::{
     branch_tips, delete_branch_at, fast_forward, fetch_store, holds, is_bare,
@@ -251,12 +251,32 @@ fn check_names(branch: &str, base: &str) -> Result<()> {
 /// four fetches in a row. They are independent and mostly waiting on the
 /// network, so they overlap.
 pub fn fetch_bases(targets: &[(std::path::PathBuf, String)]) {
+    each_repo(targets, fetch_base);
+}
+
+/// `fetch_bases` for a new task on `branch`: each base, then the branch
+/// itself from GitHub where only GitHub has it (TASK-3). One repository's
+/// two fetches go one after the other, since fetches into one repository at
+/// once fight over its lock files; repositories still overlap.
+pub fn fetch_for_task(targets: &[(std::path::PathBuf, String)], branch: &str) {
+    each_repo(targets, |repo, base| {
+        fetch_base(repo, base);
+        if let Err(e) = take_branch_from_origin(repo, branch) {
+            eprintln!("villain-layer: {branch} not taken from GitHub: {e}");
+        }
+    });
+}
+
+/// `work` for each repository and its base, eight at a time. A base that
+/// is blank or could be read as an option is skipped.
+fn each_repo(targets: &[(std::path::PathBuf, String)], work: impl Fn(&Path, &str) + Sync) {
+    let work = &work;
     std::thread::scope(|scope| {
         for chunk in targets.chunks(8) {
             let handles: Vec<_> = chunk
                 .iter()
                 .filter(|(_, base)| !base.trim().is_empty() && !base.starts_with('-'))
-                .map(|(repo, base)| scope.spawn(move || fetch_base(repo, base)))
+                .map(|(repo, base)| scope.spawn(move || work(repo, base)))
                 .collect();
             for h in handles {
                 let _ = h.join();

@@ -127,7 +127,9 @@ the repo count, running agents, uncommitted changes and the review verdict.
   the Diff, PR descriptions, handoffs) measures from that point. A branch
   that already exists goes on from its own commits: the copy's, or, when
   only the user's clone has it (started there by hand), the clone's,
-  brought into the copy first.
+  brought into the copy first, or, when only GitHub has it (a pull request
+  pushed from elsewhere), GitHub's, fetched and tracked. It is never cut
+  again from the base under a name GitHub already has.
 - **TASK-4** Creating a task MUST be all or nothing. If any repo fails, the
   worktrees and branches this attempt made are removed, and branches it did
   not make are kept. The task record goes too.

@@ -171,4 +171,34 @@ export interface ReviewQueue {
   mine_more: boolean;
   /** Null when no review team is configured. */
   team: TeamReviews | null;
+  /** The pull requests you opened (REV-4). Always sent to the view. */
+  authored: AuthoredPrs | null;
+}
+
+export interface AuthoredPrs {
+  prs: AuthoredPr[];
+  more: boolean;
+  error: string | null;
+}
+
+export interface AuthoredPr {
+  /** `owner/name`. */
+  repo: string;
+  number: number;
+  title: string;
+  url: string;
+  draft: boolean;
+  updated_at: string;
+  /** As GitHub rolls up check runs and commit statuses; "none" when nothing reports. */
+  checks: "passing" | "failing" | "pending" | "none";
+  /** Branch protection's decision, or the latest reviews where it asks for none. */
+  review: "approved" | "changes_requested" | "review_required" | "none";
+  approved_by: string[];
+  changes_by: string[];
+  /** Asked and not yet reviewed: logins, and teams as `@slug`. */
+  waiting_on: string[];
+  unresolved: number;
+  /** More threads than were counted: `unresolved` is a floor. */
+  unresolved_more: boolean;
+  conflicts: boolean;
 }

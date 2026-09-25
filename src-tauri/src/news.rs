@@ -241,6 +241,7 @@ mod tests {
                 more: false,
                 error: failed.then(|| "boom".into()),
             }),
+            authored: None,
         }
     }
 

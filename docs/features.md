@@ -559,15 +559,28 @@ Known gaps:
 ## 10. Reviews
 
 The Reviews view lists open PRs waiting on your review, excluding your own.
-When a review team is set, it also lists those waiting on that team.
+When a review team is set, it also lists those waiting on that team. And
+the other side: the open PRs you opened, and where each one stands.
 
 - **REV-1** A failed team lookup MUST NOT hide your own list. It shows as
   an error on the team section.
 - **REV-2** A bare team slug (`@fe`) MUST be resolved from the teams you are
   on, which needs the `read:org` scope. `org/slug` needs no lookup.
 - **REV-3** PRs already in your own list MUST NOT repeat in the team's.
+- **REV-4** "Opened by you" MUST list every open PR you authored, in any
+  repo, whether or not a task made it, and say for each: draft, its checks
+  as GitHub rolls them up (check runs and commit statuses), the review
+  decision (or, where the repo requires none, the latest reviews), who is
+  still asked to review, how many threads are unresolved, and a conflict
+  with its base. One that belongs to a task links to that task's Pull
+  requests tab.
+- **REV-5** A failed lookup of your PRs MUST NOT hide the review lists, nor
+  they it. It shows as an error on its own section.
+- **REV-6** It reads the 50 most recently updated and the first 100
+  threads of each, and MUST say so when there are more (`50+`, `100+`).
 
-Code: `commands/github.rs` (`review_queue`), `ReviewsView.tsx`.
+Code: `commands/github.rs` (`review_queue`, `github_review_queue`),
+`integrations/github/authored.rs`, `ReviewsView.tsx`.
 
 ## 11. Notifications
 

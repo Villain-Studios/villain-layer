@@ -1,0 +1,95 @@
+# The Homebrew cask, in Villain-Studios/homebrew-tap, when a release is
+# published (docs/releasing.md). Fills packaging/homebrew/villain-layer.rb in
+# with the version and the .dmg's SHA-256 from the release, has Homebrew
+# check the result, and pushes it to the tap.
+#
+# Run it by hand for a release published before this workflow was in its
+# tag: a published release runs the workflow file of its own tagged commit.
+name: tap
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The published release to put in the tap, e.g. v0.2.0"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  cask:
+    # A prerelease would be what everyone gets from `brew upgrade`.
+    if: github.event_name == 'workflow_dispatch' || !github.event.release.prerelease
+    runs-on: macos-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: The release is published
+        run: |
+          state=$(gh release view "$TAG" --json isDraft,isPrerelease -q '"\(.isDraft) \(.isPrerelease)"')
+          if [ "$state" != "false false" ]; then
+            echo "::error::$TAG is a draft or a prerelease (draft, prerelease: $state). Publish it first."
+            exit 1
+          fi
+          echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
+
+      - name: Write the cask
+        run: |
+          dmg="Villain-Layer-$VERSION-macos-universal.dmg"
+          gh release download "$TAG" -p SHA256SUMS.txt -D "$RUNNER_TEMP"
+          sha=$(awk -v f="$dmg" '$2 == f { print $1 }' "$RUNNER_TEMP/SHA256SUMS.txt")
+          if [ -z "$sha" ]; then
+            echo "::error::$TAG's SHA256SUMS.txt has no line for $dmg."
+            exit 1
+          fi
+          sed -e "s/@VERSION@/$VERSION/" -e "s/@SHA256@/$sha/" \
+            packaging/homebrew/villain-layer.rb > "$RUNNER_TEMP/villain-layer.rb"
+
+      # What `brew install` will read: its style, and --online downloads the
+      # .dmg and checks it against the SHA-256.
+      - name: Homebrew accepts it
+        run: |
+          brew update --quiet
+          brew tap-new --no-git villain-studios/check
+          casks="$(brew --repository villain-studios/check)/Casks"
+          mkdir -p "$casks"
+          cp "$RUNNER_TEMP/villain-layer.rb" "$casks/"
+          brew trust --cask villain-studios/check/villain-layer
+          brew style --cask villain-studios/check/villain-layer
+          brew audit --cask --online villain-studios/check/villain-layer
+
+      - name: The tap's key is set
+        env:
+          KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::HOMEBREW_TAP_DEPLOY_KEY is not set (docs/releasing.md, Homebrew)."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v5
+        with:
+          repository: Villain-Studios/homebrew-tap
+          ssh-key: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+          path: tap
+
+      - name: Push it to the tap
+        working-directory: tap
+        run: |
+          mkdir -p Casks
+          cp "$RUNNER_TEMP/villain-layer.rb" Casks/villain-layer.rb
+          git add Casks/villain-layer.rb
+          if git diff --cached --quiet; then
+            echo "The tap already has this cask."
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -m "villain-layer $VERSION"
+          git push

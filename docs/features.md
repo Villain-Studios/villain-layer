@@ -183,6 +183,12 @@ the repo count, running agents, uncommitted changes and the review verdict.
   and leave it blank (each repo's own default) when they do not. The box
   follows every change of repos while it still shows the dialog's own last
   suggestion; a base typed by hand stays.
+- **TASK-14** Open in Cursor (the task header, the Terminals tab, the
+  sidebar's menu) MUST open the task folder in the Cursor IDE, and be
+  offered only when the IDE is installed: `Cursor.app` in an Applications
+  folder, or a `cursor` command that links into a `.app`. The Cursor agent
+  CLI's own `cursor` shim is not the IDE. When opening fails, the user is
+  told why.
 
 Code: `commands/tasks.rs`, `sidebar/`, `FinishTask.tsx`,
 `CreateTaskDialog.tsx`.

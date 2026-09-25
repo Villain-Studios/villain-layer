@@ -261,6 +261,8 @@ textarea { resize: vertical; font-family: var(--mono); }
 .pane-tab.active { color: var(--text); border-color: var(--accent-dim); background: var(--panel-2); }
 .pane-tab .x { display: inline-flex; padding: 2px; margin: -2px 0; color: var(--dimmer); }
 .pane-tab .x:hover { color: var(--red); }
+/* A conversation's name can be a sentence; the other tabs still need room. */
+.pane-tab .name { max-width: 32ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .pane-stack { flex: 1; position: relative; overflow: hidden; }
 .term-slot {
@@ -1245,7 +1247,7 @@ textarea { resize: vertical; font-family: var(--mono); }
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.chat-item-sub { font-size: 11px; color: var(--dimmer); }
+.chat-item-sub { font-size: 11px; color: var(--dimmer); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .chat-item .x { color: var(--dimmer); font-size: 14px; line-height: 1; opacity: 0; }
 .chat-item:hover .x, .chat-item.active .x { opacity: 1; }
 .chat-item .x:hover { color: var(--red); }

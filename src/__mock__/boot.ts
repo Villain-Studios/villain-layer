@@ -63,6 +63,7 @@ function newPane(args: Args, kind: PaneInfo["kind"], task: string): PaneInfo {
     notice: null,
     activity: kind === "agent" ? "working" : "idle",
     activity_since: ago(0),
+    topic: null,
   };
   world.panes.push(p);
   world.output[p.id] = kind === "agent" ? `${p.title} starting…\r\n` : "you@mac % ";

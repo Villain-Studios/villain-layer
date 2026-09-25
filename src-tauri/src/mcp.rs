@@ -1015,6 +1015,7 @@ mod tests {
                 prompted: true,
                 env: Vec::new(),
                 title_activity: title.then_some(crate::agents::gemini_title_activity as fn(&str) -> _),
+                title_topic: None,
             },
         )
         .unwrap()

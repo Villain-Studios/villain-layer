@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, errMessage } from "../lib/api";
+import { paneName } from "../lib/derive";
 import { reportRepoResults } from "../lib/report";
 import { useStore } from "../store";
 import type {
@@ -367,6 +368,8 @@ export function DiffView({ task }: { task: TaskView }) {
       setTarget(agentPanes[0]?.id ?? "");
     }
   }, [agentPanes, target]);
+  const targetPane = agentPanes.find((p) => p.id === target);
+  const targetName = targetPane ? paneName(targetPane) : "the selected agent";
 
   useEffect(() => {
     if (!startAgentId || !installed.some((a) => a.id === startAgentId)) {
@@ -894,7 +897,7 @@ export function DiffView({ task }: { task: TaskView }) {
                 onChange={(e) => setTarget(e.target.value)}
               >
                 {agentPanes.map((p) => (
-                  <option key={p.id} value={p.id}>{p.title}</option>
+                  <option key={p.id} value={p.id}>{paneName(p)}</option>
                 ))}
               </select>
             </label>
@@ -913,7 +916,7 @@ export function DiffView({ task }: { task: TaskView }) {
                     ? "Install an agent CLI first"
                     : "No agent running — pick one to start with these notes"
                   : agentPanes.length > 1
-                    ? `Send queued notes to ${agentPanes.find((p) => p.id === target)?.title ?? "the selected agent"}`
+                    ? `Send queued notes to ${targetName}`
                     : "Send queued notes to the agent"
             }
           >

@@ -258,6 +258,7 @@ mod tests {
             notice: None,
             activity,
             activity_since: now,
+            topic: None,
         }
     }
 

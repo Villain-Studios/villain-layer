@@ -252,6 +252,7 @@ function samePanes(a: PaneInfo[], b: PaneInfo[]): boolean {
       x.activity !== y.activity ||
       x.activity_since !== y.activity_since ||
       x.title !== y.title ||
+      x.topic !== y.topic ||
       x.task_id !== y.task_id
     ) {
       return false;

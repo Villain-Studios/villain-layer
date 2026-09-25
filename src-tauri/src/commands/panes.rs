@@ -155,6 +155,7 @@ pub(crate) fn open_shell(
             prompted: false,
             env: Vec::new(),
             title_activity: None,
+            title_topic: None,
         },
     )?;
     remember_pane(state, &pane);
@@ -293,6 +294,7 @@ pub(crate) fn start_agent(
             prompted: prompt.is_some() && !resume,
             env,
             title_activity: agents::title_reader(def.integration),
+            title_topic: agents::topic_reader(def.integration),
         },
     )?;
     remember_pane(state, &pane);
@@ -666,6 +668,7 @@ pub(crate) fn open_chat(
             initial_input,
             env,
             title_activity: agents::title_reader(def.integration),
+            title_topic: agents::topic_reader(def.integration),
         },
     )?;
     remember_pane(state, &pane);

@@ -138,6 +138,8 @@ export interface PaneInfo {
   activity: "working" | "asking" | "done" | "idle";
   /** Since when. Not `last_output_at`: an idle Claude Code repaints every few seconds. */
   activity_since: string;
+  /** What the conversation is about, as the CLI named it. Show `paneName`, not this. */
+  topic: string | null;
 }
 
 /** What a terminal coming on screen missed. See `pty_attach`. */

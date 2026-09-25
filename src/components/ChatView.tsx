@@ -3,7 +3,7 @@ import { api } from "../lib/api";
 import { useFocusedPane } from "../lib/goto";
 import { read, write } from "../lib/persist";
 import { useStore } from "../store";
-import { CHAT_TASK_ID, paneState } from "../lib/derive";
+import { CHAT_TASK_ID, paneName, paneState } from "../lib/derive";
 import { TerminalPane } from "./Terminal";
 import { PlusIcon } from "./icons";
 import { ContextMenu, Confirm } from "./ui";
@@ -139,8 +139,9 @@ export function ChatView() {
             >
               <span className={`dot ${paneState(p).dot}`} title={paneState(p).label} />
               <span className="chat-item-text">
-                <span className="chat-item-title">{p.title}</span>
+                <span className="chat-item-title" title={paneName(p)}>{paneName(p)}</span>
                 <span className="chat-item-sub">
+                  {p.topic && `${agents.find((a) => a.id === p.agent_id)?.name ?? p.title} · `}
                   {p.running ? started(p.started_at) : "ended"}
                 </span>
               </span>

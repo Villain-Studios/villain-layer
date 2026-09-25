@@ -609,6 +609,39 @@ pub fn title_reader(integration: Integration) -> Option<fn(&str) -> Option<crate
     }
 }
 
+/// What Claude Code's window title says the conversation is about.
+///
+/// It titles the window "<mark> <topic>", the topic its own summary of the
+/// first prompt, and "<mark> Claude Code" until there is one. The mark is a
+/// spinner while it works and "✳" otherwise, so only the words are kept. A
+/// resumed conversation gets its topic back as it starts.
+pub fn claude_title_topic(title: &str) -> Option<String> {
+    let title = title.trim();
+    let mut chars = title.chars();
+    let words = match chars.next() {
+        Some(mark) if !mark.is_alphanumeric() && chars.next().is_some_and(char::is_whitespace) => {
+            chars.as_str().trim()
+        }
+        _ => title,
+    };
+    if words.is_empty() || words == "Claude Code" {
+        return None;
+    }
+    // A title is whatever the CLI printed; a tab cannot show a paragraph.
+    Some(words.chars().take(80).collect())
+}
+
+/// The topic reader for a CLI that names its conversation in its title.
+///
+/// Gemini's title carries its state and the thought of the moment, not a
+/// topic. Copilot's and OpenCode's have not been looked at.
+pub fn topic_reader(integration: Integration) -> Option<fn(&str) -> Option<String>> {
+    match integration {
+        Integration::Claude => Some(claude_title_topic),
+        _ => None,
+    }
+}
+
 /// How to find an agent's saved conversations for a working directory.
 #[derive(Debug, Clone, Copy)]
 pub enum SessionStore {
@@ -1036,6 +1069,23 @@ mod tests {
         assert_eq!(again.matches(spec).count(), 1);
         // Not ours to fix.
         assert_eq!(opencode_config_with(Some("not json"), spec, None), "not json");
+    }
+
+    /// Taken from Claude Code 2.1.282 in a terminal: the name it gave a first
+    /// prompt, under the spinner marks it cycles through while working.
+    #[test]
+    fn claude_is_named_by_the_words_in_its_title_not_its_marks() {
+        assert_eq!(claude_title_topic("✳ Reverse linked list in Rust").as_deref(), Some("Reverse linked list in Rust"));
+        assert_eq!(claude_title_topic("◐ Reverse linked list in Rust").as_deref(), Some("Reverse linked list in Rust"));
+        // Before the first prompt it is only itself.
+        assert_eq!(claude_title_topic("✳ Claude Code"), None);
+        assert_eq!(claude_title_topic("◑ Claude Code"), None);
+        assert_eq!(claude_title_topic("  "), None);
+        // Words that start with punctuation are still words.
+        assert_eq!(claude_title_topic("\"Why\" of the retry").as_deref(), Some("\"Why\" of the retry"));
+        assert_eq!(claude_title_topic(&"a".repeat(500)).map(|t| t.chars().count()), Some(80));
+        assert!(topic_reader(Integration::Claude).is_some());
+        assert!(topic_reader(Integration::Gemini).is_none(), "its title is its state, not a topic");
     }
 
     #[test]

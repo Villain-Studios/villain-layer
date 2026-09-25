@@ -231,6 +231,10 @@ pub struct PaneInfo {
     /// that was not a repaint. `last_output_at` is neither — an idle Claude
     /// Code prints every few seconds.
     pub activity_since: DateTime<Utc>,
+    /// What the conversation is about, in the CLI's own words: the name the
+    /// UI gives the pane in place of the agent's (PANE-12). None until it
+    /// says, and for a CLI that never does.
+    pub topic: Option<String>,
 }
 
 /// What an agent is doing, as best the app can tell.
@@ -279,7 +283,8 @@ struct PaneMeta {
     prompted: bool,
     /// When the pane was last on screen.
     seen_at: DateTime<Utc>,
-    /// The window title last read, for a CLI that reports through it.
+    /// The window title last read, for a CLI that reports or names its
+    /// conversation through it.
     title: String,
     /// A notice the agent's own report showed to be over while its words are
     /// still on screen. Not raised again until they have scrolled away.
@@ -556,6 +561,9 @@ pub struct SpawnOptions {
     /// For a CLI that keeps its window title on its state: what a title says.
     #[serde(skip)]
     pub title_activity: Option<fn(&str) -> Option<Activity>>,
+    /// For a CLI that names its conversation in its window title: the name.
+    #[serde(skip)]
+    pub title_topic: Option<fn(&str) -> Option<String>>,
 }
 
 /// The most panes that may exist at once.
@@ -825,6 +833,7 @@ impl PtyManager {
             notice: None,
             activity: Activity::Idle,
             activity_since: now,
+            topic: None,
         };
 
         let pid = child.process_id();
@@ -866,6 +875,8 @@ impl PtyManager {
             let id = id.clone();
             let mut reader = reader;
             let title_activity = opts.title_activity;
+            let title_topic = opts.title_topic;
+            let reads_title = title_activity.is_some() || title_topic.is_some();
             // Only an agent can be out of budget or asking to be trusted. A
             // shell running `gh` read "rate limit exceeded" as the first, and
             // offered to hand the shell off.
@@ -892,9 +903,11 @@ impl PtyManager {
                                 let tail = &out.scrollback
                                     [out.scrollback.len().saturating_sub(NOTICE_TAIL)..];
                                 let found = if scan { notice_in(tail, &mut scratch) } else { None };
-                                let title = title_activity.and_then(|_| {
-                                    last_title(&out.scrollback[out.scrollback.len().saturating_sub(TITLE_TAIL)..])
-                                });
+                                let title = reads_title
+                                    .then(|| {
+                                        last_title(&out.scrollback[out.scrollback.len().saturating_sub(TITLE_TAIL)..])
+                                    })
+                                    .flatten();
                                 (found, title)
                             };
                             {
@@ -904,14 +917,23 @@ impl PtyManager {
                                 if meta.last_input.elapsed() > ANSWER_WINDOW {
                                     meta.last_work = now;
                                 }
-                                if let (Some(read), Some(title)) = (title_activity, title) {
-                                    if title != meta.title {
-                                        if let Some(activity) = read(&title) {
-                                            meta.take_report(activity);
+                                if let Some(title) = title.filter(|t| *t != meta.title) {
+                                    if let Some(activity) = title_activity.and_then(|read| read(&title)) {
+                                        meta.take_report(activity);
+                                        let _ = app.emit("pty:activity", &id);
+                                    }
+                                    // A title without a topic keeps the last
+                                    // one: a name that blinks back to "Claude
+                                    // Code" on some passing title is worse
+                                    // than one that stays a turn too long.
+                                    if let Some(topic) = title_topic.and_then(|read| read(&title)) {
+                                        if meta.info.topic.as_deref() != Some(topic.as_str()) {
+                                            meta.info.topic = Some(topic);
+                                            // The pane list is what carries it.
                                             let _ = app.emit("pty:activity", &id);
                                         }
-                                        meta.title = title;
                                     }
+                                    meta.title = title;
                                 }
                                 if found.is_none() {
                                     meta.cleared_notice = None;
@@ -1333,6 +1355,7 @@ mod tests {
                 notice: None,
                 activity: Activity::Idle,
                 activity_since: now,
+                topic: None,
             },
             stopping: false,
             reported: None,
@@ -1605,6 +1628,7 @@ mod tests {
                         prompted: false,
                         env: Vec::new(),
                         title_activity: None,
+                        title_topic: None,
                     },
                 )
                 .unwrap();
@@ -1664,6 +1688,7 @@ mod tests {
                     prompted: false,
                     env: Vec::new(),
                     title_activity: None,
+                    title_topic: None,
                 },
             )
             .unwrap()
@@ -1736,10 +1761,57 @@ mod tests {
             prompted: false,
             env: Vec::new(),
             title_activity: None,
+            title_topic: None,
         };
         assert!(ptys.spawn(app.handle(), opts).is_err());
         assert!(ptys.list(None).is_empty(), "nothing was started to type it into");
         assert!(ptys.submit("any", &"x".repeat(1090)).is_err());
+    }
+
+    /// The name is read from the title as it arrives, not while it is only a
+    /// placeholder, and a title that names nothing keeps the last name.
+    #[test]
+    fn an_agent_is_named_by_the_topic_its_title_gives() {
+        let app = tauri::test::mock_app();
+        let ptys = PtyManager::default();
+        let opts = |script: &str| SpawnOptions {
+            task_id: "t".into(),
+            checkout_id: None,
+            cwd: std::env::temp_dir().to_string_lossy().to_string(),
+            kind: PaneKind::Agent,
+            title: "Claude Code".into(),
+            program: "/bin/sh".into(),
+            args: vec!["-c".into(), script.into()],
+            agent_id: Some("claude".into()),
+            rows: None,
+            cols: None,
+            initial_input: None,
+            prompted: false,
+            env: Vec::new(),
+            title_activity: None,
+            title_topic: Some(crate::agents::claude_title_topic),
+        };
+        let topic = |id: &str| {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                let pane = ptys.list(None).into_iter().find(|p| p.id == id).unwrap();
+                if !pane.running || Instant::now() > deadline {
+                    return pane.topic;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        };
+
+        let unnamed = ptys.spawn(app.handle(), opts(r"printf '\033]0;✳ Claude Code\007'")).unwrap();
+        assert_eq!(topic(&unnamed.id), None);
+
+        let named = ptys
+            .spawn(
+                app.handle(),
+                opts(r"printf '\033]0;◐ Fix the login\007'; sleep 0.2; printf '\033]0;◑ Claude Code\007'"),
+            )
+            .unwrap();
+        assert_eq!(topic(&named.id).as_deref(), Some("Fix the login"));
     }
 
     /// An agent that ignores being asked is still stopped, with its
@@ -1770,6 +1842,7 @@ mod tests {
             prompted: false,
             env: Vec::new(),
             title_activity: None,
+            title_topic: None,
         };
 
         let gone = dir.join("gone").to_string_lossy().to_string();
@@ -1824,6 +1897,7 @@ mod tests {
                             prompted: false,
                             env: Vec::new(),
                             title_activity: None,
+                            title_topic: None,
                         },
                     );
                     match spawned {

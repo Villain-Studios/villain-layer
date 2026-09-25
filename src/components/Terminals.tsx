@@ -3,7 +3,7 @@ import { api, errMessage } from "../lib/api";
 import { useFocusedPane } from "../lib/goto";
 import { read, write } from "../lib/persist";
 import { markStopping, useStore } from "../store";
-import { paneState } from "../lib/derive";
+import { paneScope, paneState } from "../lib/derive";
 import type { PaneInfo, Resumable, TaskView } from "../lib/types";
 import { TerminalPane } from "./Terminal";
 import { CloseIcon, PlusIcon, SwapIcon } from "./icons";
@@ -302,7 +302,15 @@ export function Terminals({ task }: { task: TaskView }) {
             onClick={() => setActive(p.id)}
           >
             <span className={`dot ${paneState(p).dot}`} title={paneState(p).label} />
-            {p.title}
+            {p.topic ? (
+              // Only the name gives way: the scope is what tells two repos' tabs apart.
+              <>
+                <span className="name" title={`${p.topic}\n${p.title}`}>{p.topic}</span>
+                {paneScope(p) && <span>· {paneScope(p)}</span>}
+              </>
+            ) : (
+              p.title
+            )}
             {p.notice && (
               <span
                 title={p.notice === "trust_prompt" ? "Waiting: trust this folder?" : "Usage limit"}

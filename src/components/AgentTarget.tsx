@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../lib/api";
+import { paneName } from "../lib/derive";
 import { useStore } from "../store";
 import type { TaskView } from "../lib/types";
 
@@ -91,7 +92,7 @@ export function AgentTargetFields({
     <label className="review-target">
       <span>Send to</span>
       <select value={at.target} onChange={(e) => at.setTarget(e.target.value)} disabled={disabled}>
-        {at.running.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}
+        {at.running.map((p) => <option key={p.id} value={p.id}>{paneName(p)}</option>)}
       </select>
     </label>
   );

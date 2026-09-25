@@ -191,15 +191,15 @@ function pane(
     id, task_id: task, checkout_id: null, kind, title, agent_id: agent,
     cwd: `/Users/you/.villain-worktrees/${task}`, running: true, exit_code: null,
     started_at: ago(3600), last_output_at: ago(2), notice: null,
-    activity, activity_since: ago(since), ...extra,
+    activity, activity_since: ago(since), topic: null, ...extra,
   };
 }
 
 const panes: PaneInfo[] = [
-  pane("pane-claude", "t-login", "agent", "Claude Code", "claude", "asking", 40),
+  pane("pane-claude", "t-login", "agent", "Claude Code · api", "claude", "asking", 40, { topic: "Fix the login redirect loop" }),
   pane("pane-shell", "t-login", "shell", "Shell · api", null, "idle", 3600, { checkout_id: "c-login-api" }),
   pane("pane-copilot", "t-audit", "agent", "GitHub Copilot CLI", "copilot", "done", 300),
-  pane("pane-chat", "chat", "agent", "Claude Code", "claude", "working", 12),
+  pane("pane-chat", "chat", "agent", "Claude Code (resumed)", "claude", "working", 12, { topic: "Which tickets block the release" }),
 ];
 
 const pr = (number: number, repo: string, merged: boolean) => ({

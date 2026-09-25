@@ -250,6 +250,7 @@ pub fn run() {
             commands::github_task_prs,
             commands::github_all_prs,
             commands::github_review_queue,
+            commands::task_for_pr,
             commands::set_checkout_base,
             commands::checkout_branches,
             commands::task_branch_facts,

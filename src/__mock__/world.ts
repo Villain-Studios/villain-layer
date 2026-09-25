@@ -224,7 +224,7 @@ function authored(
 ): AuthoredPr {
   return {
     repo: `acme/${repo}`, number, title, url: `https://github.com/acme/${repo}/pull/${number}`,
-    draft: false, updated_at: updated, checks: "passing", review: "none", approved_by: [],
+    draft: false, updated_at: updated, head: `ACME-${number}`, base: "main", checks: "passing", review: "none", approved_by: [],
     changes_by: [], waiting_on: [], unresolved: 0, unresolved_more: false, conflicts: false, ...extra,
   };
 }

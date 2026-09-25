@@ -79,6 +79,9 @@ export const api = {
     issue_key?: string | null;
     issue_url?: string | null;
   }) => invoke<Task>("create_task", { req }),
+  /** The task for one of your pull requests, made on its branch if there is none (REV-7). */
+  taskForPr: (repo: string, head: string, base: string, title: string) =>
+    invoke<Task>("task_for_pr", { repo, head, base, title }),
   deleteTask: (id: string, force = false) =>
     invoke<RepoResult[]>("delete_task", { id, force }),
   /**

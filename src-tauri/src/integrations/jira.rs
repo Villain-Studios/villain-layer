@@ -753,7 +753,7 @@ pub(crate) fn jql_string(raw: &str) -> String {
 }
 
 /// Whether something reads as an issue key rather than words to search for.
-fn looks_like_a_key(text: &str) -> bool {
+pub(crate) fn looks_like_a_key(text: &str) -> bool {
     let Some((project, number)) = text.split_once('-') else {
         return false;
     };

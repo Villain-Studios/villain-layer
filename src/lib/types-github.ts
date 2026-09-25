@@ -189,6 +189,9 @@ export interface AuthoredPr {
   url: string;
   draft: boolean;
   updated_at: string;
+  /** Its branch, and the one it merges into. */
+  head: string;
+  base: string;
   /** As GitHub rolls up check runs and commit statuses; "none" when nothing reports. */
   checks: "passing" | "failing" | "pending" | "none";
   /** Branch protection's decision, or the latest reviews where it asks for none. */

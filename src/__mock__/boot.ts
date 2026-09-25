@@ -26,7 +26,7 @@
  */
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
-import type { Catchup, Cleaned, FlowStatus, Message, PaneInfo, Project, RepoUpdate, Synced } from "../lib/types";
+import type { Catchup, Cleaned, FlowStatus, Message, PaneInfo, Project, RepoUpdate, Synced, TaskView } from "../lib/types";
 import { ago, SCENARIOS } from "./world";
 
 type Args = Record<string, unknown>;
@@ -136,6 +136,24 @@ const answer: Record<string, Answer> = {
   task_branch_facts: () => [],
 
   // GitHub.
+  task_for_pr: (a) => {
+    const had = world.tasks.find((t) => t.branch === a.head);
+    if (had) return had;
+    const repo = String(a.repo).split("/").pop() ?? "repo";
+    const id = `t-pr-${world.tasks.length}`;
+    const root = `/Users/you/.villain-worktrees/${a.head}`;
+    const task: TaskView = {
+      id, name: String(a.title), root, branch: String(a.head), issue_key: null, issue_url: null,
+      created_at: ago(0), pane_count: 0,
+      checkouts: [{
+        id: `c-${id}`, task_id: id, project_id: `p-${repo}`, project_name: repo, path: `${root}/${repo}`,
+        base: String(a.base), exists: true, broken: null, changed: 0,
+        status: { ahead: 0, behind: 0, staged: 0, unstaged: 0, untracked: 0, conflicted: 0, dirty_files: 0, branch: String(a.head) },
+      }],
+    };
+    world.tasks = [...world.tasks, task];
+    return task;
+  },
   github_all_prs: () => world.prs,
   github_task_prs: (a) => world.prs.find((p) => p.task_id === a.taskId)?.rows ?? [],
   github_review_queue: () => world.reviews,

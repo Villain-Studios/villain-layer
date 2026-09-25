@@ -582,9 +582,17 @@ a banner or message about a review request opens "To review".
   they it. It shows as an error on its own section.
 - **REV-6** It reads the 50 most recently updated and the first 100
   threads of each, and MUST say so when there are more (`50+`, `100+`).
+- **REV-7** One of your PRs MUST lead to its work: a click opens its task's
+  Pull requests tab, and GitHub is a button on the card. One with no task
+  offers "Start task", which makes one in the registered repo whose origin
+  is the PR's (`owner/name`), on the PR's own branch (TASK-3) and against
+  its base, named after its title, with a Jira key in the branch or title
+  linked as the ticket when Jira is connected. A task already on that
+  branch is opened instead, with the repo added if it lacked it. A PR in a
+  repo that is not registered says so, and makes nothing.
 
 Code: `commands/github.rs` (`review_queue`, `github_review_queue`),
-`integrations/github/authored.rs`, `ReviewsView.tsx`.
+`integrations/github/authored.rs`, `commands/pr_task.rs`, `ReviewsView.tsx`.
 
 ## 11. Notifications
 

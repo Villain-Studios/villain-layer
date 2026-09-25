@@ -8,7 +8,9 @@ use super::http_client;
 use crate::config::GithubConfig;
 use crate::error::{Error, Result};
 
+mod authored;
 mod hunk;
+pub use authored::AuthoredPr;
 pub use hunk::CodeLine;
 
 pub struct GitHub {

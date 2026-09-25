@@ -3,7 +3,7 @@
  * shared by the views, the store and the tests. Nothing here holds state or
  * reaches the backend.
  */
-import type { CheckoutPr, JiraIssue, PaneInfo, Project, RepoHealth, TaskView, UpdateBy } from "./types";
+import type { AuthoredPr, CheckoutPr, JiraIssue, PaneInfo, Project, RepoHealth, TaskView, UpdateBy } from "./types";
 
 /** Panes started from the Chat view carry this instead of a real task id. */
 export const CHAT_TASK_ID = "chat";
@@ -268,4 +268,29 @@ export function suggestBase(current: string, last: string, defaults: readonly st
   const unique = [...new Set(defaults)];
   const suggested = unique.length === 1 ? unique[0] : "";
   return current === "" || current === last ? suggested : current;
+}
+
+/**
+ * Where a pull request you opened stands, in a word (REV-4): what is next and
+ * whose move it is. Anything you have to fix outranks anything you are
+ * waiting for; a draft is not waiting on anyone.
+ */
+export function authoredStanding(pr: AuthoredPr): { label: string; tone: "good" | "bad" | "wait" | "draft" } {
+  if (pr.draft) return { label: "draft", tone: "draft" };
+  if (pr.conflicts || pr.review === "changes_requested" || pr.checks === "failing" || pr.unresolved > 0) {
+    return { label: "needs you", tone: "bad" };
+  }
+  if (pr.checks === "pending") return { label: "checks running", tone: "wait" };
+  if (pr.review === "review_required" || (pr.review !== "approved" && pr.waiting_on.length > 0)) {
+    return { label: "waiting on review", tone: "wait" };
+  }
+  return { label: "ready to merge", tone: "good" };
+}
+
+/** The task whose pull request this is, by its URL, if the app has one. */
+export function taskOfPr(url: string, prs: Record<string, CheckoutPr[]>): string | null {
+  for (const [taskId, rows] of Object.entries(prs)) {
+    if (rows.some((r) => r.pr?.url === url || r.past.some((p) => p.url === url))) return taskId;
+  }
+  return null;
 }

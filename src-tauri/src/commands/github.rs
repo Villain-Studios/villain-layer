@@ -258,6 +258,17 @@ pub struct ReviewQueue {
     /// when the team was configured but could not be resolved or searched —
     /// the personal list is still worth showing.
     pub team: Option<TeamReviews>,
+    /// The other side: pull requests you opened (REV-4). Only the view asks
+    /// for them; the watch that banners new requests has no use for them.
+    pub authored: Option<AuthoredPrs>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AuthoredPrs {
+    pub prs: Vec<github::AuthoredPr>,
+    pub more: bool,
+    /// Its own error, as the team's: it does not take the review lists down.
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -272,9 +283,23 @@ pub struct TeamReviews {
 
 #[tauri::command]
 pub async fn github_review_queue(app: AppHandle, state: State<'_, AppState>) -> Result<ReviewQueue> {
-    let queue = review_queue(&state).await?;
+    let (queue, authored) = tokio::join!(review_queue(&state), authored_prs(&state));
+    let mut queue = queue?;
     crate::news::saw_reviews(&app, &queue);
+    queue.authored = Some(authored);
     Ok(queue)
+}
+
+/// A failure here is a note on its own section (REV-5), never the queue's.
+async fn authored_prs(state: &AppState) -> AuthoredPrs {
+    let got = match github_client(state) {
+        Ok((client, _)) => client.authored_prs().await,
+        Err(e) => Err(e),
+    };
+    match got {
+        Ok((prs, more)) => AuthoredPrs { prs, more, error: None },
+        Err(e) => AuthoredPrs { prs: Vec::new(), more: false, error: Some(e.to_string()) },
+    }
 }
 
 /// The queue itself, for the UI and for the watch that banners what is new.
@@ -298,6 +323,7 @@ pub(crate) async fn review_queue(state: &AppState) -> Result<ReviewQueue> {
         mine,
         mine_more,
         team,
+        authored: None,
     })
 }
 

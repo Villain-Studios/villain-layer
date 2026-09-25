@@ -9,6 +9,7 @@
  */
 import type {
   AgentStatus,
+  AuthoredPr,
   ChangedFile,
   CleanupItem,
   CreateField,
@@ -218,6 +219,16 @@ const pr = (number: number, repo: string, merged: boolean) => ({
   review_comments: 3,
 });
 
+function authored(
+  number: number, repo: string, title: string, updated: string, extra: Partial<AuthoredPr> = {},
+): AuthoredPr {
+  return {
+    repo: `acme/${repo}`, number, title, url: `https://github.com/acme/${repo}/pull/${number}`,
+    draft: false, updated_at: updated, checks: "passing", review: "none", approved_by: [],
+    changes_by: [], waiting_on: [], unresolved: 0, unresolved_more: false, conflicts: false, ...extra,
+  };
+}
+
 const prs: TaskPrs[] = [
   {
     task_id: "t-login",
@@ -334,6 +345,20 @@ function busy(): World {
       mine: [{ repo: "acme/web", number: 88, title: "Speed up the search box", url: "https://github.com/acme/web/pull/88", author: "bo", draft: false, updated_at: ago(5400) }],
       mine_more: false,
       team: null,
+      authored: {
+        prs: [
+          authored(42, "api", "Fix login race", ago(1800), {
+            checks: "failing", review: "changes_requested", changes_by: ["ana"], unresolved: 1,
+          }),
+          authored(91, "web", "Remember the last workspace", ago(4000), { review: "approved", approved_by: ["bo"] }),
+          authored(12, "docs", "Document the retry settings", ago(9000), {
+            checks: "pending", review: "review_required", waiting_on: ["ana", "@fe"], conflicts: true,
+          }),
+          authored(95, "web", "Try a denser sidebar", ago(90_000), { draft: true, checks: "none" }),
+        ],
+        more: false,
+        error: null,
+      },
     },
     issues: [
       issue("ACME-123", "Fix login race", "In Progress", "indeterminate", "ACME-100"),
@@ -397,7 +422,7 @@ function messages(): Message[] {
 function empty(): World {
   return {
     projects: [], health: [], cleanup: [], tasks: [], panes: [], agents, settings: disconnected, prs: [],
-    reviews: { mine: [], mine_more: false, team: null },
+    reviews: { mine: [], mine_more: false, team: null, authored: { prs: [], more: false, error: null } },
     issues: [], issueTypes: [], transitions: [], requiredFields: [], changed: [], feedback: [], output: {},
     messages: [],
   };

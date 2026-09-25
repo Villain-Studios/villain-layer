@@ -287,10 +287,18 @@ export function authoredStanding(pr: AuthoredPr): { label: string; tone: "good" 
   return { label: "ready to merge", tone: "good" };
 }
 
-/** The task whose pull request this is, by its URL, if the app has one. */
-export function taskOfPr(url: string, prs: Record<string, CheckoutPr[]>): string | null {
+/**
+ * The task whose pull request this is, if the app has one: by its URL once
+ * the PR sweep has seen it, else by its branch, as `task_for_pr` finds it —
+ * a task just started on it has not been swept yet.
+ */
+export function taskOfPr(
+  pr: { url: string; head: string },
+  prs: Record<string, CheckoutPr[]>,
+  tasks: { id: string; branch: string }[],
+): string | null {
   for (const [taskId, rows] of Object.entries(prs)) {
-    if (rows.some((r) => r.pr?.url === url || r.past.some((p) => p.url === url))) return taskId;
+    if (rows.some((r) => r.pr?.url === pr.url || r.past.some((p) => p.url === pr.url))) return taskId;
   }
-  return null;
+  return tasks.find((t) => t.branch === pr.head)?.id ?? null;
 }

@@ -1106,8 +1106,10 @@ textarea { resize: vertical; font-family: var(--mono); }
 .review-card .title { font-size: 13.5px; line-height: 1.45; }
 .review-card .by { color: var(--dim); font-size: 12px; margin-top: 4px; }
 .review-card .chips.standing { flex-wrap: wrap; margin-top: 6px; }
-.chip.task { font-family: var(--sans); cursor: pointer; color: var(--blue); border-color: #2a3a52; }
-.chip.task:hover { border-color: var(--blue); }
+.chip.task { font-family: var(--sans); color: var(--blue); border-color: #2a3a52; }
+.review-card:focus-visible { outline: none; border-color: var(--accent); }
+.review-card .top .btn { padding: 1px 7px; font-size: 12px; }
+.review-card .chips .start { margin-left: auto; padding: 1px 9px; font-size: 12px; }
 .review-note {
   margin: 0 0 10px;
   color: var(--dim);

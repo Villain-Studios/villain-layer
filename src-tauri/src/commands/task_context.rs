@@ -7,6 +7,11 @@
 //! started with a prompt of its own, or brought back at launch, had the
 //! ticket's link and nothing else, and spent its first calls fetching what
 //! the app had already fetched.
+//!
+//! It also carries what earlier tasks learned about each repository here
+//! (NOTE-4), with how likely each note is to be out of date.
+
+use std::path::Path;
 
 use tauri::AppHandle;
 
@@ -15,6 +20,7 @@ use crate::error::Result;
 use crate::integrations::jira::Issue;
 
 use super::jira::task_repos;
+use super::notes::{age, notes_of, RepoNote};
 use super::panes::agent_file_dir;
 use super::AppState;
 
@@ -27,6 +33,16 @@ pub(crate) const TICKET_FILE: &str = "TICKET.md";
 /// A description longer than this is cut, and says so. The context file is
 /// read into every turn of every agent in the task.
 const MAX_DESCRIPTION: usize = 8_000;
+
+/// Bytes of notes per repository in the context file (NOTE-4). The rest are
+/// counted, and `repo_notes` has them.
+const NOTES_PER_REPO: usize = 3 * 1024;
+
+/// One repository's notes, under the folder it is checked out as.
+struct FolderNotes {
+    folder: String,
+    notes: Vec<RepoNote>,
+}
 
 /// The layout of a task, written into its folder for the agent standing in it.
 ///
@@ -42,7 +58,8 @@ pub(crate) fn write_task_context(state: &AppState, task: &Task) -> Result<()> {
         return Ok(());
     };
     let ticket = std::fs::read_to_string(dir.join(TICKET_FILE)).ok();
-    let md = task_context(task, &task_repos(state, task), ticket.as_deref());
+    let mut md = task_context(task, &task_repos(state, task), ticket.as_deref());
+    md.push_str(&notes_section(&task_notes(state, task), chrono::Utc::now().timestamp_millis()));
 
     std::fs::write(dir.join("CLAUDE.md"), &md)?;
     // Agents that look for AGENTS.md instead should see the same thing.
@@ -63,6 +80,80 @@ pub(crate) async fn keep_ticket(app: AppHandle, task: Task, issue: Issue) {
         Ok(())
     })
     .await;
+}
+
+/// The notes of each repository checked out in `task`. Runs git.
+fn task_notes(state: &AppState, task: &Task) -> Vec<FolderNotes> {
+    state
+        .config
+        .checkouts_of(&task.id)
+        .iter()
+        .filter_map(|c| {
+            let project = state.config.project(&c.project_id).ok()?;
+            let folder = Path::new(&c.path).file_name()?.to_string_lossy().to_string();
+            Some(FolderNotes { folder, notes: notes_of(state, &project) })
+        })
+        .collect()
+}
+
+/// What earlier tasks learned, and how to add to it (NOTE-4). Said even
+/// with no notes yet, since that is how an agent learns it can remember.
+fn notes_section(repos: &[FolderNotes], now: i64) -> String {
+    let mut md = String::from("\n## What earlier tasks learned about these repositories\n\n");
+    let noted: Vec<&FolderNotes> = repos.iter().filter(|r| !r.notes.is_empty()).collect();
+    if noted.is_empty() {
+        md.push_str("Nothing yet.\n\n");
+    } else {
+        md.push_str(concat!(
+            "Notes the user agreed to keep from earlier agents. A note can be out of ",
+            "date, above all one whose files changed since it was checked: check it ",
+            "against the code before relying on it, then call `check_note`, or, if it ",
+            "no longer holds, ask the user and `forget_note` it. `repo_notes` gives a ",
+            "repository's notes in full.\n\n",
+        ));
+        for repo in noted {
+            md.push_str(&format!("### `{}/`\n\n", repo.folder));
+            let mut used = 0;
+            let mut left = 0;
+            for n in &repo.notes {
+                let line = note_line(n, now);
+                if left > 0 || used + line.len() > NOTES_PER_REPO {
+                    left += 1;
+                    continue;
+                }
+                used += line.len();
+                md.push_str(&line);
+            }
+            if left > 0 {
+                md.push_str(&format!("- ({left} more; `repo_notes` lists them.)\n"));
+            }
+            md.push('\n');
+        }
+    }
+    md.push_str(concat!(
+        "When you learn something about a repository that will hold for later ",
+        "tasks (how to build or test it, a trap in its setup, where something ",
+        "lives), ask the user whether it is worth remembering, quoting it, and ",
+        "call `remember` with `confirm: true` only if they agree.\n",
+    ));
+    md
+}
+
+/// One note as a list item: its id, its text on one line (so it cannot
+/// start a heading of its own), its age, and what changed since.
+fn note_line(n: &RepoNote, now: i64) -> String {
+    let text = n.note.text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut when = format!("checked {}", age(n.note.checked_at, now));
+    if let Some(files) = n.changed.as_ref().filter(|f| !f.is_empty()) {
+        let shown: Vec<String> = files.iter().take(3).map(|f| format!("`{f}`")).collect();
+        let more = files.len().saturating_sub(3);
+        when.push_str(&format!(
+            "; since then {}{} changed",
+            shown.join(", "),
+            if more > 0 { format!(" and {more} more") } else { String::new() }
+        ));
+    }
+    format!("- `{}` {text} ({when})\n", n.note.id)
 }
 
 /// The context file's text. `repos` are (folder, clone it came from) pairs,
@@ -251,6 +342,61 @@ mod tests {
         let md = ticket_markdown(&long);
         assert!(md.contains("(Cut short here."));
         assert!(md.contains(&format!("> {}\n", "é".repeat(MAX_DESCRIPTION / 2))));
+    }
+
+    fn note(id: &str, text: &str, checked_at: i64, changed: Option<Vec<&str>>) -> RepoNote {
+        RepoNote {
+            note: crate::notes::Note {
+                id: id.into(),
+                repo: "github.com/acme/api".into(),
+                text: text.into(),
+                paths: vec!["db".into()],
+                written_at: checked_at,
+                source: "you".into(),
+                written_commit: None,
+                checked_at,
+                checked_commit: None,
+            },
+            changed: changed.map(|c| c.into_iter().map(String::from).collect()),
+        }
+    }
+
+    const DAY: i64 = 86_400_000;
+
+    #[test]
+    fn a_note_whose_files_changed_says_so_beside_its_age() {
+        let repos = vec![FolderNotes {
+            folder: "api".into(),
+            notes: vec![
+                note("a1", "Tests need `make db` first.", 0, Some(vec![])),
+                note("b2", "Migrations run from\n## db/", 0, Some(vec!["db/1.sql", "db/2.sql", "db/3.sql", "db/4.sql"])),
+            ],
+        }];
+        let md = notes_section(&repos, 3 * DAY);
+        assert!(md.contains("### `api/`"));
+        assert!(md.contains("- `a1` Tests need `make db` first. (checked 3 days ago)\n"));
+        assert!(md.contains(
+            "- `b2` Migrations run from ## db/ (checked 3 days ago; since then `db/1.sql`, `db/2.sql`, `db/3.sql` and 1 more changed)"
+        ));
+        assert!(md.contains("check it against the code before relying on it"));
+    }
+
+    #[test]
+    fn a_repository_with_many_notes_shows_what_fits_and_counts_the_rest() {
+        let long = "x".repeat(400);
+        let notes = (0..20).map(|i| note(&format!("n{i}"), &long, 0, None)).collect();
+        let md = notes_section(&[FolderNotes { folder: "api".into(), notes }], 0);
+        let shown = md.matches("- `n").count();
+        assert!(shown > 0 && shown < 20);
+        assert!(md.contains(&format!("- ({} more; `repo_notes` lists them.)", 20 - shown)));
+    }
+
+    #[test]
+    fn with_no_notes_yet_an_agent_still_learns_it_can_remember() {
+        let md = notes_section(&[FolderNotes { folder: "api".into(), notes: vec![] }], 0);
+        assert!(md.contains("Nothing yet."));
+        assert!(md.contains("call `remember` with `confirm: true` only if they agree"));
+        assert!(!md.contains("###"));
     }
 
     #[test]

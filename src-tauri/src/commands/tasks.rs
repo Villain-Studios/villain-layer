@@ -13,7 +13,8 @@ use crate::pty::PaneKind;
 
 use super::AppState;
 use super::diff::RepoResult;
-use super::panes::{agent_file_dir, remove_generated, write_task_context};
+use super::panes::{agent_file_dir, remove_generated};
+use super::task_context::write_task_context;
 
 // ------------------------------------------------------------------- tasks
 

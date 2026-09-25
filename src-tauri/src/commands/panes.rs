@@ -11,6 +11,7 @@ use crate::pty::{PaneInfo, PaneKind, SpawnOptions};
 use crate::shellenv;
 
 use super::AppState;
+use super::task_context::write_task_context;
 
 // ------------------------------------------------------------------- panes
 
@@ -370,6 +371,7 @@ pub(crate) fn chat_room(state: &AppState, id: &str) -> Result<PathBuf> {
 const GENERATED_FILES: &[&str] = &[
     "CLAUDE.md",
     "AGENTS.md",
+    super::task_context::TICKET_FILE,
     ".mcp.json",
     "PR_DESCRIPTION.md",
     super::github::FEEDBACK_FILE,
@@ -525,70 +527,6 @@ pub(crate) fn write_chat_context(state: &AppState, dir: &Path) -> Result<()> {
             md.push('\n');
         }
     }
-
-    std::fs::write(dir.join("CLAUDE.md"), &md)?;
-    // Agents that look for AGENTS.md instead should see the same thing.
-    std::fs::write(dir.join("AGENTS.md"), &md)?;
-    Ok(())
-}
-
-/// The layout of a task, written into its folder for the agent standing in it.
-///
-/// The opening prompt says all of this too, but a prompt is said once: it
-/// scrolls away, and a resumed conversation never hears it at all. A file in
-/// the working directory is read every time, which is what an agent needs when
-/// the task gains a repository weeks after it started.
-///
-/// Never written into a worktree — a generated file there is an untracked
-/// change that turns up in review.
-pub(crate) fn write_task_context(state: &AppState, task: &Task) -> Result<()> {
-    let Some(dir) = agent_file_dir(state, task) else {
-        return Ok(());
-    };
-    let checkouts = state.config.checkouts_of(&task.id);
-
-    let mut md = format!(
-        "# {}\n\nWritten by Villain Layer. You are in the task folder, not inside a \
-         repository: each repository below is checked out as a folder here, all on \
-         branch `{}`.\n\n",
-        task.name, task.branch,
-    );
-    if let Some(url) = &task.issue_url {
-        md.push_str(&format!("Ticket: {url}\n\n"));
-    }
-
-    md.push_str("## Repositories in this task\n\n");
-    if checkouts.is_empty() {
-        md.push_str("None yet.\n\n");
-    } else {
-        md.push_str("| folder | clone it came from |\n|---|---|\n");
-        for c in &checkouts {
-            let origin = state
-                .config
-                .project(&c.project_id)
-                .map(|p| p.path)
-                .unwrap_or_default();
-            let folder = PathBuf::from(&c.path)
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_default();
-            md.push_str(&format!("| `{folder}/` | `{origin}` |\n"));
-        }
-        md.push('\n');
-    }
-
-    md.push_str(concat!(
-        "Run git, and each repository's own tests, from inside its folder. A ",
-        "repository's own CLAUDE.md or AGENTS.md lives in that folder and applies ",
-        "there. Do not `npm`/`pnpm`/`yarn` init, install, or drop a lockfile in ",
-        "this task folder — it is not a package, only a container for the checkouts.\n\n",
-        "## If the work needs a repository that is not here\n\n",
-        "Call `add_repo` on the `villain-layer` MCP server with this task's id and the ",
-        "repository's name, and it is checked out here on the same branch. Do that ",
-        "rather than reading or editing the original clone: that one is on its own ",
-        "branch and is not yours to change. `list_repos` shows what is available and ",
-        "`list_tasks` gives the task id.\n",
-    ));
 
     std::fs::write(dir.join("CLAUDE.md"), &md)?;
     // Agents that look for AGENTS.md instead should see the same thing.

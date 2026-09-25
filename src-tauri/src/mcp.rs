@@ -266,6 +266,8 @@ const DANGER: &[&str] = &[
     "slack_cleanup",
     "forget_repo",
     "open_prs",
+    "remember",
+    "forget_note",
 ];
 
 fn confirm_prop() -> Value {
@@ -535,6 +537,55 @@ fn tools() -> Vec<Value> {
                 "confirm": confirm_prop()
             }),
             vec!["task_id", "title"],
+        ),
+        tool(
+            "repo_notes",
+            "What earlier agents learned about a repository and the user agreed to \
+             keep: how to build and test it, setup traps, where things live. Each note \
+             says when it was last checked and, when it names paths, which files under \
+             them changed since. A note can be out of date: check it against the code \
+             before relying on it, then call check_note, or ask the user to forget it.",
+            json!({ "repo": str_prop("Repository name, as list_repos gives it") }),
+            vec!["repo"],
+        ),
+        tool(
+            "remember",
+            "Keep one lasting fact about a repository for every later task on it: a \
+             build or test command, a setup trap, where something lives, a convention \
+             its code keeps. Not progress on this task, and not what the repository's \
+             own AGENTS.md or CLAUDE.md already says. First ask the user whether it is \
+             worth remembering, quoting the note; confirm: true only once they agree. \
+             Name the files or folders it is about in paths, so a change to them marks \
+             it as possibly out of date.",
+            json!({
+                "repo": str_prop("Repository name, as list_repos gives it"),
+                "note": str_prop("The fact, in at most 500 characters"),
+                "paths": { "type": "array", "items": { "type": "string" },
+                           "description": "Files or folders it is about, relative to the repository's root" },
+                "task_id": str_prop("Your task's id, from list_tasks, to say where it came from"),
+                "agent": str_prop("Your name, e.g. Claude Code, to say where it came from"),
+                "confirm": confirm_prop()
+            }),
+            vec!["repo", "note"],
+        ),
+        tool(
+            "check_note",
+            "Say a repository note from repo_notes still holds, having checked it \
+             against the code. Its age and changed files count from now.",
+            json!({ "id": str_prop("Note id from repo_notes") }),
+            vec!["id"],
+        ),
+        tool(
+            "forget_note",
+            "Remove a repository note that no longer holds, saying why. Ask the user \
+             first; confirm: true only once they agree. To correct a note, forget it \
+             and remember the corrected one.",
+            json!({
+                "id": str_prop("Note id from repo_notes"),
+                "reason": str_prop("What made it wrong, for the user's message center"),
+                "confirm": confirm_prop()
+            }),
+            vec!["id", "reason"],
         ),
     ]
 }
@@ -877,6 +928,59 @@ async fn call(app: &AppHandle, name: &str, args: Value) -> Result<Value> {
             Ok(serde_json::to_value(
                 commands::github_open_prs(state, task_id, title, body, draft).await?,
             )?)
+        }
+
+        "repo_notes" => {
+            let repo = required(&args, "repo")?.to_string();
+            let notes = commands::blocking(app.clone(), move |state| {
+                let project = commands::project_named(state, &repo)?;
+                Ok(commands::notes_of(state, &project))
+            })
+            .await?;
+            let now = chrono::Utc::now().timestamp_millis();
+            Ok(Value::Array(notes.iter().map(|n| commands::note_for_agent(n, now)).collect()))
+        }
+
+        "remember" => {
+            let repo = required(&args, "repo")?.to_string();
+            let text = required(&args, "note")?.to_string();
+            let paths: Vec<String> = args
+                .get("paths")
+                .and_then(|p| p.as_array())
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+                .unwrap_or_default();
+            let task_id = arg(&args, "task_id").map(str::to_string);
+            let agent = arg(&args, "agent").map(str::to_string);
+            let note = commands::blocking(app.clone(), move |state| {
+                let project = commands::project_named(state, &repo)?;
+                let task = task_id.and_then(|id| state.config.task(&id).ok());
+                let source = commands::agent_source(agent.as_deref(), task.as_ref());
+                commands::remember_inner(state, &project, &text, paths, source)
+            })
+            .await?;
+            Ok(json!({ "remembered": note.id }))
+        }
+
+        "check_note" => {
+            let id = required(&args, "id")?.to_string();
+            let note = commands::blocking(app.clone(), move |state| commands::check_note_inner(state, &id)).await?;
+            Ok(commands::note_for_agent(&note, chrono::Utc::now().timestamp_millis()))
+        }
+
+        "forget_note" => {
+            let id = required(&args, "id")?.to_string();
+            let reason = required(&args, "reason")?.to_string();
+            let note = commands::blocking(app.clone(), move |state| commands::forget_note_inner(state, &id)).await?;
+            // Out of the conversation it was agreed in, so the user can see
+            // later what went and why.
+            crate::messages::record_all(app, vec![crate::messages::New {
+                kind: crate::messages::Kind::Notice,
+                level: crate::messages::Level::Info,
+                title: format!("A note about {} was forgotten", note.repo),
+                body: format!("{}\n\nWhy: {reason}", note.text),
+                target: None,
+            }]);
+            Ok(json!({ "forgot": note.id }))
         }
 
         other => Err(crate::error::Error::NotFound(format!("tool {other}"))),

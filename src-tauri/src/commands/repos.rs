@@ -387,6 +387,7 @@ pub(super) mod tests {
             status_cache: Default::default(),
             news: Default::default(),
             messages: crate::messages::Messages::for_tests(root.join("messages.json")),
+            notes: crate::notes::Notes::load(root),
         }
     }
 

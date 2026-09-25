@@ -27,6 +27,8 @@ pub struct AppState {
     pub news: crate::news::Seen,
     /// The message center's log (MSG-1).
     pub messages: crate::messages::Messages,
+    /// What agents learned about each repository (NOTE-1).
+    pub notes: crate::notes::Notes,
 }
 
 /// Snapshot of one checkout's status, reused until it goes hot or ages out.
@@ -119,6 +121,7 @@ mod ticket_flow;
 mod messages;
 mod pr_task;
 mod task_context;
+mod notes;
 
 pub use projects::*;
 pub use repos::*;
@@ -133,6 +136,7 @@ pub use settings::*;
 pub use ticket_flow::*;
 pub use messages::*;
 pub use pr_task::*;
+pub use notes::*;
 
 #[cfg(test)]
 mod tests {
@@ -489,6 +493,7 @@ mod tests {
             status_cache: Default::default(),
             news: Default::default(),
             messages: crate::messages::Messages::for_tests(std::env::temp_dir().join("vl-test-messages.json")),
+            notes: crate::notes::Notes::load(&root),
         };
 
         assert_eq!(super::adopt_worktrees(&state), (1, Vec::new()));

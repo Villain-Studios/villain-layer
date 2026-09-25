@@ -509,7 +509,9 @@ const CEILINGS: Record<string, number> = {
   "src-tauri/src/commands/github.rs": 1100,
   "src-tauri/src/integrations/github.rs": 1050,
   "src-tauri/src/commands/tasks.rs": 1050,
-  "src-tauri/src/mcp.rs": 1000,
+  // Every MCP tool is defined and dispatched here, and docs-sync reads the
+  // definitions from this file; the repo-notes tools took it past 1000.
+  "src-tauri/src/mcp.rs": 1100,
   "src-tauri/src/commands/panes.rs": 1000,
   "src-tauri/src/integrations/jira.rs": 900,
   "src-tauri/src/agents.rs": 850,

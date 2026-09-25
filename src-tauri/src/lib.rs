@@ -7,6 +7,7 @@ mod git;
 mod integrations;
 mod mcp;
 mod messages;
+mod notes;
 mod news;
 mod previous;
 mod pty;
@@ -104,6 +105,7 @@ pub fn run() {
             previous::adopt(handle);
             let config = ConfigStore::load(handle)?;
             let (log, dirty) = messages::Messages::load(config.folder());
+            let notes = notes::Notes::load(config.folder());
             let state = AppState {
                 config,
                 ptys: PtyManager::default(),
@@ -113,6 +115,7 @@ pub fn run() {
                 status_cache: Default::default(),
                 news: Default::default(),
                 messages: log,
+                notes,
             };
             app.manage(state);
             messages::spawn_writer(handle.clone(), dirty)?;

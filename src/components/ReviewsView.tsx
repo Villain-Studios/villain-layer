@@ -3,6 +3,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { copyText } from "../lib/clipboard";
 import { authoredStanding, taskOfPr } from "../lib/derive";
 import { goTo } from "../lib/goto";
+import { readOneOf, write } from "../lib/persist";
 import { ago } from "../lib/time";
 import { useStore } from "../store";
 import type { AuthoredPr, ReviewRequest, TeamReviews } from "../lib/types";
@@ -58,6 +59,9 @@ function ReviewCard({
 }
 
 const TONE = { good: "add", bad: "del", wait: "warn", draft: "" } as const;
+
+const SIDES = ["review", "authored"] as const;
+type Side = (typeof SIDES)[number];
 
 /**
  * One of your pull requests and where it stands (REV-4): a word for what is
@@ -125,7 +129,6 @@ function ReviewList({
   title,
   count,
   more,
-  limit = 100,
   open,
   onToggle,
   children,
@@ -134,8 +137,6 @@ function ReviewList({
   title?: string;
   count?: string;
   more?: boolean;
-  /** How many GitHub was asked for, for the note when it had more. */
-  limit?: number;
   open: boolean;
   onToggle: () => void;
   children: ReactNode;
@@ -151,7 +152,7 @@ function ReviewList({
         <div className="review-list-body">
           {children}
           {more && (
-            <p className="review-note">Showing the {limit} most recently updated.</p>
+            <p className="review-note">Showing the 100 most recently updated.</p>
           )}
         </div>
       )}
@@ -177,12 +178,20 @@ export function ReviewsView() {
   const clearFocusReview = useStore((s) => s.clearFocusReview);
   const tasks = useStore((s) => s.tasks);
   const taskPrs = useStore((s) => s.prs);
+  // Two sides of review, one at a time: what waits on you, what you wait on.
+  const [side, setSideState] = useState<Side>(() => readOneOf("reviewsSide", SIDES, "review"));
+  const setSide = (next: Side) => {
+    setSideState(next);
+    write("reviewsSide", next);
+  };
 
   // A banner or a message about one pull request: open its list, bring it
   // into view and light it up briefly. It waits for the queue to arrive; one
   // no longer waiting on anybody simply is not there to find.
   useEffect(() => {
     if (!focusReview || !queue) return;
+    // Banners are only ever about requests of you or your team.
+    setSideState("review");
     const inTeam = queue.team?.prs.some((pr) => identity(pr) === focusReview);
     const inMine = queue.mine.some((pr) => identity(pr) === focusReview);
     if (inMine || inTeam) setShut((c) => ({ ...c, [inMine ? "you" : "team"]: false }));
@@ -248,99 +257,117 @@ export function ReviewsView() {
   const team = queue?.team ?? null;
   const authored = queue?.authored ?? null;
 
+  const toReview = queue
+    ? countOf(queue.mine.length + (team?.error ? 0 : team?.prs.length ?? 0), queue.mine_more || !!team?.more)
+    : undefined;
+  const yours = authored && !authored.error ? countOf(authored.prs.length, authored.more) : undefined;
+
   return (
     <div className="wide">
       <div className="wide-head">
         <h2>Reviews</h2>
-        <span className="sub">Waiting on your review, and yours waiting on others</span>
+        <span className="sub">
+          {side === "review" ? "Pull requests waiting on you or your team" : "Your pull requests, and what each is waiting on"}
+        </span>
         <div className="spacer" />
         {loading && <Spinner />}
         <button type="button" className="btn btn-sm" onClick={() => void refresh()}>Refresh</button>
       </div>
 
+      <div className="tabs sub-tabs">
+        <button type="button" className={side === "review" ? "active" : ""} onClick={() => setSide("review")}>
+          To review{toReview !== undefined && <span className="badge">{toReview}</span>}
+        </button>
+        <button type="button" className={side === "authored" ? "active" : ""} onClick={() => setSide("authored")}>
+          Opened by you{yours !== undefined && <span className="badge">{yours}</span>}
+        </button>
+      </div>
+
       {error && <p className="review-note warn">{error}</p>}
 
-      <ReviewList
-        heading="You"
-        count={queue ? countOf(queue.mine.length, queue.mine_more) : undefined}
-        more={queue?.mine_more}
-        open={!shut.you}
-        onToggle={() => toggle("you")}
-      >
-        {queue && queue.mine.length === 0 && (
-          <p className="review-note">Nothing is waiting on you.</p>
-        )}
-        {queue?.mine.map((pr) => (
-          <ReviewCard
-            key={`${pr.repo}#${pr.number}`}
-            pr={pr}
-            focused={focusReview === identity(pr)}
-            onContextMenu={(e) => openMenu(e, pr)}
-          />
-        ))}
-        {!queue && loading && <p className="review-note">Loading…</p>}
-      </ReviewList>
-
-      <ReviewList
-        heading="Opened by you"
-        count={authored && !authored.error ? countOf(authored.prs.length, authored.more) : undefined}
-        more={authored ? authored.more && !authored.error : false}
-        limit={50}
-        open={!shut.authored}
-        onToggle={() => toggle("authored")}
-      >
-        {authored?.error ? (
-          <p className="review-note warn">{authored.error}</p>
-        ) : authored && authored.prs.length === 0 ? (
-          <p className="review-note">You have no open pull requests.</p>
-        ) : (
-          authored?.prs.map((pr) => {
-            const task = taskOf(pr);
-            return (
-              <AuthoredCard
-                key={identity(pr)}
-                pr={pr}
-                task={task}
-                onContextMenu={(e) => openMenu(e, pr, task?.id)}
-              />
-            );
-          })
-        )}
-        {!queue && loading && <p className="review-note">Loading…</p>}
-      </ReviewList>
-
-      {team ? (
-        <ReviewList
-          heading={teamLabel(team)}
-          title={team.slug}
-          count={team.error ? undefined : countOf(team.prs.length, team.more)}
-          more={team.more && !team.error}
-          open={!shut.team}
-          onToggle={() => toggle("team")}
-        >
-          {team.error ? (
-            <p className="review-note warn">{team.error}</p>
-          ) : team.prs.length === 0 ? (
-            <p className="review-note">Nothing is waiting on {teamLabel(team)}.</p>
+      {side === "authored" && (
+        <div>
+          {authored?.error ? (
+            <p className="review-note warn">{authored.error}</p>
+          ) : authored && authored.prs.length === 0 ? (
+            <p className="review-note">You have no open pull requests.</p>
           ) : (
-            team.prs.map((pr) => (
+            authored?.prs.map((pr) => {
+              const task = taskOf(pr);
+              return (
+                <AuthoredCard
+                  key={identity(pr)}
+                  pr={pr}
+                  task={task}
+                  onContextMenu={(e) => openMenu(e, pr, task?.id)}
+                />
+              );
+            })
+          )}
+          {authored?.more && !authored.error && (
+            <p className="review-note">Showing the 50 most recently updated.</p>
+          )}
+          {!queue && loading && <p className="review-note">Loading…</p>}
+        </div>
+      )}
+
+      {side === "review" && (
+        <>
+          <ReviewList
+            heading="You"
+            count={queue ? countOf(queue.mine.length, queue.mine_more) : undefined}
+            more={queue?.mine_more}
+            open={!shut.you}
+            onToggle={() => toggle("you")}
+          >
+            {queue && queue.mine.length === 0 && (
+              <p className="review-note">Nothing is waiting on you.</p>
+            )}
+            {queue?.mine.map((pr) => (
               <ReviewCard
                 key={`${pr.repo}#${pr.number}`}
                 pr={pr}
                 focused={focusReview === identity(pr)}
                 onContextMenu={(e) => openMenu(e, pr)}
               />
-            ))
+            ))}
+            {!queue && loading && <p className="review-note">Loading…</p>}
+          </ReviewList>
+
+          {team ? (
+            <ReviewList
+              heading={teamLabel(team)}
+              title={team.slug}
+              count={team.error ? undefined : countOf(team.prs.length, team.more)}
+              more={team.more && !team.error}
+              open={!shut.team}
+              onToggle={() => toggle("team")}
+            >
+              {team.error ? (
+                <p className="review-note warn">{team.error}</p>
+              ) : team.prs.length === 0 ? (
+                <p className="review-note">Nothing is waiting on {teamLabel(team)}.</p>
+              ) : (
+                team.prs.map((pr) => (
+                  <ReviewCard
+                    key={`${pr.repo}#${pr.number}`}
+                    pr={pr}
+                    focused={focusReview === identity(pr)}
+                    onContextMenu={(e) => openMenu(e, pr)}
+                  />
+                ))
+              )}
+            </ReviewList>
+          ) : (
+            <ReviewList heading="Team" open={!shut.team} onToggle={() => toggle("team")}>
+              <p className="review-note">
+                Set a review team in Settings → GitHub — for example @fe — to list
+                pull requests requested of that team.
+              </p>
+              <button type="button" className="btn btn-sm" onClick={() => toggleSettings(true)}>Settings</button>
+            </ReviewList>
           )}
-        </ReviewList>
-      ) : (
-        <ReviewList heading="Team" open={!shut.team} onToggle={() => toggle("team")}>
-          <p className="review-note">
-            Set a review team in Settings → GitHub — for example @fe — to list
-            pull requests requested of that team.
-          </p>
-          <button type="button" className="btn btn-sm" onClick={() => toggleSettings(true)}>Settings</button>
-        </ReviewList>
+        </>
       )}
 
       {menu && (

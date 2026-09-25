@@ -227,6 +227,8 @@ textarea { resize: vertical; font-family: var(--mono); }
 }
 .tabs button:hover { background: transparent; color: var(--text); }
 .tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
+/* The same strip inside a padded view (Reviews), without the full-bleed panel. */
+.tabs.sub-tabs { padding: 0; margin: 0 0 14px; background: transparent; }
 .tabs .badge {
   margin-left: 5px;
   font-size: 11px;

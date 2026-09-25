@@ -25,6 +25,9 @@ pub struct AuthoredPr {
     pub url: String,
     pub draft: bool,
     pub updated_at: String,
+    /// Its branch, and the one it merges into: what a task for it is on.
+    pub head: String,
+    pub base: String,
     /// "passing", "failing", "pending", or "none" when nothing reports.
     pub checks: String,
     /// "approved", "changes_requested", "review_required", or "none".
@@ -53,7 +56,7 @@ impl GitHub {
             issueCount
             nodes {
               ... on PullRequest {
-                number title url isDraft updatedAt mergeable reviewDecision
+                number title url isDraft updatedAt mergeable reviewDecision headRefName baseRefName
                 repository { nameWithOwner }
                 commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
                 reviewRequests(first: 20) {
@@ -164,6 +167,8 @@ fn to_authored(v: &Value) -> Option<AuthoredPr> {
         url: text("/url"),
         draft: v.get("isDraft").and_then(|d| d.as_bool()).unwrap_or(false),
         updated_at: text("/updatedAt"),
+        head: text("/headRefName"),
+        base: text("/baseRefName"),
         checks: checks.into(),
         review: review.into(),
         approved_by,
@@ -187,6 +192,7 @@ mod tests {
             "number": 7, "title": "Retry the login", "url": "https://github.com/acme/api/pull/7",
             "isDraft": false, "updatedAt": "2026-09-25T10:00:00Z", "mergeable": "MERGEABLE",
             "reviewDecision": null, "repository": { "nameWithOwner": "acme/api" },
+            "headRefName": "DT-7-retry", "baseRefName": "main",
             "commits": { "nodes": [] },
             "reviewRequests": { "nodes": [] },
             "latestOpinionatedReviews": { "nodes": [] },
@@ -218,6 +224,7 @@ mod tests {
             "mergeable": "CONFLICTING",
         }));
         assert_eq!(pr.repo, "acme/api");
+        assert_eq!((pr.head.as_str(), pr.base.as_str()), ("DT-7-retry", "main"));
         assert_eq!(pr.checks, "failing");
         assert_eq!(pr.review, "review_required");
         assert_eq!(pr.waiting_on, vec!["ana", "@fe"]);

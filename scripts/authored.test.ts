@@ -38,11 +38,16 @@ describe("the task a pull request belongs to", () => {
   const row = (url: string, past: string[] = []) =>
     ({ pr: { url }, past: past.map((u) => ({ url: u })) }) as unknown as CheckoutPr;
   const prs = { "t-1": [row("https://x/pull/1")], "t-2": [row("https://x/pull/3", ["https://x/pull/2"])] };
+  const tasks = [{ id: "t-1", branch: "DT-1" }, { id: "t-3", branch: "DT-3" }];
+  const at = (url: string, head = "other") => ({ url, head });
   test("is found by its URL, open or earlier", () => {
-    expect(taskOfPr("https://x/pull/1", prs)).toBe("t-1");
-    expect(taskOfPr("https://x/pull/2", prs)).toBe("t-2");
+    expect(taskOfPr(at("https://x/pull/1"), prs, tasks)).toBe("t-1");
+    expect(taskOfPr(at("https://x/pull/2"), prs, tasks)).toBe("t-2");
+  });
+  test("is found by its branch before the sweep has seen it (REV-7)", () => {
+    expect(taskOfPr(at("https://x/pull/9", "DT-3"), prs, tasks)).toBe("t-3");
   });
   test("is none for one no task made", () => {
-    expect(taskOfPr("https://x/pull/9", prs)).toBeNull();
+    expect(taskOfPr(at("https://x/pull/9"), prs, tasks)).toBeNull();
   });
 });

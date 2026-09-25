@@ -117,6 +117,7 @@ mod slack;
 mod settings;
 mod ticket_flow;
 mod messages;
+mod pr_task;
 
 pub use projects::*;
 pub use repos::*;
@@ -130,6 +131,7 @@ pub use slack::*;
 pub use settings::*;
 pub use ticket_flow::*;
 pub use messages::*;
+pub use pr_task::*;
 
 #[cfg(test)]
 mod tests {

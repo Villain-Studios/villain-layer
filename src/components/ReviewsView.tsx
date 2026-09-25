@@ -1,5 +1,6 @@
 import { useEffect, useState, type MouseEvent, type ReactNode } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { api } from "../lib/api";
 import { copyText } from "../lib/clipboard";
 import { authoredStanding, taskOfPr } from "../lib/derive";
 import { goTo } from "../lib/goto";
@@ -64,8 +65,10 @@ const SIDES = ["review", "authored"] as const;
 type Side = (typeof SIDES)[number];
 
 /**
- * One of your pull requests and where it stands (REV-4): a word for what is
- * next, then each thing that decided it.
+ * One of your pull requests and where it stands (REV-4), and the way to act
+ * on it (REV-7): a click opens its task's Pull requests tab, where feedback
+ * goes to an agent; one with no task gets one on its branch. GitHub is the
+ * button in the corner.
  */
 function AuthoredCard({
   pr,
@@ -77,16 +80,46 @@ function AuthoredCard({
   onContextMenu: (e: MouseEvent) => void;
 }) {
   const fail = useStore((s) => s.fail);
+  const refreshTasks = useStore((s) => s.refreshTasks);
+  const refreshPrs = useStore((s) => s.refreshPrs);
+  const [starting, setStarting] = useState(false);
   const standing = authoredStanding(pr);
   const who = (names: string[]) => (names.length ? ` by ${names.join(", ")}` : "");
+  const openGitHub = () => void openUrl(pr.url).catch(fail);
+  const open = () => (task ? goTo(`pr:${task.id}`) : openGitHub());
+
+  async function start() {
+    setStarting(true);
+    try {
+      const made = await api.taskForPr(pr.repo, pr.head, pr.base, pr.title);
+      // In the list before going to it: a task the store has not seen yet
+      // routes to the overview instead.
+      await refreshTasks();
+      goTo(`pr:${made.id}`);
+      void refreshPrs();
+    } catch (e) {
+      fail(e);
+    } finally {
+      setStarting(false);
+    }
+  }
+
   return (
-    <button
-      type="button"
+    // A div, not a button: it holds buttons of its own.
+    <div
+      role="button"
+      tabIndex={0}
       className="review-card"
       data-review={identity(pr)}
-      onClick={() => void openUrl(pr.url).catch(fail)}
+      onClick={open}
+      onKeyDown={(e) => {
+        if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
+          e.preventDefault();
+          open();
+        }
+      }}
       onContextMenu={onContextMenu}
-      title={pr.url}
+      title={task ? `Open ${task.name}` : pr.url}
     >
       <div className="top">
         <span className="repo">{pr.repo}</span>
@@ -94,6 +127,14 @@ function AuthoredCard({
         <span className={`chip ${TONE[standing.tone]}`}>{standing.label}</span>
         <span className="spacer" />
         <span className="when">{ago(pr.updated_at)}</span>
+        <button
+          type="button"
+          className="btn btn-sm"
+          title={pr.url}
+          onClick={(e) => { e.stopPropagation(); openGitHub(); }}
+        >
+          GitHub ↗
+        </button>
       </div>
       <div className="title">{pr.title}</div>
       <div className="chips standing">
@@ -108,19 +149,20 @@ function AuthoredCard({
           <span className="chip warn">{pr.unresolved}{pr.unresolved_more ? "+" : ""} unresolved</span>
         )}
         {pr.conflicts && <span className="chip del">conflicts</span>}
-        {task && (
-          // Inside the card's button, so not a button of its own.
-          <span
-            className="chip task"
-            role="link"
-            title="Open the task's Pull requests tab"
-            onClick={(e) => { e.stopPropagation(); goTo(`pr:${task.id}`); }}
+        {task && <span className="chip task">{task.name}</span>}
+        {!task && (
+          <button
+            type="button"
+            className="btn btn-sm start"
+            disabled={starting}
+            title={`A task on ${pr.head}, to work on it here`}
+            onClick={(e) => { e.stopPropagation(); void start(); }}
           >
-            {task.name}
-          </span>
+            {starting ? <Spinner /> : "Start task"}
+          </button>
         )}
       </div>
-    </button>
+    </div>
   );
 }
 
@@ -231,7 +273,7 @@ export function ReviewsView() {
 
   /** The task a pull request of yours belongs to, if one of the app's made it. */
   function taskOf(pr: AuthoredPr): { id: string; name: string } | null {
-    const id = taskOfPr(pr.url, taskPrs);
+    const id = taskOfPr(pr, taskPrs, tasks);
     const task = id ? tasks.find((t) => t.id === id) : undefined;
     return task ? { id: task.id, name: task.name } : null;
   }

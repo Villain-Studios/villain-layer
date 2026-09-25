@@ -23,10 +23,70 @@ Nothing is public until you publish the draft.
    ```
 
 5. When the workflow is done, open the draft under Releases, read the
-   notes, and publish it.
+   notes, and publish it. Publishing it runs
+   [`tap.yml`](../.github/workflows/tap.yml), which puts it in the
+   Homebrew tap ([below](#homebrew)).
 
 A tag that failed can be deleted and pushed again once the fix is on
 `main`: `git push --delete origin v0.2.0`, then tag the new commit.
+
+## Homebrew
+
+The cask is written here, in
+[`packaging/homebrew/villain-layer.rb`](../packaging/homebrew/villain-layer.rb),
+and published to
+[Villain-Studios/homebrew-tap](https://github.com/Villain-Studios/homebrew-tap)
+by `tap.yml` when a release is published. It fills in the version and the
+.dmg's SHA-256, has `brew style` and `brew audit --online` check the
+result, and pushes it. Change the cask here: the tap's copy is overwritten.
+A prerelease is never put in the tap.
+
+The cask refuses to upgrade or uninstall while Villain Layer is running,
+for the same reason `release:mac` does. It requires macOS 27, the only one
+it has been tried on.
+
+### Setting up the tap, once
+
+1. Create the tap. Homebrew finds it only by the `homebrew-` prefix.
+
+   ```bash
+   gh repo create Villain-Studios/homebrew-tap --public --add-readme \
+     --description "Homebrew tap for Villain Layer"
+   ```
+
+2. Give the workflow a key that can push to the tap and nowhere else: a
+   deploy key with write access, whose private half is a secret here.
+
+   ```bash
+   ssh-keygen -t ed25519 -N "" -C "villain-layer tap.yml" -f tap-key
+   gh repo deploy-key add tap-key.pub -R Villain-Studios/homebrew-tap \
+     --allow-write --title "villain-layer tap.yml"
+   gh secret set HOMEBREW_TAP_DEPLOY_KEY -R Villain-Studios/villain-layer < tap-key
+   rm tap-key tap-key.pub
+   ```
+
+3. Put the current release in it: a release published before `tap.yml`
+   was in its tag does not run it.
+
+   ```bash
+   gh workflow run tap.yml -R Villain-Studios/villain-layer -f tag=v0.2.0
+   ```
+
+4. Try it the way everyone else will:
+
+   ```bash
+   brew tap villain-studios/tap
+   brew trust --cask villain-studios/tap/villain-layer
+   brew install --cask villain-layer
+   ```
+
+Homebrew runs nothing from a tap it has not been told to trust, and
+installing by the full name does not keep it trusted. Without `brew trust`,
+`brew upgrade` does not load the cask, and `brew uninstall` skips the check
+that the app is not running.
+
+Once releases are notarised, delete the first paragraph of the cask's
+`caveats`.
 
 ## Signing and notarisation
 

@@ -59,11 +59,22 @@ To build it, also:
 
 ## Install
 
-Download the `.dmg` from the
+With [Homebrew](https://brew.sh), on macOS 27:
+
+```bash
+brew tap villain-studios/tap
+brew trust --cask villain-studios/tap/villain-layer
+brew install --cask villain-layer
+```
+
+`brew upgrade` updates it. Quit Villain Layer first, and run it from a
+terminal outside the app: replacing the app while it runs kills it, and
+every agent running in it, so the cask refuses to.
+
+Or download the `.dmg` from the
 [latest release](https://github.com/Villain-Studios/villain-layer/releases/latest),
 open it, and drag Villain Layer to Applications. It runs on Apple silicon
-and Intel Macs. To update, quit Villain Layer first: replacing the app
-while it runs kills it, and every agent running in it.
+and Intel Macs. To update, quit Villain Layer first, for the same reason.
 
 Releases are not notarised by Apple, so macOS stops the app the first
 time with "Apple could not verify…": choose Done, then System Settings →

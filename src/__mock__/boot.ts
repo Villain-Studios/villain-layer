@@ -236,6 +236,31 @@ const answer: Record<string, Answer> = {
       };
     }),
   cleanup_plan: () => world.cleanup,
+  list_repo_notes: () =>
+    world.projects.map((p) => ({ project_id: p.id, notes: structuredClone(world.notes[p.id] ?? []) })),
+  add_repo_note: (a) => {
+    const list = (world.notes[a.projectId as string] ??= []);
+    const at = Date.now();
+    list.unshift({
+      id: `n${at}`, repo: "", text: (a.text as string).trim(), paths: a.paths as string[], written_at: at,
+      source: "you", written_commit: null, checked_at: at, checked_commit: null, changed: [],
+    });
+    return null;
+  },
+  edit_repo_note: (a) => {
+    const n = Object.values(world.notes).flat().find((x) => x.id === a.id);
+    if (n) Object.assign(n, { text: (a.text as string).trim(), paths: a.paths, checked_at: Date.now(), changed: [] });
+    return null;
+  },
+  check_repo_note: (a) => {
+    const n = Object.values(world.notes).flat().find((x) => x.id === a.id);
+    if (n) Object.assign(n, { checked_at: Date.now(), changed: n.paths.length ? [] : null });
+    return null;
+  },
+  delete_repo_note: (a) => {
+    for (const k of Object.keys(world.notes)) world.notes[k] = world.notes[k].filter((x) => x.id !== a.id);
+    return null;
+  },
   cleanup_apply: (a) => {
     const ids = a.ids as string[];
     const done: Cleaned[] = ids.map((id) => {

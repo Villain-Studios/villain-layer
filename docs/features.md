@@ -712,8 +712,8 @@ credentials themselves.
 | `forget_repo` | unregister a repo (never deletes files) | yes |
 | `create_task` | a task with no ticket | |
 | `open_prs` | push and open PRs for a task | yes |
-| `repo_notes` | a repository's notes, with what changed since each was checked (NOTE-5) | |
-| `remember` | keep a lasting fact about a repository, after asking the user (NOTE-1) | yes |
+| `repo_notes` | a repository's notes, with what changed since each was checked (MEM-5) | |
+| `remember` | keep a lasting fact about a repository, after asking the user (MEM-1) | yes |
 | `check_note` | say a note still holds, as of now | |
 | `forget_note` | remove a note that no longer holds, with a reason for the message center | yes |
 
@@ -776,7 +776,7 @@ Known gaps:
 
 | Where | What |
 |---|---|
-| `~/Library/Application Support/eu.codevillain.villain-layer/` | `config.json`: repos, tasks, settings, saved panes. `messages.json`: the message center (MSG-4). `notes.json`: repo notes (NOTE-7). At agent launch also `.mcp.json` (0600), `claude-hooks.json`, `copilot-plugin/`, `opencode-plugin.js` |
+| `~/Library/Application Support/eu.codevillain.villain-layer/` | `config.json`: repos, tasks, settings, saved panes. `messages.json`: the message center (MSG-4). `notes.json`: repo notes (MEM-7). At agent launch also `.mcp.json` (0600), `claude-hooks.json`, `copilot-plugin/`, `opencode-plugin.js` |
 | Keychain, service `eu.codevillain.villain-layer` | one item holding every token |
 | `~/.villain-worktrees/` (settable) | task folders, `_chat/` rooms, and `.repos/`: the app's own copy of each repo (REPO-4) |
 | a task folder | the worktrees, `AGENTS.md` and `CLAUDE.md` (task context), `TICKET.md` (PANE-13), `.mcp.json`, and `.gemini/settings.json`, `PR_DESCRIPTION.md`, `PR_FEEDBACK.md`, and hand-offs too long to type (`CONFLICTS.md`, `REVIEW_COMMENTS.md`, `PR_DRAFT_REQUEST.md`, `FIRST_PROMPT.md`, PANE-11) as they come up |
@@ -830,35 +830,35 @@ they stay on this machine and never go into the repository, whose own
 `AGENTS.md`/`CLAUDE.md` is where a team's knowledge belongs. Each repo in
 the Repos view has a Notes list, to read, edit, check and delete them.
 
-- **NOTE-1** A note MUST be about the repository, not a task: how to build
+- **MEM-1** A note MUST be about the repository, not a task: how to build
   or test it, a trap in its setup, where something lives, a convention its
   code keeps. An agent MUST ask the user whether it is worth remembering,
   quoting the note, before saving it, and `remember` needs `confirm: true`
   (MCP-3). A note is read into every later task on the repository as
   instructions, so one saved unasked, or planted by a ticket's text, would
   steer every agent after it.
-- **NOTE-2** A note MUST record when it was written, from which task and
+- **MEM-2** A note MUST record when it was written, from which task and
   agent, and the commit the default branch of the app's copy was at. It
   MAY name the paths it is about.
-- **NOTE-3** A note MUST show how likely it is to be out of date: when it
+- **MEM-3** A note MUST show how likely it is to be out of date: when it
   was last checked (being written counts), and, if it names paths, whether
   any of them changed on the default branch since the commit it was last
   checked at. Worked out when notes are read, never on a timer.
-- **NOTE-4** A task's context file MUST give the notes of each repository
+- **MEM-4** A task's context file MUST give the notes of each repository
   in it, most recently checked first, each with its age and whether its
   paths changed, up to 3 KB per repository, saying how many were left out.
   It tells agents that notes can be out of date: check one against the code
   before relying on it, then mark it checked, or ask the user to remove it.
-- **NOTE-5** Agents MUST be able to list a repository's notes
+- **MEM-5** Agents MUST be able to list a repository's notes
   (`repo_notes`), mark one checked at the current commit (`check_note`),
   and remove one with a reason (`forget_note`, `confirm: true`, after
   asking the user). A note is corrected by forgetting it and remembering
   the new one.
-- **NOTE-6** The Repos view MUST show each repo's notes: the text, when it
+- **MEM-6** The Repos view MUST show each repo's notes: the text, when it
   was written and last checked, where it came from, and whether its paths
   changed since. Each can be edited (which counts as checking it), marked
   checked, or deleted, and a note can be added by hand.
-- **NOTE-7** Notes MUST live in `notes.json` beside `config.json`, never in
+- **MEM-7** Notes MUST live in `notes.json` beside `config.json`, never in
   `config.json` itself. At most 50 per repository and 500 characters per
   note; `remember` past either says so rather than dropping the oldest.
   A note belongs to the repository, not to its registration: notes are

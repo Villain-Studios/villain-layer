@@ -75,7 +75,7 @@ pub fn same_remote(a: &str, b: &str) -> bool {
 
 /// A remote URL spelled one way for every way of spelling it (`same_remote`):
 /// `host/org/api`, or the path itself for a remote on disk. What a repo note
-/// is kept by, so it outlives the repo's registration (NOTE-7).
+/// is kept by, so it outlives the repo's registration (MEM-7).
 pub fn remote_key(url: &str) -> String {
     let url = url.trim().trim_end_matches('/');
     let url = url.strip_suffix(".git").unwrap_or(url);

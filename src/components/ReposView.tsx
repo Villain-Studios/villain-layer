@@ -1,12 +1,14 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { api } from "../lib/api";
 import { ago } from "../lib/time";
 import { useNow, useStore } from "../store";
 import { groupProjects, repoTrouble, updateByFor } from "../lib/derive";
-import type { Project, RepoHealth, Synced, UpdateBy } from "../lib/types";
+import type { Project, RepoHealth, RepoNote, Synced, UpdateBy } from "../lib/types";
 import { AddRepos } from "./AddRepos";
 import { CleanUp } from "./CleanUp";
+import { RepoNotes } from "./RepoNotes";
 import { ChevronIcon } from "./icons";
 import { Combo, Confirm, Spinner } from "./ui";
 
@@ -26,6 +28,8 @@ export function ReposView() {
   const [shut, setShut] = useState<Record<string, boolean>>({});
   const [syncing, setSyncing] = useState<Set<string>>(new Set());
   const [synced, setSynced] = useState<Record<string, Synced>>({});
+  const [notes, setNotes] = useState<Record<string, RepoNote[]>>({});
+  const [notesOpen, setNotesOpen] = useState<Set<string>>(new Set());
   const [confirming, setConfirming] = useState<{
     title: string;
     body: ReactNode;
@@ -37,6 +41,18 @@ export function ReposView() {
   // Read again whenever the view opens: what it says is only as fresh as
   // the last look (REPO-5).
   useEffect(() => { void refreshRepoHealth().catch(fail); }, [refreshRepoHealth, fail]);
+
+  // Read when the view opens and whenever an agent changes one (MEM-6).
+  const loadNotes = useCallback(() => {
+    void api.listRepoNotes()
+      .then((rows) => setNotes(Object.fromEntries(rows.map((r) => [r.project_id, r.notes]))))
+      .catch(fail);
+  }, [fail]);
+  useEffect(() => {
+    loadNotes();
+    const p = listen("notes:changed", loadNotes);
+    return () => { void p.then((un) => un()); };
+  }, [loadNotes]);
 
   const groups = groupProjects(projects);
   const groupNames = [...new Set(projects.map((p) => p.group).filter(Boolean))] as string[];
@@ -238,6 +254,9 @@ export function ReposView() {
             ).length;
             const row = synced[p.id];
             const busy = syncing.has(p.id);
+            const noted = notes[p.id] ?? [];
+            const stale = noted.filter((n) => n.changed?.length).length;
+            const showNotes = notesOpen.has(p.id);
             return (
               <div key={p.id} className={`repo-manage${problem ? " trouble" : ""}`}>
                 <div className="repo-line">
@@ -257,6 +276,19 @@ export function ReposView() {
                       if ((v.trim() || null) !== p.group) void setGroup(p.id, v);
                     }}
                   />
+                  <button
+                    className={`btn btn-sm${showNotes ? " active" : ""}${stale ? " notes-stale" : ""}`}
+                    title={stale
+                      ? `${stale} to check: files ${stale === 1 ? "it is" : "they are"} about changed since ${stale === 1 ? "it was" : "they were"} last checked`
+                      : "What agents learned about this repository"}
+                    onClick={() => setNotesOpen((s) => {
+                      const next = new Set(s);
+                      if (!next.delete(p.id)) next.add(p.id);
+                      return next;
+                    })}
+                  >
+                    {noted.length ? `${noted.length} note${noted.length === 1 ? "" : "s"}` : "Notes"}
+                  </button>
                   <button className="btn btn-sm" disabled={busy} onClick={() => void sync([p.id])}>
                     {busy ? <span className="btn-busy"><Spinner />Syncing…</span> : "Sync"}
                   </button>
@@ -287,6 +319,7 @@ export function ReposView() {
                   </div>
                 )}
                 {row && <div className={`repo-synced${row.ok ? "" : " failed"}`}>{row.detail}</div>}
+                {showNotes && <RepoNotes project={p} notes={noted} onChanged={loadNotes} />}
               </div>
             );
           })}

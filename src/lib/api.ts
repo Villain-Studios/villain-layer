@@ -19,6 +19,7 @@ import type {
   JiraTransition,
   PaneInfo,
   Project,
+  ProjectNotes,
   ProjectStatus,
   RepoBranchFacts,
   RepoCommits,
@@ -66,6 +67,13 @@ export const api = {
   syncRepos: (projectIds: string[]) => invoke<Synced[]>("sync_repos", { projectIds }),
   cleanupPlan: () => invoke<CleanupItem[]>("cleanup_plan"),
   cleanupApply: (ids: string[]) => invoke<Cleaned[]>("cleanup_apply", { ids }),
+  listRepoNotes: () => invoke<ProjectNotes[]>("list_repo_notes"),
+  addRepoNote: (projectId: string, text: string, paths: string[]) =>
+    invoke<void>("add_repo_note", { projectId, text, paths }),
+  editRepoNote: (id: string, text: string, paths: string[]) =>
+    invoke<void>("edit_repo_note", { id, text, paths }),
+  checkRepoNote: (id: string) => invoke<void>("check_repo_note", { id }),
+  deleteRepoNote: (id: string) => invoke<void>("delete_repo_note", { id }),
 
   // tasks
   listTasks: (focus?: string | null) =>

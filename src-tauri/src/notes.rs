@@ -1,4 +1,4 @@
-//! Repo notes (NOTE-1…7): what agents learned about a repository that holds
+//! Repo notes (MEM-1…7): what agents learned about a repository that holds
 //! beyond one task, kept for the next task on it.
 //!
 //! Every task started cold, so each agent relearned the same repository:
@@ -142,6 +142,17 @@ impl Book {
         Ok(note.clone())
     }
 
+    fn edit(&mut self, id: &str, text: &str, paths: &[String], commit: Option<String>, now: i64) -> Result<Note> {
+        let text = clean_text(text)?;
+        let paths = clean_paths(paths)?;
+        let note = self.find(id)?;
+        note.text = text;
+        note.paths = paths;
+        note.checked_at = now;
+        note.checked_commit = commit.or(note.checked_commit.take());
+        Ok(note.clone())
+    }
+
     fn forget(&mut self, id: &str) -> Result<Note> {
         let at = self
             .notes
@@ -217,6 +228,11 @@ impl Notes {
         self.change(|book, now| book.check(id, commit, now))
     }
 
+    /// Editing a note is checking it: whoever rewrote it read it.
+    pub fn edit(&self, id: &str, text: &str, paths: &[String], commit: Option<String>) -> Result<Note> {
+        self.change(|book, now| book.edit(id, text, paths, commit, now))
+    }
+
     pub fn forget(&self, id: &str) -> Result<Note> {
         self.change(|book, _| book.forget(id))
     }
@@ -230,6 +246,13 @@ impl Notes {
         crate::config::write_whole(&self.path, &book.to_json()?)?;
         Ok(out)
     }
+}
+
+/// Say the notes changed, so an open Repos view reads them again. For a
+/// change an agent made; the view reads again after its own.
+pub fn changed(app: &tauri::AppHandle) {
+    use tauri::Emitter;
+    let _ = app.emit("notes:changed", ());
 }
 
 #[cfg(test)]
@@ -295,6 +318,16 @@ mod tests {
         let mut book = Book::default();
         let n = book.add(New { commit: Some("aaa".into()), ..new("r", "t") }, 1).expect("added");
         assert_eq!(book.check(&n.id, None, 2).expect("checked").checked_commit.as_deref(), Some("aaa"));
+    }
+
+    #[test]
+    fn editing_a_note_counts_as_checking_it() {
+        let mut book = Book::default();
+        let n = book.add(New { commit: Some("aaa".into()), ..new("r", "old") }, 1).expect("added");
+        let edited = book.edit(&n.id, " new ", &["db".into()], Some("bbb".into()), 5).expect("edited");
+        assert_eq!((edited.text.as_str(), edited.checked_at), ("new", 5));
+        assert_eq!(edited.checked_commit.as_deref(), Some("bbb"));
+        assert!(book.edit(&n.id, "", &[], None, 6).is_err(), "an empty note is refused");
     }
 
     #[test]

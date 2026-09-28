@@ -1066,6 +1066,9 @@ textarea { resize: vertical; font-family: var(--mono); }
 }
 .review-list-head:hover { background: var(--panel-2); }
 .review-list-head .title { font-weight: 600; font-size: 13.5px; }
+.review-list-head .title.add { color: var(--green); }
+.review-list-head .title.del { color: var(--red); }
+.review-list-head .title.warn { color: var(--amber); }
 .review-list-head .count {
   color: var(--dimmer);
   font-size: 12px;

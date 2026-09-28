@@ -287,6 +287,27 @@ export function authoredStanding(pr: AuthoredPr): { label: string; tone: "good" 
   return { label: "ready to merge", tone: "good" };
 }
 
+type Standing = ReturnType<typeof authoredStanding>;
+
+/** Your move first, then what waits on others; drafts wait on nobody. */
+const GROUP_ORDER = ["needs you", "ready to merge", "checks running", "waiting on review", "draft"];
+
+/**
+ * Your pull requests grouped by where they stand (REV-8), in the order they
+ * are shown, leaving out groups with nothing in them. Each keeps the order
+ * it was given, which is most recently updated first.
+ */
+export function authoredGroups<T extends AuthoredPr>(prs: T[]): { standing: Standing; prs: T[] }[] {
+  const groups = new Map<string, { standing: Standing; prs: T[] }>();
+  for (const pr of prs) {
+    const standing = authoredStanding(pr);
+    const group = groups.get(standing.label) ?? { standing, prs: [] };
+    group.prs.push(pr);
+    groups.set(standing.label, group);
+  }
+  return GROUP_ORDER.flatMap((label) => groups.get(label) ?? []);
+}
+
 /**
  * The task whose pull request this is, if the app has one: by its URL once
  * the PR sweep has seen it, else by its branch, as `task_for_pr` finds it —

@@ -609,6 +609,11 @@ a banner or message about a review request opens "To review".
   linked as the ticket when Jira is connected. A task already on that
   branch is opened instead, with the repo added if it lacked it. A PR in a
   repo that is not registered says so, and makes nothing.
+- **REV-8** "Opened by you" MUST group your PRs by whose move it is, in
+  this order: needs you, ready to merge, checks running, waiting on
+  review, drafts. A group with nothing in it is not shown. Each group can
+  be folded, and keeps the most recently updated first. A flat list of a
+  dozen PRs hid the two that needed you among the drafts.
 
 Code: `commands/github.rs` (`review_queue`, `github_review_queue`),
 `integrations/github/authored.rs`, `commands/pr_task.rs`, `ReviewsView.tsx`.

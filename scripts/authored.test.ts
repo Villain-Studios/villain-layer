@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { authoredStanding, taskOfPr } from "../src/lib/derive";
+import { authoredGroups, authoredStanding, taskOfPr } from "../src/lib/derive";
 import type { AuthoredPr, CheckoutPr } from "../src/lib/types";
 
 function pr(extra: Partial<AuthoredPr> = {}): AuthoredPr {
@@ -49,5 +49,22 @@ describe("the task a pull request belongs to", () => {
   });
   test("is none for one no task made", () => {
     expect(taskOfPr(at("https://x/pull/9"), prs, tasks)).toBeNull();
+  });
+});
+
+describe("your pull requests, grouped by whose move it is (REV-8)", () => {
+  const at = (number: number, extra: Partial<AuthoredPr>) => pr({ number, ...extra });
+  test("your move first, drafts last, and no empty groups", () => {
+    const groups = authoredGroups([
+      at(1, { draft: true }),
+      at(2, { review: "review_required", approved_by: [] }),
+      at(3, { conflicts: true }),
+      at(4, {}),
+    ]);
+    expect(groups.map((g) => g.standing.label)).toEqual(["needs you", "ready to merge", "waiting on review", "draft"]);
+  });
+  test("a group keeps the order it was given, most recently updated first", () => {
+    const groups = authoredGroups([at(5, { unresolved: 1 }), at(6, {}), at(7, { checks: "failing" })]);
+    expect(groups[0].prs.map((p) => p.number)).toEqual([5, 7]);
   });
 });

@@ -2,7 +2,7 @@ import { useEffect, useState, type MouseEvent, type ReactNode } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api } from "../lib/api";
 import { copyText } from "../lib/clipboard";
-import { authoredStanding, taskOfPr } from "../lib/derive";
+import { authoredGroups, taskOfPr } from "../lib/derive";
 import { goTo } from "../lib/goto";
 import { readOneOf, write } from "../lib/persist";
 import { ago } from "../lib/time";
@@ -61,6 +61,11 @@ function ReviewCard({
 
 const TONE = { good: "add", bad: "del", wait: "warn", draft: "" } as const;
 
+/** A group's heading (REV-8): its standing, as a title. */
+function groupHeading(label: string): string {
+  return label === "draft" ? "Drafts" : label[0].toUpperCase() + label.slice(1);
+}
+
 const SIDES = ["review", "authored"] as const;
 type Side = (typeof SIDES)[number];
 
@@ -68,7 +73,7 @@ type Side = (typeof SIDES)[number];
  * One of your pull requests and where it stands (REV-4), and the way to act
  * on it (REV-7): a click opens its task's Pull requests tab, where feedback
  * goes to an agent; one with no task gets one on its branch. GitHub is the
- * button in the corner.
+ * button in the corner. Where it stands is the heading of its group (REV-8).
  */
 function AuthoredCard({
   pr,
@@ -83,7 +88,6 @@ function AuthoredCard({
   const refreshTasks = useStore((s) => s.refreshTasks);
   const refreshPrs = useStore((s) => s.refreshPrs);
   const [starting, setStarting] = useState(false);
-  const standing = authoredStanding(pr);
   const who = (names: string[]) => (names.length ? ` by ${names.join(", ")}` : "");
   const openGitHub = () => void openUrl(pr.url).catch(fail);
   const open = () => (task ? goTo(`pr:${task.id}`) : openGitHub());
@@ -124,7 +128,6 @@ function AuthoredCard({
       <div className="top">
         <span className="repo">{pr.repo}</span>
         <span className="num">#{pr.number}</span>
-        <span className={`chip ${TONE[standing.tone]}`}>{standing.label}</span>
         <span className="spacer" />
         <span className="when">{ago(pr.updated_at)}</span>
         <button
@@ -168,6 +171,7 @@ function AuthoredCard({
 
 function ReviewList({
   heading,
+  tone,
   title,
   count,
   more,
@@ -176,6 +180,7 @@ function ReviewList({
   children,
 }: {
   heading: string;
+  tone?: string;
   title?: string;
   count?: string;
   more?: boolean;
@@ -187,7 +192,7 @@ function ReviewList({
     <section className="review-list" title={title}>
       <button type="button" className="review-list-head" onClick={onToggle}>
         <span className={`chev${open ? " open" : ""}`}><ChevronIcon /></span>
-        <span className="title">{heading}</span>
+        <span className={`title${tone ? ` ${tone}` : ""}`}>{heading}</span>
         {count !== undefined && <span className="count">{count}</span>}
       </button>
       {open && (
@@ -334,17 +339,29 @@ export function ReviewsView() {
           ) : authored && authored.prs.length === 0 ? (
             <p className="review-note">You have no open pull requests.</p>
           ) : (
-            authored?.prs.map((pr) => {
-              const task = taskOf(pr);
-              return (
-                <AuthoredCard
-                  key={identity(pr)}
-                  pr={pr}
-                  task={task}
-                  onContextMenu={(e) => openMenu(e, pr, task?.id)}
-                />
-              );
-            })
+            authored &&
+            authoredGroups(authored.prs).map(({ standing, prs }) => (
+              <ReviewList
+                key={standing.label}
+                heading={groupHeading(standing.label)}
+                tone={TONE[standing.tone]}
+                count={String(prs.length)}
+                open={!shut[`authored:${standing.label}`]}
+                onToggle={() => toggle(`authored:${standing.label}`)}
+              >
+                {prs.map((pr) => {
+                  const task = taskOf(pr);
+                  return (
+                    <AuthoredCard
+                      key={identity(pr)}
+                      pr={pr}
+                      task={task}
+                      onContextMenu={(e) => openMenu(e, pr, task?.id)}
+                    />
+                  );
+                })}
+              </ReviewList>
+            ))
           )}
           {authored?.more && !authored.error && (
             <p className="review-note">Showing the 50 most recently updated.</p>

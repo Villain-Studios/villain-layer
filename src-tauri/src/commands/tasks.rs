@@ -711,10 +711,19 @@ pub(crate) fn add_checkout_inner(
     // Match whatever the rest of the task was cut from when they agree; a
     // later repo joining work aimed at `develop` should not silently land on
     // `main` just because that is its own default.
-    let shared = existing.first().map(|c| c.base.as_str()).filter(|&b| {
-        existing.iter().all(|c| c.base == b)
-    });
-    create_checkout(state, &task, &project, &mut taken, shared, false)
+    // But only when this repo has that branch: a task on `development` refused
+    // a repo whose own line is `dev` with "invalid reference: development",
+    // and there was no way to add it at all.
+    let shared = existing
+        .first()
+        .map(|c| c.base.as_str())
+        .filter(|&b| existing.iter().all(|c| c.base == b))
+        .filter(|&b| {
+            let repo = super::repo_for(state, &project);
+            git::fetch_bases(&[(repo.clone(), b.to_string())]);
+            git::default_tip(&repo, b).is_some()
+        });
+    create_checkout(state, &task, &project, &mut taken, shared, shared.is_some())
 }
 
 /// Off the command thread for the same reason `delete_task` is: this stops
@@ -1002,3 +1011,110 @@ fn delete_task_inner(state: &AppState, id: String, force: bool) -> Result<Vec<Re
     Ok(results)
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::AppConfig;
+
+    fn git(dir: &Path, args: &[&str]) -> String {
+        crate::git::run_for_tests(dir, args).unwrap().trim().to_string()
+    }
+
+    /// GitHub as a bare repo, and the user's clone of it with each of
+    /// `branches` pushed; the first is the default.
+    fn github_and_clone(root: &Path, name: &str, branches: &[&str]) -> PathBuf {
+        let remote = root.join(format!("acme/{name}.git"));
+        std::fs::create_dir_all(&remote).unwrap();
+        git(&remote, &["init", "-q", "--bare", "-b", branches[0]]);
+        let clone = root.join(name);
+        git(root, &["clone", "-q", &format!("file://{}", remote.display()), clone.to_str().unwrap()]);
+        git(&clone, &["config", "user.email", "me@work.example"]);
+        git(&clone, &["config", "user.name", "Me"]);
+        git(&clone, &["switch", "-q", "-c", branches[0]]);
+        std::fs::write(clone.join("a.txt"), "one\n").unwrap();
+        git(&clone, &["add", "-A"]);
+        git(&clone, &["commit", "-qm", "init"]);
+        for b in branches {
+            git(&clone, &["push", "-q", "origin", &format!("HEAD:refs/heads/{b}")]);
+        }
+        clone
+    }
+
+    fn project(id: &str, clone: &Path, default_branch: &str) -> Project {
+        Project {
+            id: id.into(),
+            name: id.into(),
+            path: clone.to_string_lossy().to_string(),
+            default_branch: default_branch.into(),
+            group: None,
+            store: None,
+            update_by: None,
+        }
+    }
+
+    fn state(root: &Path, projects: Vec<Project>) -> AppState {
+        let cfg = AppConfig {
+            worktree_root: Some(root.join("worktrees").to_string_lossy().to_string()),
+            projects,
+            ..Default::default()
+        };
+        AppState {
+            config: ConfigStore::for_tests(root.join("config.json"), cfg),
+            ptys: crate::pty::PtyManager::default(),
+            jira_types: Default::default(),
+            epic_field_missing: Default::default(),
+            pending_notices: Default::default(),
+            status_cache: Default::default(),
+            news: Default::default(),
+            messages: crate::messages::Messages::for_tests(root.join("messages.json")),
+            notes: crate::notes::Notes::load(root),
+        }
+    }
+
+    fn task_on(state: &AppState, project_id: &str, base: &str) -> Task {
+        new_task(
+            state,
+            NewTask {
+                name: "Serve the spec".into(),
+                project_ids: vec![project_id.into()],
+                branch: Some("ACME-1-spec".into()),
+                branch_suffix: None,
+                base: Some(base.into()),
+                issue_key: None,
+                issue_url: None,
+                epic_key: None,
+            },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_repo_without_the_tasks_base_joins_on_its_own_default() {
+        let root = std::env::temp_dir().join(format!("vl-tasks-{}", uuid::Uuid::new_v4()));
+        let api = github_and_clone(&root, "api", &["main", "development"]);
+        let portal = github_and_clone(&root, "portal", &["dev"]);
+        let state = state(&root, vec![project("api", &api, "main"), project("portal", &portal, "dev")]);
+        let task = task_on(&state, "api", "development");
+
+        let added = add_checkout_inner(&state, &task.id, "portal").unwrap();
+
+        assert_eq!(added.base, "dev");
+        assert_eq!(git(Path::new(&added.path), &["rev-parse", "--abbrev-ref", "HEAD"]), "ACME-1-spec");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_repo_that_has_the_tasks_base_joins_on_it() {
+        let root = std::env::temp_dir().join(format!("vl-tasks-{}", uuid::Uuid::new_v4()));
+        let api = github_and_clone(&root, "api", &["main", "develop"]);
+        let web = github_and_clone(&root, "web", &["main", "develop"]);
+        let state = state(&root, vec![project("api", &api, "main"), project("web", &web, "main")]);
+        let task = task_on(&state, "api", "develop");
+
+        let added = add_checkout_inner(&state, &task.id, "web").unwrap();
+
+        assert_eq!(added.base, "develop");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}

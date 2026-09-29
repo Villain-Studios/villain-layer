@@ -136,7 +136,9 @@ the repo count, running agents, uncommitted changes and the review verdict.
 - **TASK-5** A second task for a ticket that already has one MUST need a
   branch suffix.
 - **TASK-6** Adding a repo to a task MUST tell the task's running agents,
-  typed into each, and rewrite the folder's context files. Removing one
+  typed into each, and rewrite the folder's context files. The new
+  checkout is cut from the base the rest of the task shares, when this
+  repo has that branch, and otherwise from its own default branch. Removing one
   stops panes in that checkout, and refuses when it has uncommitted changes
   unless forced.
 - **TASK-7** Deleting a task MUST check for uncommitted changes *before*

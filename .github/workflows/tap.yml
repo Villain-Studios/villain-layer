@@ -54,6 +54,11 @@ jobs:
       # What `brew install` will read: its style, and --online downloads the
       # .dmg and checks it against the SHA-256.
       - name: Homebrew accepts it
+        # Homebrew does not read GH_TOKEN. Unauthenticated, --online shares
+        # the runner's 60 GitHub API calls an hour with every other job on
+        # that address, and v0.3.0's audit failed on the limit.
+        env:
+          HOMEBREW_GITHUB_API_TOKEN: ${{ github.token }}
         run: |
           brew update --quiet
           brew tap-new --no-git villain-studios/check

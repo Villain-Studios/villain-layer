@@ -332,9 +332,11 @@ push.
   release. Running out of budget is exactly when an agent cannot summarise
   itself, so the briefing is built from git and the terminal instead.
 - **The ticket is the hub.** Sibling PRs are linked through one comment on
-  the Jira ticket, not to each other. Cross-linking N PRs needs a second
-  pass over every body once they all exist, and it rots when a repo is
-  added. The ticket is already where non-engineers look.
+  the Jira ticket, which is already where non-engineers look. Each PR also
+  lists the others, since a reviewer of one side could not otherwise tell
+  from GitHub that there was another. That list is a marked section of the
+  body, written in a second pass once every PR exists and rewritten in all
+  of them whenever a repo's PR joins the set, so it does not go stale.
 - **Chat is the user's own CLI in a terminal**, not a chat UI. No second API
   key, no second set of tool integrations, and the user's own MCP servers
   come along.

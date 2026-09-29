@@ -739,9 +739,10 @@ export function PrPanel({
           )}
 
           <div className="muted" style={{ lineHeight: 1.55 }}>
-            Opens one PR per repository with changes, all from <code>{task.branch}</code>.
+            Opens one PR per repository with changes, all from <code>{task.branch}</code>, with this
+            title and description. When there is more than one, each PR lists the others below it.
             {task.issue_key
-              ? ` The links are then posted back to ${task.issue_key} as a single comment, so the ticket is where the set stays joined up.`
+              ? ` The links are also posted back to ${task.issue_key} as a single comment.`
               : ""}
           </div>
         </Modal>

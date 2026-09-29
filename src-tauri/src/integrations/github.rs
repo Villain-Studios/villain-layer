@@ -10,8 +10,10 @@ use crate::error::{Error, Result};
 
 mod authored;
 mod hunk;
+mod siblings;
 pub use authored::AuthoredPr;
 pub use hunk::CodeLine;
+pub use siblings::Sibling;
 
 pub struct GitHub {
     api_url: String,

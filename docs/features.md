@@ -450,8 +450,11 @@ send feedback to an agent, and finish a merged task.
   is already open. A repo with only uncommitted changes is refused: the app
   never commits for you here.
 - **PR-2** PRs this call opened MUST be linked on the Jira ticket as a
-  comment, and posted to Slack if that is on. A failed link is reported,
-  not swallowed.
+  comment, and posted to Slack if that is on. When the call opens a PR and
+  the task has more than one open, every one of them MUST list the others
+  in its description, in a marked section the app rewrites; the rest of
+  the description is left as written. A failed link is reported, not
+  swallowed.
 - **PR-3** Push MUST go through `git::push`, with the lease when there is
   one (UPD-4). Never `--force`. Pushes run in every repo at once.
 - **PR-4** The description can be drafted. A one-shot model run gets the

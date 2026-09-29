@@ -896,16 +896,8 @@ pub fn send_pr_feedback(
 
 pub(crate) const FEEDBACK_FILE: &str = "PR_FEEDBACK.md";
 
-#[derive(Debug, Serialize)]
-pub struct OpenedPr {
-    pub repo: String,
-    pub url: String,
-    pub number: u64,
-}
-
 /// Push and open a PR in every repository that has changes, then post the whole
-/// set back to the Jira ticket and Slack. The ticket is the hub: sibling PRs are
-/// linked through it rather than to each other.
+/// set back to the Jira ticket and Slack, and list in each PR the others.
 #[tauri::command]
 pub async fn github_open_prs(
     state: State<'_, AppState>,
@@ -918,7 +910,10 @@ pub async fn github_open_prs(
     let (client, _) = github_client(&state)?;
 
     let mut results = Vec::new();
-    let mut opened: Vec<OpenedPr> = Vec::new();
+    let mut opened: Vec<github::Sibling> = Vec::new();
+    // Every open PR of the task, new or not: one opened earlier does not know
+    // about a repo added since.
+    let mut set: Vec<github::Sibling> = Vec::new();
 
     for checkout in state.config.checkouts_of(&task_id) {
         let dir = PathBuf::from(&checkout.path);
@@ -961,7 +956,7 @@ pub async fn github_open_prs(
         // new ones are announced: an existing PR was posted to the ticket and
         // the channel when it was opened, and saying so again on every press
         // of the button is noise that makes the real announcements look alike.
-        let outcome: Result<(OpenedPr, bool)> = async {
+        let outcome: Result<(github::Sibling, bool)> = async {
             // A push is a network round trip with no timeout of its own; on
             // the async workers it held up the MCP server until git gave up.
             let (owner, name) = {
@@ -996,8 +991,10 @@ pub async fn github_open_prs(
                 ),
             };
             Ok((
-                OpenedPr {
+                github::Sibling {
                     repo: repo.clone(),
+                    owner,
+                    name,
                     url: pr.url,
                     number: pr.number,
                 },
@@ -1018,6 +1015,7 @@ pub async fn github_open_prs(
                         format!("#{} already open, pushed", pr.number)
                     },
                 });
+                set.push(pr.clone());
                 if new {
                     opened.push(pr);
                 }
@@ -1028,6 +1026,17 @@ pub async fn github_open_prs(
                 ok: false,
                 detail: e.to_string(),
             }),
+        }
+    }
+
+    if !opened.is_empty() && set.len() > 1 {
+        for (repo, e) in client.link_siblings(&set, task.issue_key.as_deref()).await {
+            results.push(RepoResult {
+                checkout_id: repo.clone(),
+                repo,
+                ok: false,
+                detail: format!("the PR is open, but listing the others in it failed ({e})"),
+            });
         }
     }
 

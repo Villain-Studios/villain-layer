@@ -1,9 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../lib/api";
 import { useStore } from "../store";
 import { updateByFor } from "../lib/derive";
 import type { RepoUpdate, TaskView, UpdateBy } from "../lib/types";
-import { Modal, Spinner } from "./ui";
+import { Combo, Modal, Spinner } from "./ui";
 import { AgentTargetFields, useAgentTarget } from "./AgentTarget";
 
 const OUTCOME_DOT: Record<RepoUpdate["outcome"], string> = {
@@ -39,7 +39,30 @@ export function UpdateFromBase({ task, onClose }: { task: TaskView; onClose: () 
   const health = useStore((s) => s.repoHealth);
   const toast = useStore((s) => s.toast);
   const fail = useStore((s) => s.fail);
+  const githubConnected = useStore((s) => s.settings?.github_connected ?? false);
+  const setTaskPrs = useStore((s) => s.setTaskPrs);
   const at = useAgentTarget(task);
+
+  /**
+   * What each repo's base field offers: its origin branches as last fetched.
+   *
+   * The base is changed here, where it is read. Only the Open pull request
+   * dialog had the field, and that is shut once every repo has a PR, so a
+   * base merged and deleted upstream could not be moved off at all (UPD-8).
+   */
+  const [branches, setBranches] = useState<Record<string, string[]>>({});
+  const existing = task.checkouts.filter((c) => c.exists).map((c) => c.id).join(",");
+  useEffect(() => {
+    let stop = false;
+    void (async () => {
+      const ids = existing.split(",").filter(Boolean);
+      const lists = await Promise.all(
+        ids.map((id) => api.checkoutBranches(id).catch(() => [] as string[])),
+      );
+      if (!stop) setBranches(Object.fromEntries(ids.map((id, i) => [id, lists[i]])));
+    })();
+    return () => { stop = true; };
+  }, [existing]);
 
   const [picked, setPicked] = useState<Set<string>>(
     () => new Set(task.checkouts.filter((c) => c.exists).map((c) => c.id)),
@@ -98,6 +121,24 @@ export function UpdateFromBase({ task, onClose }: { task: TaskView; onClose: () 
     }
   }
 
+  async function setBase(checkoutId: string, base: string) {
+    const was = task.checkouts.find((c) => c.id === checkoutId)?.base;
+    if (!base.trim() || base.trim() === was) return;
+    try {
+      await api.setCheckoutBase(checkoutId, base);
+      // The Pull requests tab reads the base from its own rows, and offered
+      // to move the PR back onto the old one until the next sweep.
+      await Promise.all([
+        refreshTasks().catch(() => {}),
+        githubConnected
+          ? api.githubTaskPrs(task.id).then((rows) => setTaskPrs(task.id, rows)).catch(() => {})
+          : null,
+      ]);
+    } catch (e) {
+      fail(e);
+    }
+  }
+
   async function abort(checkoutId: string) {
     setBusy(true);
     try {
@@ -123,6 +164,10 @@ export function UpdateFromBase({ task, onClose }: { task: TaskView; onClose: () 
       setBusy(false);
     }
   }
+
+  /** Only once the list is in: an empty one is a repo not yet listed. */
+  const gone = (id: string, base: string) =>
+    (branches[id]?.length ?? 0) > 0 && !branches[id].includes(base);
 
   const running = at.running.length;
   const footer = results === null && conflicted.length === 0 ? (
@@ -186,8 +231,12 @@ export function UpdateFromBase({ task, onClose }: { task: TaskView; onClose: () 
                 <div className="fb-main">
                   <div className="row">
                     <span className="fb-head mono">{c.project_name}</span>
-                    <span className="muted">← origin/{c.base}</span>
                     {!c.exists && <span className="chip del">worktree missing</span>}
+                    {gone(c.id, c.base) && (
+                      <span className="chip del" title="Not among origin's branches at the last fetch — merged and deleted, perhaps. Pick the branch it went into.">
+                        not on origin
+                      </span>
+                    )}
                     {edited > 0 && <span className="chip warn">uncommitted changes</span>}
                     <div className="spacer" />
                     {/* Inside the label, so a click here would tick the repo too. */}
@@ -207,6 +256,20 @@ export function UpdateFromBase({ task, onClose }: { task: TaskView; onClose: () 
                           {b === "merge" ? "Merge" : "Rebase"}
                         </button>
                       ))}
+                    </span>
+                  </div>
+                  <div className="row" style={{ marginTop: 4 }}>
+                    <span className="muted" style={{ whiteSpace: "nowrap" }}>← origin/</span>
+                    {/* Inside the label too: picking from the list would tick the repo. */}
+                    <span onClick={(e) => e.preventDefault()}>
+                      <Combo
+                        value={c.base}
+                        options={branches[c.id] ?? []}
+                        width={260}
+                        title="The branch this repository is updated from, and its pull request opened against"
+                        empty="No branch matches"
+                        onChange={(v) => void setBase(c.id, v)}
+                      />
                     </span>
                   </div>
                   {edited > 0 && (

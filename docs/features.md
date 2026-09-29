@@ -418,6 +418,13 @@ each repo its own team's way.
   else merge. The guess is said to be one, with its reason, and never
   overrides a choice. One app-wide mode, the last used, was wrong as soon
   as a task spanned a team that merges and one that rebases.
+- **UPD-8** Each repo's base MUST be changeable in the dialog, from its
+  origin branches or typed, and a base not among them at the last fetch is
+  said to be. It is the same base the next pull request is opened against,
+  and changing it drops the branch point (DIFF-3 then measures from the
+  merge base). Only the Open pull request dialog had the field, and that is
+  shut once every repo has a PR: a stacked base merged and deleted upstream
+  could not be moved off.
 
 Code: `commands/diff.rs` (`update_from_base`), `git.rs`,
 `git/upkeep.rs` (`update_style`), `UpdateFromBase.tsx`.
@@ -432,8 +439,9 @@ Known gaps:
 The Pull requests tab shows, per repo, the open PR, or an earlier one if
 none is open. It shows checks, the latest review per reviewer, the verdict,
 and how far behind the base it is. From here: push everything, open PRs,
-retarget a PR onto the checkout's base, send feedback to an agent, and
-finish a merged task.
+retarget a PR onto the checkout's base or take the PR's base for the
+checkout (GitHub moves a PR itself when its base is merged and deleted),
+send feedback to an agent, and finish a merged task.
 
 - **PR-1** Opening PRs MUST push each repo that has commits, open one PR per
   repo against that checkout's base (draft by default), and reuse a PR that

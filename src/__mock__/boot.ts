@@ -100,7 +100,9 @@ const answer: Record<string, Answer> = {
   },
   cursor_ide_installed: () => false,
   list_projects: () => world.projects,
-  list_tasks: () => world.tasks,
+  // A copy, as IPC would hand over: the same objects edited in place look
+  // unchanged to `sameTasks`, and the UI never sees the edit.
+  list_tasks: () => structuredClone(world.tasks),
   list_panes: () => world.panes,
   list_agents: () => world.agents,
 
@@ -155,10 +157,16 @@ const answer: Record<string, Answer> = {
     return task;
   },
   github_all_prs: () => world.prs,
-  github_task_prs: (a) => world.prs.find((p) => p.task_id === a.taskId)?.rows ?? [],
+  github_task_prs: (a) => structuredClone(world.prs.find((p) => p.task_id === a.taskId)?.rows ?? []),
   github_review_queue: () => world.reviews,
   github_pr_feedback: () => world.feedback,
   checkout_branches: () => ["main", "develop"],
+  set_checkout_base: (a) => {
+    const c = world.tasks.flatMap((t) => t.checkouts).find((x) => x.id === a.checkoutId);
+    if (c) c.base = String(a.base);
+    for (const r of world.prs.flatMap((p) => p.rows)) if (r.checkout_id === a.checkoutId) r.base = String(a.base);
+    return null;
+  },
 
   // Jira.
   jira_issues: () => ({ issues: world.issues, more: false }),

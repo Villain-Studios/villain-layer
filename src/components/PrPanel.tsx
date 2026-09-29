@@ -561,6 +561,18 @@ export function PrPanel({
                     <button className="btn btn-sm" onClick={() => void retarget(row)}>
                       Move onto {row.base}
                     </button>
+                    {/*
+                      The other way round. GitHub moves a PR itself when its
+                      base is merged and deleted, and then the only offer
+                      was to move it back onto a branch that is gone.
+                    */}
+                    <button
+                      className="btn btn-sm"
+                      title={`Update from base and the next PR use ${pr.base} in ${row.repo}`}
+                      onClick={() => void setBase(row, pr.base)}
+                    >
+                      Use {pr.base} here
+                    </button>
                   </div>
                 )}
 

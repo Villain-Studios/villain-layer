@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, errMessage } from "../lib/api";
 import { read, write } from "../lib/persist";
@@ -166,36 +166,39 @@ function EntryRow({ entry, on, onToggle }: { entry: Entry; on: boolean; onToggle
   const url = item.url;
 
   return (
-    <div className="fb-item">
-      <input type="checkbox" checked={on} onChange={onToggle} />
-      <div className="fb-main">
-        {/* The heading picks the item; the body is for reading, selecting and following links. */}
-        <div className="row fb-pick" onClick={onToggle}>
-          {entry.resolved && (
-            <button
-              className="btn-sm fb-fold"
-              title={open ? "Hide the thread" : "Show the thread"}
-              aria-expanded={open}
-              onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
-            >
-              <span className={`chev${open ? " open" : ""}`}><ChevronIcon /></span>
-            </button>
-          )}
-          <span className={item.kind === "thread" || item.kind === "check" ? "fb-head mono" : "fb-head"}>{head}</span>
-          {entry.why.map((w) => <span key={w} className="chip">{w}</span>)}
-          <div className="spacer" />
-          {url && (
-            <button
-              className="btn-sm"
-              title="Open on GitHub"
-              onClick={(e) => { e.stopPropagation(); void openUrl(url).catch(() => {}); }}
-            >
-              <ExternalIcon />
-            </button>
-          )}
-        </div>
-        {open && content && <div className="fb-content">{content}</div>}
+    <div className={`fb-box${on ? " on" : ""}`}>
+      {/*
+        The heading picks the item; the body is for reading, selecting and
+        following links. Each item is its own box: drawn as rows split by a
+        hairline, a long review's tables and rules ran into the next one and
+        there was no telling where one reviewer stopped and the next began.
+      */}
+      <div className="row fb-pick" onClick={onToggle}>
+        <input type="checkbox" checked={on} onChange={onToggle} onClick={(e) => e.stopPropagation()} />
+        {entry.resolved && (
+          <button
+            className="btn-sm fb-fold"
+            title={open ? "Hide the thread" : "Show the thread"}
+            aria-expanded={open}
+            onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
+          >
+            <span className={`chev${open ? " open" : ""}`}><ChevronIcon /></span>
+          </button>
+        )}
+        <span className={item.kind === "thread" || item.kind === "check" ? "fb-head mono" : "fb-head"}>{head}</span>
+        {entry.why.map((w) => <span key={w} className="chip">{w}</span>)}
+        <div className="spacer" />
+        {url && (
+          <button
+            className="btn-sm"
+            title="Open on GitHub"
+            onClick={(e) => { e.stopPropagation(); void openUrl(url).catch(() => {}); }}
+          >
+            <ExternalIcon />
+          </button>
+        )}
       </div>
+      {open && content && <div className="fb-content">{content}</div>}
     </div>
   );
 }
@@ -207,8 +210,15 @@ function EntryRow({ entry, on, onToggle }: { entry: Entry; on: boolean; onToggle
  * The same move as notes in the Diff tab, for feedback that did not come from
  * you: copying eight inline comments and a failing log out of the browser was
  * the step between a review landing and the agent starting on it.
+ *
+ * One pull request is shown at a time, `first` to begin with, and a task with
+ * several switches between them. Listed one under another they read as one
+ * long page, and nothing said which PR a comment halfway down belonged to.
+ * The picks are kept across them and sent together: two sends a moment apart
+ * write the same `PR_FEEDBACK.md`, and the second would replace the first
+ * before the agent had read it.
  */
-export function PrFeedback({ task, onClose }: { task: TaskView; onClose: () => void }) {
+export function PrFeedback({ task, first, onClose }: { task: TaskView; first?: string; onClose: () => void }) {
   const toast = useStore((s) => s.toast);
   const fail = useStore((s) => s.fail);
   const at = useAgentTarget(task);
@@ -217,6 +227,7 @@ export function PrFeedback({ task, onClose }: { task: TaskView; onClose: () => v
   const [error, setError] = useState<string | null>(null);
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
+  const [shown, setShown] = useState<string | undefined>(first);
 
   const sent = useMemo(() => new Set(read<string[]>(sentKey(task.id), [])), [task.id]);
   const built = useMemo(
@@ -241,8 +252,11 @@ export function PrFeedback({ task, onClose }: { task: TaskView; onClose: () => v
   }, [task.id, sent]);
 
   const chosen = built.flatMap((b) => b.list.filter((e) => picked.has(e.key)));
-  const total = built.reduce((n, b) => n + b.list.length, 0);
-  const resolvedTotal = built.reduce((n, b) => n + b.resolved, 0);
+  // The PR asked for, or the first when it has none or its PR has gone.
+  const current = built.find((b) => b.row.checkout_id === shown) ?? built[0];
+  const title = built.length === 1 && current.row.number > 0
+    ? `Feedback on ${current.row.repo} #${current.row.number}`
+    : "Feedback on the pull requests";
 
   function toggle(set: Set<string>, key: string): Set<string> {
     const next = new Set(set);
@@ -269,9 +283,11 @@ export function PrFeedback({ task, onClose }: { task: TaskView; onClose: () => v
   }
 
   const noAgent = at.running.length === 0;
+  // Picks on a PR not in view are still sent, so the button says so.
+  const prsPicked = new Set(chosen.map((e) => e.item.checkout_id)).size;
   const footer = (
     <>
-      {rows && total > 0 && <AgentTargetFields task={task} at={at} disabled={busy} />}
+      {built.some((b) => b.list.length > 0) && <AgentTargetFields task={task} at={at} disabled={busy} />}
       <div className="spacer" />
       <button className="btn" onClick={onClose} disabled={busy}>Cancel</button>
       <button
@@ -282,13 +298,36 @@ export function PrFeedback({ task, onClose }: { task: TaskView; onClose: () => v
       >
         {busy
           ? "Sending…"
-          : `${noAgent ? "Start & send" : "Send"} ${chosen.length || ""}`.trim()}
+          : `${noAgent ? "Start & send" : "Send"} ${chosen.length || ""}${
+              prsPicked > 1 ? ` from ${prsPicked} PRs` : ""
+            }`.trim()}
       </button>
     </>
   );
 
+  const tabs = built.length > 1 && (
+    <div className="tabs fb-tabs">
+      {built.map(({ row, list }) => {
+        const n = list.filter((e) => picked.has(e.key)).length;
+        return (
+          <button
+            key={row.checkout_id}
+            type="button"
+            className={row.checkout_id === current?.row.checkout_id ? "active" : ""}
+            title={row.title || undefined}
+            onClick={() => setShown(row.checkout_id)}
+          >
+            <span style={{ color: "var(--dim)" }}>{row.repo}</span>
+            {row.number > 0 && ` #${row.number}`}
+            <span className="badge" title={`${n} of ${list.length} picked`}>{n}/{list.length}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+
   return (
-    <Modal title="Feedback on the pull requests" wide tall onClose={() => !busy && onClose()} footer={footer}>
+    <Modal title={title} wide tall onClose={() => !busy && onClose()} footer={footer} toolbar={tabs || undefined}>
       {error && <div className="muted" style={{ color: "var(--red)" }}>{error}</div>}
       {!rows && !error && (
         <div className="row muted"><Spinner /> Reading reviews and checks…</div>
@@ -296,59 +335,81 @@ export function PrFeedback({ task, onClose }: { task: TaskView; onClose: () => v
       {rows && rows.length === 0 && (
         <div className="muted">No repository in this task has an open pull request.</div>
       )}
-      {rows && rows.length > 0 && total === resolvedTotal && !rows.some((r) => r.error) && (
-        <div className="muted" style={{ lineHeight: 1.6 }}>
-          Nothing to answer: no open review threads, comments or failing checks
-          {resolvedTotal > 0 ? " — every thread has been resolved" : ""}.
-        </div>
-      )}
-      {built.map(({ row, list, open }) => (
-        <div key={row.checkout_id} className="fb-repo">
-          <div className="row" style={{ marginBottom: 6 }}>
-            <h3 style={{ margin: 0, fontSize: 13.5 }}>
-              <span style={{ color: "var(--dim)" }}>{row.repo}</span>
-              {row.number > 0 && ` #${row.number} ${row.title}`}
-            </h3>
-            <div className="spacer" />
-            {open.length > 1 && (
-              <button
-                className="btn-sm"
-                onClick={() => {
-                  const all = open.every((e) => picked.has(e.key));
-                  setPicked((p) => {
-                    const next = new Set(p);
-                    for (const e of open) {
-                      if (all) next.delete(e.key);
-                      else next.add(e.key);
-                    }
-                    return next;
-                  });
-                }}
-              >
-                {open.every((e) => picked.has(e.key)) ? "None" : "All"}
-              </button>
-            )}
-          </div>
-          {row.error && <div className="muted" style={{ color: "var(--red)" }}>{row.error}</div>}
-          {list.map((e) => (
-            <EntryRow
-              key={e.key}
-              entry={e}
-              on={picked.has(e.key)}
-              onToggle={() => setPicked((p) => toggle(p, e.key))}
-            />
-          ))}
-          {!row.error && list.length === 0 && (
-            <div className="muted fb-note">Nothing said here yet, and no check is failing.</div>
-          )}
-        </div>
-      ))}
-      {rows && total > 0 && (
+      {current && <PrItems
+        key={current.row.checkout_id}
+        {...current}
+        picked={picked}
+        onToggle={(key) => setPicked((p) => toggle(p, key))}
+        onAll={(keys, on) => setPicked((p) => {
+          const next = new Set(p);
+          for (const k of keys) {
+            if (on) next.add(k);
+            else next.delete(k);
+          }
+          return next;
+        })}
+      />}
+      {built.some((b) => b.list.length > 0) && (
         <div className="muted fb-note" style={{ marginTop: 10, lineHeight: 1.5 }}>
           The picked items are written to a file in the task folder, and the agent is told to
           work through it and say what it did about each. Nothing is posted to GitHub.
         </div>
       )}
     </Modal>
+  );
+}
+
+/** One pull request's feedback: its title, then every item in its own box. */
+function PrItems({ row, list, open, resolved, picked, onToggle, onAll }: {
+  row: RepoFeedback;
+  list: Entry[];
+  open: Entry[];
+  resolved: number;
+  picked: Set<string>;
+  onToggle: (key: string) => void;
+  onAll: (keys: string[], on: boolean) => void;
+}) {
+  const all = open.every((e) => picked.has(e.key));
+  // Keyed per PR, so this runs on each switch. The dialog's body is one
+  // scroller for all of them: without it, the next PR opened as far down as
+  // the last had been read.
+  const top = useRef<HTMLDivElement>(null);
+  useEffect(() => { top.current?.closest(".modal-body")?.scrollTo(0, 0); }, []);
+  return (
+    <div className="fb-repo" ref={top}>
+      <div className="row fb-pr">
+        <h3>
+          <span style={{ color: "var(--dim)" }}>{row.repo}</span>
+          {row.number > 0 && ` #${row.number} ${row.title}`}
+        </h3>
+        <div className="spacer" />
+        {open.length > 1 && (
+          <button className="btn-sm" onClick={() => onAll(open.map((e) => e.key), !all)}>
+            {all ? "None" : "All"}
+          </button>
+        )}
+        {row.url && (
+          <button
+            className="btn-sm"
+            title="Open the pull request on GitHub"
+            onClick={() => void openUrl(row.url).catch(() => {})}
+          >
+            <ExternalIcon />
+          </button>
+        )}
+      </div>
+      {row.error && <div className="muted" style={{ color: "var(--red)" }}>{row.error}</div>}
+      {!row.error && list.length > 0 && list.length === resolved && (
+        <div className="muted fb-note">
+          Nothing to answer here: every review thread has been resolved.
+        </div>
+      )}
+      {list.map((e) => (
+        <EntryRow key={e.key} entry={e} on={picked.has(e.key)} onToggle={() => onToggle(e.key)} />
+      ))}
+      {!row.error && list.length === 0 && (
+        <div className="muted fb-note">Nothing said here yet, and no check is failing.</div>
+      )}
+    </div>
   );
 }

@@ -489,8 +489,7 @@ textarea { resize: vertical; font-family: var(--mono); }
 .check:last-child { border-bottom: none; }
 .check .name { flex: 1; font-family: var(--mono); font-size: 12.5px; }
 
-/* The feedback picker: one row per thread, comment or failing check. */
-.fb-repo { margin-bottom: 16px; }
+/* Rows with a checkbox: Update from base's repos. */
 .fb-item {
   display: flex;
   gap: 9px;
@@ -502,9 +501,26 @@ textarea { resize: vertical; font-family: var(--mono); }
 .fb-item:last-of-type { border-bottom: none; }
 .fb-item input[type="checkbox"] { width: auto; margin-top: 3px; flex: none; }
 .fb-main { flex: 1; min-width: 0; }
-.fb-pick { cursor: pointer; }
-.fb-fold { padding: 0 5px; margin-right: 2px; font-size: 13px; line-height: 1.2; }
-.fb-content { margin-top: 6px; }
+
+/* The feedback picker: one box per thread, review, comment or failing check. */
+.modal-toolbar .fb-tabs { margin: -10px -16px; padding: 0 16px; background: transparent; border-bottom: none; }
+.fb-repo { margin-bottom: 16px; }
+.fb-pr { margin-bottom: 10px; }
+.fb-pr h3 { margin: 0; font-size: 13.5px; min-width: 0; }
+.fb-box {
+  margin-bottom: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  font-size: 13px;
+  overflow: hidden;
+}
+/* A picked item is marked on its edge, so a long one says so all the way down. */
+.fb-box.on { border-color: var(--accent-dim); box-shadow: inset 3px 0 0 var(--accent); }
+.fb-pick { cursor: pointer; gap: 8px; padding: 6px 10px; background: var(--panel-2); }
+.fb-pick input[type="checkbox"] { width: auto; margin: 0; flex: none; }
+.fb-fold { padding: 0 5px; font-size: 13px; line-height: 1.2; }
+.fb-content { padding: 10px 12px 12px; border-top: 1px solid var(--border-soft); }
 .fb-comment + .fb-comment { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-soft); }
 .fb-author { color: var(--dim); font-size: 12px; font-weight: 500; margin-bottom: 2px; }
 .fb-head { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }

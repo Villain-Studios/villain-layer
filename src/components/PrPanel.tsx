@@ -47,14 +47,23 @@ const REVIEW_WORDS: Record<string, string> = {
 };
 
 /** Where the task as a whole stands, in one line. */
-const TASK_REVIEW: Record<TaskReview, { word: string; color: string }> = {
-  none: { word: "", color: "var(--dim)" },
-  incomplete: { word: "Partly up for review", color: "var(--amber)" },
-  open: { word: "In review", color: "var(--blue)" },
-  commented: { word: "In review, with comments", color: "var(--blue)" },
-  changes_requested: { word: "Changes requested", color: "var(--red)" },
-  approved: { word: "Approved", color: "var(--green)" },
-  merged: { word: "Merged", color: "var(--green)" },
+const TASK_REVIEW: Record<TaskReview, { word: string; color: string; hint: string }> = {
+  none: { word: "", color: "var(--dim)", hint: "" },
+  incomplete: {
+    word: "Partly up for review", color: "var(--amber)",
+    hint: "Some repositories with changes have no pull request yet",
+  },
+  open: { word: "In review", color: "var(--blue)", hint: "Waiting on reviewers: nobody has decided yet" },
+  commented: {
+    word: "In review, with comments", color: "var(--blue)",
+    hint: "Reviewers have commented, but nobody has approved or asked for changes yet",
+  },
+  changes_requested: {
+    word: "Changes requested", color: "var(--red)",
+    hint: "A reviewer asked for changes on at least one pull request",
+  },
+  approved: { word: "Approved", color: "var(--green)", hint: "Every pull request is approved" },
+  merged: { word: "Merged", color: "var(--green)", hint: "Every pull request has merged" },
 };
 
 /**
@@ -140,7 +149,8 @@ export function PrPanel({
   const [branches, setBranches] = useState<Record<string, string[]>>({});
   /** Whether the "open a pull request" dialog is up. */
   const [creating, setCreating] = useState(false);
-  const [feedback, setFeedback] = useState(false);
+  /** The repo whose PR the feedback dialog opened on, while it is up. */
+  const [feedback, setFeedback] = useState<string | null>(null);
   const [finishing, setFinishing] = useState(false);
   /** Which PR cards are expanded, when there are enough to be worth folding. */
   const [cards, setCards] = useState<Record<string, boolean>>({});
@@ -356,9 +366,10 @@ export function PrPanel({
     ...r.past.map((pr) => ({ row: r, pr })),
   ]);
   const entries = live.length + earlier.length;
-  // What there is to hand an agent: counts from the sweep, so the button can
-  // say so before anything is fetched.
-  const failing = live.reduce((n, r) => n + worstByName(r.checks).filter(failed).length, 0);
+  // What there is to hand an agent, per PR: counts from the sweep, so the
+  // button can say so before anything is fetched.
+  const toAnswer = (r: CheckoutPr) =>
+    r.pr!.comments + r.pr!.review_comments + worstByName(r.checks).filter(failed).length;
 
   const repoRows = (
     <div className="muted" style={{ marginBottom: 10, lineHeight: 1.6 }}>
@@ -407,8 +418,10 @@ export function PrPanel({
       <div className="row" style={{ marginBottom: 12 }}>
         {review !== "none" ? (
           <>
-            <span className="dot" style={{ background: TASK_REVIEW[review].color }} />
-            <b>{TASK_REVIEW[review].word}</b>
+            <span className="row" style={{ gap: 8 }} title={TASK_REVIEW[review].hint}>
+              <span className="dot" style={{ background: TASK_REVIEW[review].color }} />
+              <b>{TASK_REVIEW[review].word}</b>
+            </span>
             <span className="muted">
               {live.length} PR{live.length === 1 ? "" : "s"}
               {/* A task is only as reviewed as its least reviewed repository. */}
@@ -422,16 +435,6 @@ export function PrPanel({
         )}
         <div className="spacer" />
         {loading && <Spinner />}
-        {live.length > 0 && (
-          <button
-            className="btn btn-sm"
-            title="Pick review threads, comments and failing checks to hand an agent"
-            onClick={() => setFeedback(true)}
-          >
-            Feedback → agent
-            {said + failing > 0 && <span className="badge">{said + failing}</span>}
-          </button>
-        )}
         <button className="btn btn-sm" onClick={() => void load()}>Refresh</button>
         <button className="btn btn-sm" disabled={busy} onClick={() => void push()}>
           Push all
@@ -525,6 +528,18 @@ export function PrPanel({
               {row.verdict === "changes_requested" && (
                 <span className="chip del">changes requested</span>
               )}
+              {/*
+                On the card, not once for the task: one button for every PR
+                gave no way to tell whose comments its count was.
+              */}
+              <button
+                className="btn btn-sm"
+                title="Pick this PR's review threads, comments and failing checks to hand an agent"
+                onClick={(e) => { e.stopPropagation(); setFeedback(row.checkout_id); }}
+              >
+                Feedback → agent
+                {toAnswer(row) > 0 && <span className="badge">{toAnswer(row)}</span>}
+              </button>
               {/* Stopped, or opening the PR would fold the card underneath it. */}
               <button
                 className="btn-sm"
@@ -669,7 +684,7 @@ export function PrPanel({
         </div>
       )}
 
-      {feedback && <PrFeedback task={task} onClose={() => setFeedback(false)} />}
+      {feedback && <PrFeedback task={task} first={feedback} onClose={() => setFeedback(null)} />}
       {finishing && <FinishTask task={task} onClose={() => setFinishing(false)} />}
 
       {creating && (

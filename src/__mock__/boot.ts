@@ -9,7 +9,7 @@
  *
  * URL parameters set the scene before the app boots:
  *
- *   ?scenario=busy|empty|unlinked|tickets   which world (default busy)
+ *   ?scenario=busy|empty|unlinked|tickets|reviews   which world (default busy)
  *   &view=work|tickets|reviews|chat|repos
  *   &task=t-login          the selected task (none: the All agents overview)
  *   &tab=terminals|diff|pr

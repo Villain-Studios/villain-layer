@@ -465,7 +465,13 @@ send feedback to an agent, and finish a merged task.
   outdated flags kept. A verdict is each reviewer's latest decisive review.
   One "changes requested" outranks any number of approvals, and a dismissal
   clears it.
-- **PR-6** Feedback to an agent MUST pre-select only what is new: not
+- **PR-6** Feedback to an agent is asked for from a PR's own card, with a
+  count of that PR's comments and failing checks; one button for every PR
+  gave no way to tell whose they were. The picker shows that PR, and a task
+  with several switches between them, each saying how many of its items
+  are picked. Everything picked, on any of them, is sent in one go, and the
+  send button says from how many PRs.
+  It MUST pre-select only what is new: not
   resolved, not sent before, not from a bot, not your own, not outdated.
   The feedback is written to `PR_FEEDBACK.md` in the task folder, never in
   a worktree, and a pointer is typed into the agent. The agent is told not
@@ -487,7 +493,10 @@ send feedback to an agent, and finish a merged task.
   lists, tables, links), built from elements and never from HTML, since
   the text is someone else's: raw tags keep only their text, a link opens
   in the browser only for http(s) and mailto, and images are not loaded.
-  Clicking an item's heading picks it; its text can be selected.
+  Each item is a box of its own, marked on its edge when picked: as rows
+  split by a hairline, a long review ran into the next and there was no
+  telling where one ended. Clicking an item's heading picks it; its text
+  can be selected.
   A review thread shows the code it is on above its comments, as GitHub
   does: the lines it spans, or the line and the three above it, cut from
   the hunk it was written against (so an outdated thread still shows the

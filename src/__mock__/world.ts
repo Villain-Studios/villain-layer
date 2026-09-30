@@ -304,14 +304,14 @@ const feedback: RepoFeedback[] = [
         ],
       },
     ],
-    reviews: [{ author: "ana", bot: false, state: "CHANGES_REQUESTED", body: "Needs a test for the retry path.", url: "", at: ago(1800) }],
+    reviews: [{ author: "ana", bot: false, state: "CHANGES_REQUESTED", body: "Needs a test for the retry path.", url: "https://github.com/acme/api/pull/42#r1", at: ago(1800) }],
     comments: [
       {
-        author: "github-actions", bot: true, state: null, url: "", at: ago(360),
+        author: "github-actions", bot: true, state: null, url: "https://github.com/acme/api/pull/42#c1", at: ago(360),
         body: "<!-- deploy-comment -->\n### 🚀 Preview deployed\n\n**Build:** `a1b2c3d`\n\n**Available at:**\n- https://acme-123.web.preview.acme.test",
       },
       {
-        author: "codecov", bot: true, state: null, url: "", at: ago(1700),
+        author: "codecov", bot: true, state: null, url: "https://github.com/acme/api/pull/42#c2", at: ago(1700),
         body: "## Coverage dropped 0.4%\n\n| File | Coverage | Δ |\n|:--|--:|--:|\n| src/auth.ts | 81.2% | -2.1% |\n| src/retry.ts | 94.0% | +0.3% |\n\n<details><summary>Details</summary>\n\n- [x] tests ran\n- [ ] integration suite\n</details>",
       },
     ],
@@ -471,4 +471,42 @@ function tickets(): World {
   return w;
 }
 
-export const SCENARIOS: Record<string, () => World> = { busy, empty, unlinked, tickets };
+/** Busy, with the login task's second repo in review too: feedback on two PRs. */
+function reviews(): World {
+  const w = busy();
+  const web = w.prs[0].rows.find((r) => r.checkout_id === "c-login-web");
+  if (web) {
+    web.pr = { ...pr(43, "web", false), title: "Fix login race" };
+    web.verdict = "commented";
+  }
+  w.feedback.push({
+    checkout_id: "c-login-web", repo: "web", number: 43, title: "Fix login race",
+    url: "https://github.com/acme/web/pull/43", author: "you",
+    threads: [
+      {
+        path: "src/login/LoginForm.tsx", line: 31, start_line: null, resolved: true, outdated: false,
+        url: "https://github.com/acme/web/pull/43#t1",
+        code: [{ n: 31, op: "+", text: "  const [busy, setBusy] = useState(false);" }],
+        comments: [
+          { author: "bo", bot: false, state: null, url: "", at: ago(5000), body: "Disable the button while this is true." },
+          { author: "you", bot: false, state: null, url: "", at: ago(4800), body: "Done." },
+        ],
+      },
+    ],
+    reviews: [
+      {
+        author: "copilot-pull-request-reviewer", bot: true, state: "COMMENTED", url: "https://github.com/acme/web/pull/43#r1", at: ago(2400),
+        body: "## Copilot review overview\n\n**Review effort:** Balanced\n**Findings:** 1\n\nOpen (1)\n\n- The submit button can be pressed twice while the request is in flight\n\n### Changes\n\n| File | Description |\n|--|--|\n| `LoginForm.tsx` | Tracks whether a login is in flight. |\n\n---\n\n💡 Add a `code-review` agent skill for tailored reviews.",
+      },
+      { author: "bo", bot: false, state: "COMMENTED", url: "https://github.com/acme/web/pull/43#r2", at: ago(1200), body: "Looks right. One question on the error message below." },
+    ],
+    comments: [
+      { author: "bo", bot: false, state: null, url: "https://github.com/acme/web/pull/43#c1", at: ago(1100), body: "Should *Wrong password* say which field was wrong? Support gets tickets about this." },
+    ],
+    checks: [],
+    error: null,
+  });
+  return w;
+}
+
+export const SCENARIOS: Record<string, () => World> = { busy, empty, unlinked, tickets, reviews };

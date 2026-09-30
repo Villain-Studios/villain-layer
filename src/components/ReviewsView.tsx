@@ -2,7 +2,7 @@ import { useEffect, useState, type MouseEvent, type ReactNode } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api } from "../lib/api";
 import { copyText } from "../lib/clipboard";
-import { authoredGroups, taskOfPr } from "../lib/derive";
+import { authoredGroups, countOf, reviewCounts, taskOfPr } from "../lib/derive";
 import { goTo } from "../lib/goto";
 import { readOneOf, write } from "../lib/persist";
 import { ago } from "../lib/time";
@@ -16,10 +16,6 @@ function teamLabel(team: TeamReviews): string {
   const slugPart = team.slug.split("/").pop() || team.slug;
   if (team.name && team.name.toLowerCase() !== slugPart.toLowerCase()) return team.name;
   return `@${slugPart}`;
-}
-
-function countOf(n: number, more: boolean): string {
-  return more ? `${n}+` : String(n);
 }
 
 /** How a banner names a pull request: `owner/repo#n`, as `news.rs` writes it. */
@@ -304,10 +300,7 @@ export function ReviewsView() {
   const team = queue?.team ?? null;
   const authored = queue?.authored ?? null;
 
-  const toReview = queue
-    ? countOf(queue.mine.length + (team?.error ? 0 : team?.prs.length ?? 0), queue.mine_more || !!team?.more)
-    : undefined;
-  const yours = authored && !authored.error ? countOf(authored.prs.length, authored.more) : undefined;
+  const { toReview, yours } = reviewCounts(queue);
 
   return (
     <div className="wide">

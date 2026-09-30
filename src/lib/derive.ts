@@ -3,7 +3,9 @@
  * shared by the views, the store and the tests. Nothing here holds state or
  * reaches the backend.
  */
-import type { AuthoredPr, CheckoutPr, JiraIssue, PaneInfo, Project, RepoHealth, TaskView, UpdateBy } from "./types";
+import type {
+  AuthoredPr, CheckoutPr, JiraIssue, PaneInfo, Project, RepoHealth, ReviewQueue, TaskView, UpdateBy,
+} from "./types";
 
 /** Panes started from the Chat view carry this instead of a real task id. */
 export const CHAT_TASK_ID = "chat";
@@ -322,4 +324,27 @@ export function taskOfPr(
     if (rows.some((r) => r.pr?.url === pr.url || r.past.some((p) => p.url === pr.url))) return taskId;
   }
   return tasks.find((t) => t.branch === pr.head)?.id ?? null;
+}
+
+/** A count as a list shows it: `50+` when the list was cut there (REV-6). */
+export function countOf(n: number, more: boolean): string {
+  return more ? `${n}+` : String(n);
+}
+
+/**
+ * What the Reviews view's two tabs count: PRs waiting on you or your team,
+ * and PRs you opened. Undefined where there is no answer yet, or an error.
+ *
+ * One function for the tabs and the top bar. The top bar counted only the
+ * first, and counted a team whose lookup had failed, so it said 1 while the
+ * tabs said 1 and 7.
+ */
+export function reviewCounts(q: ReviewQueue | null): { toReview?: string; yours?: string } {
+  if (!q) return {};
+  const team = q.team && !q.team.error ? q.team : null;
+  const authored = q.authored && !q.authored.error ? q.authored : null;
+  return {
+    toReview: countOf(q.mine.length + (team?.prs.length ?? 0), q.mine_more || !!team?.more),
+    yours: authored ? countOf(authored.prs.length, authored.more) : undefined,
+  };
 }

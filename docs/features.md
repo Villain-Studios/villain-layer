@@ -73,7 +73,8 @@ up** removes what tasks left behind.
   branch has no commits of its own and, if checked out, no uncommitted
   changes to tracked files. It never merges or rebases there, so how a team
   updates its branches does not matter to it. It reports a row per repo:
-  what moved, what was left alone and why.
+  what moved, what was left alone and why. A Sync of several ends with one
+  line naming the repos that failed (five, then how many more).
 - **REPO-8** Clean up MUST list what it would remove, and why, before it
   removes anything. It pre-selects only what loses nothing, and checks each
   item again as it removes it. It finds:

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { api } from "../lib/api";
+import { syncSummary } from "../lib/report";
 import { ago } from "../lib/time";
 import { useNow, useStore } from "../store";
 import { groupProjects, repoTrouble, updateByFor } from "../lib/derive";
@@ -100,12 +101,7 @@ export function ReposView() {
       setSynced((s) => ({ ...s, ...Object.fromEntries(rows.map((r) => [r.project_id, r])) }));
       const failed = rows.filter((r) => !r.ok);
       if (ids.length > 1) {
-        toast(
-          failed.length ? "error" : "success",
-          failed.length
-            ? `Synced ${rows.length - failed.length} of ${rows.length}. Each repo says what happened.`
-            : `Synced ${rows.length} repositories.`,
-        );
+        toast(failed.length ? "error" : "success", syncSummary(rows));
       } else if (failed.length) {
         toast("error", failed[0].detail);
       }

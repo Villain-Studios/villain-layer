@@ -65,7 +65,10 @@ up** removes what tasks left behind.
   of the same name near where it was is offered. Before this, the only way
   was remove and add again, which dropped the repo from every task (REPO-3).
 - **REPO-7** Sync MUST fetch origin into the app's copy, forgetting branches
-  origin deleted, and carry the clone's repo-local settings again. In the
+  origin deleted and taking tags origin moved (an Actions repo moves `v1`
+  each release; refused, it failed every Sync of a user whose git fetches
+  all tags), and carry the clone's repo-local settings again. A failed
+  fetch says git's reason, not only that it failed. In the
   clone it only ever fast-forwards the default branch, and only when that
   branch has no commits of its own and, if checked out, no uncommitted
   changes to tracked files. It never merges or rebases there, so how a team

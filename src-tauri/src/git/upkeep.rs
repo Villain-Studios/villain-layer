@@ -123,8 +123,15 @@ fn count(repo: &Path, args: &[&str]) -> Result<usize> {
 }
 
 /// Fetch origin into the app's copy, and forget the branches origin deleted.
+///
+/// `--force` lets a tag origin moved move here too, and nothing else:
+/// branches are forced by the refspec already. With `fetch.pruneTags` in
+/// the user's ~/.gitconfig, every tag is fetched, and an Actions repo moves
+/// `v1` to each release; git refused to move it, which failed the whole
+/// fetch on every Sync. `--quiet` hid the one line saying so, leaving only
+/// "git fetch failed", so it is left off: stderr is read only on failure.
 pub fn fetch_store(store: &Path) -> Result<()> {
-    run(store, &["fetch", "--quiet", "--prune", "--no-recurse-submodules", "origin"])?;
+    run(store, &["fetch", "--prune", "--force", "--no-recurse-submodules", "origin"])?;
     std::fs::write(store.join(SYNCED), "")?;
     Ok(())
 }
@@ -595,6 +602,27 @@ mod tests {
         assert!(delete_branch_at(&store, "task", &main).is_err(), "not where it was judged");
         delete_branch_at(&store, "task", &work).unwrap();
         assert!(!super::super::branch_exists(&store, "task"));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_tag_moved_on_origin_does_not_fail_the_sync_of_someone_who_prunes_tags() {
+        let root = sandbox();
+        let (_clone, mate, store) = scene(&root);
+        // Set here, over whatever the machine running the test has.
+        run(&store, &["config", "fetch.pruneTags", "true"]).unwrap();
+        run(&mate, &["tag", "v1"]).unwrap();
+        run(&mate, &["push", "-q", "origin", "v1"]).unwrap();
+        fetch_store(&store).unwrap();
+
+        // What an Actions repo does on every release: the major version's tag
+        // is pointed at the new commit.
+        push_from(&mate, "b.txt");
+        run(&mate, &["tag", "-f", "v1"]).unwrap();
+        run(&mate, &["push", "-q", "origin", "+refs/tags/v1:refs/tags/v1"]).unwrap();
+
+        fetch_store(&store).unwrap();
+        assert_eq!(tip(&store, "v1"), tip(&mate, "HEAD"));
         std::fs::remove_dir_all(&root).ok();
     }
 }

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api } from "./lib/api";
 import { selectedTask, useStore, type View } from "./store";
-import { CHAT_TASK_ID, needsYou, repoTrouble, taskTotals } from "./lib/derive";
+import { CHAT_TASK_ID, needsYou, repoTrouble, reviewCounts, taskTotals } from "./lib/derive";
 import type { TaskView } from "./lib/types";
 import { Sidebar } from "./components/sidebar/Sidebar";
 import { Terminals } from "./components/Terminals";
@@ -40,14 +40,22 @@ function TopBar() {
   const repoTroubles = useStore(
     (s) => s.projects.filter((p) => repoTrouble(p, s.repoHealth[p.id], s.tasks)).length,
   );
-  const reviewCount = useStore(
-    (s) => (s.reviewQueue?.mine.length ?? 0) + (s.reviewQueue?.team?.prs.length ?? 0),
-  );
+  // Two strings rather than one object, so an unchanged count is no redraw.
+  const toReview = useStore((s) => reviewCounts(s.reviewQueue).toReview);
+  const yours = useStore((s) => reviewCounts(s.reviewQueue).yours);
+  // Both of the view's counts, in its tabs' order: one sum hid which side
+  // was waiting, and the top bar showed only the first.
+  const reviews = [toReview, yours].some((n) => n && n !== "0")
+    ? {
+      badge: yours === undefined ? toReview : `${toReview ?? "–"} · ${yours}`,
+      title: `${toReview ?? "?"} to review · ${yours ?? "?"} opened by you`,
+    }
+    : {};
 
-  const tabs: { id: View; label: string; badge?: number }[] = [
+  const tabs: { id: View; label: string; badge?: number | string; title?: string }[] = [
     { id: "work", label: "Work", badge: running || undefined },
     { id: "tickets", label: "Tickets", badge: issueCount || undefined },
-    { id: "reviews", label: "Reviews", badge: reviewCount || undefined },
+    { id: "reviews", label: "Reviews", ...reviews },
     { id: "chat", label: "Chat", badge: chats || undefined },
     { id: "repos", label: "Repos", badge: projectCount || undefined },
   ];
@@ -70,7 +78,7 @@ function TopBar() {
             onClick={() => setView(t.id)}
           >
             {t.label}
-            {t.badge !== undefined && <span className="badge">{t.badge}</span>}
+            {t.badge !== undefined && <span className="badge" title={t.title}>{t.badge}</span>}
             {t.id === "repos" && repoTroubles > 0 && (
               <span className="badge warn" title="Repositories with a problem the Repos view can fix">
                 {repoTroubles} to fix

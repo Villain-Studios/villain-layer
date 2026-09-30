@@ -609,7 +609,9 @@ The Reviews view has two tabs, one for each side of a review. "To review"
 lists open PRs waiting on your review, excluding your own, and, when a
 review team is set, those waiting on that team. "Opened by you" lists the
 open PRs you opened, and where each one stands. The tab last used is kept;
-a banner or message about a review request opens "To review".
+a banner or message about a review request opens "To review". The top
+bar's Reviews tab carries both counts, as its tabs show them, `1 · 7`: it
+used to show only the first, so seven PRs of yours read as none.
 
 - **REV-1** A failed team lookup MUST NOT hide your own list. It shows as
   an error on the team section.

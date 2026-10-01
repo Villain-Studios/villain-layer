@@ -452,7 +452,10 @@ send feedback to an agent, and finish a merged task.
 - **PR-1** Opening PRs MUST push each repo that has commits, open one PR per
   repo against that checkout's base (draft by default), and reuse a PR that
   is already open. A repo with only uncommitted changes is refused: the app
-  never commits for you here.
+  never commits for you here. With no PR open, a merged one counts as having
+  landed everything up to its head: a repo with nothing since is skipped,
+  not opened again. Counted from the branch point, a repo merged while
+  another was still in review got a second PR for the same work.
 - **PR-2** PRs this call opened MUST be linked on the Jira ticket as a
   comment, and posted to Slack if that is on. When the call opens a PR and
   the task has more than one open, every one of them MUST list the others
@@ -512,7 +515,7 @@ send feedback to an agent, and finish a merged task.
   out. One ticked on purpose goes to the agent marked as resolved, with a
   warning not to undo what was settled.
 
-Code: `commands/github.rs`, `integrations/github.rs`, `PrPanel.tsx`,
+Code: `commands/github.rs`, `commands/open_prs.rs`, `integrations/github.rs`, `PrPanel.tsx`,
 `PrFeedback.tsx`, `Markdown.tsx`, `lib/markdown.ts`.
 
 Known gaps:

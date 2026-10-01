@@ -223,16 +223,27 @@ pub async fn jira_browse(
     types: Option<Vec<String>>,
 ) -> Result<jira::Page> {
     let (client, cfg) = jira_client(&state)?;
-    let jql = jira::browse_jql(
-        cfg.project_key.as_deref(),
-        text.as_deref(),
-        jira::Whose::parse(&whose),
-        include_done.unwrap_or(false),
-        &types.unwrap_or_default(),
-    );
+    let project = cfg.project_key.as_deref();
+    let whose = jira::Whose::parse(&whose);
+    let include_done = include_done.unwrap_or(false);
+    let types = types.unwrap_or_default();
     // A search is refined rather than read end to end, so it stays capped —
     // but it now says when there was more.
-    client.search(&jql, 100).await
+    const CAP: u32 = 100;
+
+    // A bare number is only a guess at a key (TKT-12). Jira refuses a query
+    // naming a key it does not have, and the filters may hide the one it
+    // does, so either way the number is searched for as text after all.
+    if let Some(key) = text.as_deref().and_then(|t| jira::number_as_key(project, t)) {
+        let jql = jira::browse_jql(project, Some(&key), whose, include_done, &types);
+        if let Ok(page) = client.search(&jql, CAP).await {
+            if !page.issues.is_empty() {
+                return Ok(page);
+            }
+        }
+    }
+    let jql = jira::browse_jql(project, text.as_deref(), whose, include_done, &types);
+    client.search(&jql, CAP).await
 }
 
 #[tauri::command]

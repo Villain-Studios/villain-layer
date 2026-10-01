@@ -766,6 +766,20 @@ pub(crate) fn looks_like_a_key(text: &str) -> bool {
         && number.chars().all(|c| c.is_ascii_digit())
 }
 
+/// The key a bare number stands for in the configured project (TKT-12).
+///
+/// Jira's text search does not look at keys, so "21260" alone found nothing
+/// while "DT-21260" found the ticket.
+pub(crate) fn number_as_key(project_key: Option<&str>, text: &str) -> Option<String> {
+    let project = project_key.map(str::trim).filter(|k| !k.is_empty())?;
+    let number = text.trim();
+    if number.is_empty() || !number.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let key = format!("{}-{number}", project.to_ascii_uppercase());
+    looks_like_a_key(&key).then_some(key)
+}
+
 /// Who a browse query is looking at, beyond your own queue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Whose {
@@ -876,6 +890,23 @@ mod browse_tests {
         assert!(browse_jql(None, Some("ACME-9"), Whose::Anyone, false, &[]).contains(r#"key = "ACME-9""#));
         assert!(browse_jql(None, Some("rounding"), Whose::Anyone, false, &[])
             .contains("text ~ \"rounding\""));
+    }
+
+    #[test]
+    fn a_bare_number_is_a_key_in_the_configured_project() {
+        // Jira's text search does not look at keys: "21260" found nothing
+        // while "DT-21260" found the ticket.
+        assert_eq!(number_as_key(Some("DT"), " 21260 ").as_deref(), Some("DT-21260"));
+        assert_eq!(number_as_key(Some(" dt "), "21260").as_deref(), Some("DT-21260"));
+        let key = number_as_key(Some("DT"), "21260").unwrap_or_default();
+        assert!(browse_jql(Some("DT"), Some(&key), Whose::Anyone, false, &[]).contains(r#"key = "DT-21260""#));
+
+        assert_eq!(number_as_key(None, "21260"), None, "without a project a number is only text");
+        assert_eq!(number_as_key(Some("  "), "21260"), None);
+        assert_eq!(number_as_key(Some("DT"), "21260 fix"), None);
+        assert_eq!(number_as_key(Some("DT"), "DT-21260"), None, "a full key is looked up as it is");
+        assert_eq!(number_as_key(Some("DT"), ""), None);
+        assert_eq!(number_as_key(Some("D T"), "21260"), None, "a project that cannot be a key makes none");
     }
 
     #[test]

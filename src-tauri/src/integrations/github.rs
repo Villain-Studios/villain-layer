@@ -146,7 +146,7 @@ impl GitHub {
     /// Every pull request a branch has had, newest first.
     ///
     /// [`pull_for_branch`](Self::pull_for_branch) asks only for open ones,
-    /// which is right when deciding whether to open another but useless for
+    /// which is right when only the open one matters but useless for
     /// looking back: GitHub drops a PR from that listing the moment it closes,
     /// so a panel built on it watches history disappear. A branch abandoned
     /// once and retried has two, and both are worth keeping on screen.

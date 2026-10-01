@@ -305,6 +305,7 @@ mod tests {
             issue_url: Some("https://acme.atlassian.net/browse/ACME-12".into()),
             created_at: chrono::Utc::now(),
             ticket_stage: None,
+            chat: None,
         }
     }
 

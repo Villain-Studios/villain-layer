@@ -476,6 +476,7 @@ mod tests {
             issue_url: None,
             created_at: chrono::Utc::now(),
             ticket_stage: None,
+            chat: None,
         });
         cfg.checkouts.push(Checkout {
             id: "c1".into(),

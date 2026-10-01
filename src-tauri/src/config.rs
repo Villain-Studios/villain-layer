@@ -66,6 +66,10 @@ pub struct Task {
     /// so each is done once and a ticket moved by hand afterwards stays put.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ticket_stage: Option<String>,
+    /// The room folder of the chat whose agent created this task (CHAT-3).
+    /// That agent works on it from the chat, where the task cannot see it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat: Option<String>,
 }
 
 /// One repository's worktree within a task.
@@ -352,6 +356,7 @@ impl AppConfig {
                 issue_url: w.issue_url,
                 created_at: w.created_at,
                 ticket_stage: None,
+                chat: None,
             });
             self.checkouts.push(Checkout {
                 id: uuid::Uuid::new_v4().to_string(),

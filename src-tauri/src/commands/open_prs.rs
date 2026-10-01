@@ -39,22 +39,25 @@ pub async fn github_open_prs(
         let project = state.config.project(&checkout.project_id)?;
         let repo = project.name.clone();
 
-        let (slug, mut changed, mut committed) = {
-            let (dir, base, point) = (dir.clone(), checkout.base.clone(), checkout.base_commit.clone());
+        let measure = |point: Option<String>| {
+            let (dir, base) = (dir.clone(), checkout.base.clone());
             off_runtime(move || {
                 (
-                    git::origin_slug(&dir),
                     git::changed_count(&dir, &base, point.as_deref(), git::Scope::Branch),
                     committed_since(&dir, &base, point.as_deref()),
                 )
             })
-            .await?
         };
+        let slug = {
+            let dir = dir.clone();
+            off_runtime(move || git::origin_slug(&dir)).await?
+        };
+        let (mut changed, mut committed) = measure(checkout.base_commit.clone()).await?;
 
         // What the branch has had on GitHub, asked only of a repo with work to
-        // open. The merged head lands everything up to it: counted from the
-        // branch point alone, a repo merged while another was still in review
-        // had its finished work opened again as a new PR.
+        // open. A merged one moves the branch point up to what it landed
+        // (UPD-6): counted from where the branch was cut, a repo merged while
+        // another was still in review had its finished work opened again.
         let mut open = None;
         let mut merged = None;
         if changed > 0 && committed {
@@ -67,15 +70,9 @@ pub async fn github_open_prs(
                     }
                 };
                 open = prs.iter().find(|p| p.state == "open").cloned();
-                if let Some(pr) = landed(&prs) {
-                    let (dir, base, sha) = (dir.clone(), checkout.base.clone(), pr.head_sha.clone());
-                    if let Some((since, after)) = off_runtime(move || {
-                        changed_past(&dir, &sha).map(|n| (n, committed_since(&dir, &base, Some(&sha))))
-                    })
-                    .await?
-                    {
-                        changed = changed.min(since);
-                        committed &= after;
+                if let Some(pr) = super::landed(&prs) {
+                    if super::advance(&state, &checkout, &pr.head_sha).await? {
+                        (changed, committed) = measure(Some(pr.head_sha.clone())).await?;
                         merged = Some(pr.number);
                     }
                 }
@@ -239,23 +236,6 @@ pub async fn github_open_prs(
 }
 
 
-/// The pull request that has landed the branch so far: with none open, the
-/// newest merged one. A newer one closed unmerged takes nothing back.
-pub(crate) fn landed(prs: &[github::PullRequest]) -> Option<&github::PullRequest> {
-    if prs.iter().any(|p| p.state == "open") {
-        return None;
-    }
-    prs.iter().find(|p| p.merged)
-}
-
-/// Files changed since a merged pull request's head, committed or not; None
-/// when this repository never saw that head. The panel and opening PRs both
-/// take the smaller of this and the count from the branch point: this one
-/// overcounts once the base, with that PR in it, is merged back in.
-pub(crate) fn changed_past(dir: &Path, head: &str) -> Option<usize> {
-    git::has_commit(dir, head).then(|| git::changed_count_from(dir, head))
-}
-
 /// Whether the branch has a commit since `from`, or its branch point.
 fn committed_since(dir: &Path, base: &str, from: Option<&str>) -> bool {
     git::commits_since(dir, base, from).is_ok_and(|c| !c.is_empty())
@@ -266,8 +246,8 @@ mod tests {
     use super::super::repos::tests::{commit, git};
     use super::*;
 
-    /// A repo on `task` cut from `main`, returning it and the branch point.
-    fn branch() -> (PathBuf, String) {
+    #[test]
+    fn only_committed_work_counts_as_committed() {
         let dir = std::env::temp_dir().join(format!("vl-open-prs-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         git(&dir, &["init", "-q", "-b", "main"]);
@@ -275,69 +255,12 @@ mod tests {
         git(&dir, &["config", "user.name", "Test"]);
         commit(&dir, "a.txt");
         git(&dir, &["checkout", "-q", "-b", "task"]);
-        (dir.clone(), head(&dir))
-    }
+        let point = git(&dir, &["rev-parse", "HEAD"]).trim().to_string();
 
-    fn head(dir: &Path) -> String {
-        git(dir, &["rev-parse", "HEAD"]).trim().to_string()
-    }
-
-    fn pr(number: u64, state: &str, merged: bool) -> github::PullRequest {
-        github::PullRequest {
-            number,
-            title: String::new(),
-            state: state.into(),
-            draft: false,
-            author: String::new(),
-            head: "task".into(),
-            head_sha: format!("sha{number}"),
-            base: "main".into(),
-            url: String::new(),
-            mergeable_state: None,
-            merged,
-            comments: 0,
-            review_comments: 0,
-        }
-    }
-
-    #[test]
-    fn a_branch_whose_pull_request_merged_has_nothing_left_to_open() {
-        let (dir, point) = branch();
+        std::fs::write(dir.join("draft.txt"), "draft\n").unwrap();
+        assert!(!committed_since(&dir, "main", Some(&point)));
         commit(&dir, "infra.tf");
-        let merged = head(&dir);
-
-        assert_eq!(git::changed_count(&dir, "main", Some(&point), git::Scope::Branch), 1);
         assert!(committed_since(&dir, "main", Some(&point)));
-        assert_eq!(changed_past(&dir, &merged), Some(0));
-        assert!(!committed_since(&dir, "main", Some(&merged)));
         std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn work_after_a_merged_pull_request_is_still_opened() {
-        let (dir, _) = branch();
-        commit(&dir, "infra.tf");
-        let merged = head(&dir);
-        commit(&dir, "more.tf");
-
-        assert_eq!(changed_past(&dir, &merged), Some(1));
-        assert!(committed_since(&dir, "main", Some(&merged)));
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn a_merged_head_this_repository_never_saw_lands_nothing() {
-        let (dir, _) = branch();
-        assert_eq!(changed_past(&dir, "0123456789abcdef0123456789abcdef01234567"), None);
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn the_newest_merged_pull_request_has_landed_unless_one_is_open() {
-        let abandoned = [pr(3, "closed", false), pr(2, "closed", true), pr(1, "closed", true)];
-        assert_eq!(landed(&abandoned).map(|p| p.number), Some(2));
-
-        let reopened = [pr(3, "open", false), pr(2, "closed", true)];
-        assert!(landed(&reopened).is_none());
     }
 }

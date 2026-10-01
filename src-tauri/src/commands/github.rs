@@ -69,8 +69,8 @@ pub struct CheckoutPr {
     /// keeps whatever base it was created with until it is retargeted, so
     /// this and `pr.base` can differ, and the panel says so when they do.
     pub base: String,
-    /// Files changed on the branch — or, once its PR has merged, since what
-    /// the PR landed.
+    /// Files changed on the branch since its branch point, which a merged PR
+    /// moves up to what it landed (UPD-6).
     pub changed: usize,
     pub error: Option<String>,
 }
@@ -449,7 +449,24 @@ pub(crate) async fn task_prs(
                             // The open one is the one still being decided. With
                             // none open, the newest says what became of the branch.
                             let at = all.iter().position(|p| p.state == "open").unwrap_or(0);
-                            let landed = super::landed(&all).map(|p| p.head_sha.clone());
+                            // What merged moves the branch point (UPD-6). Counted
+                            // from where the branch was cut, a repo whose PR had
+                            // merged never went back to zero, so a task with one
+                            // repo merged and another in review read "partly up
+                            // for review, one repo still without a PR".
+                            if let Some(pr) = super::landed(&all) {
+                                if let Ok(true) = super::advance(state, &checkout, &pr.head_sha).await {
+                                    let (dir, base, head) =
+                                        (PathBuf::from(&checkout.path), checkout.base.clone(), pr.head_sha.clone());
+                                    if let Ok(n) = off_runtime(move || {
+                                        git::changed_count(&dir, &base, Some(&head), git::Scope::Branch)
+                                    })
+                                    .await
+                                    {
+                                        row.changed = n;
+                                    }
+                                }
+                            }
                             let found = all.remove(at);
 
                             if found.state == "open" {
@@ -485,19 +502,6 @@ pub(crate) async fn task_prs(
                                 // sweep, for as long as the task is kept — which
                                 // is what keeps a dozen done tasks from eating
                                 // the API budget the open ones need.
-                                //
-                                // A merged one covers everything up to what it
-                                // landed. Counted from the branch point, a repo
-                                // whose PR had merged never went back to zero, so
-                                // a task with one repo merged and another in
-                                // review read "partly up for review, one repo
-                                // still without a PR".
-                                if let Some(sha) = landed {
-                                    let dir = PathBuf::from(&checkout.path);
-                                    if let Ok(Some(n)) = off_runtime(move || super::changed_past(&dir, &sha)).await {
-                                        row.changed = row.changed.min(n);
-                                    }
-                                }
                                 row.pr = Some(found);
                             }
                             row.past = all;

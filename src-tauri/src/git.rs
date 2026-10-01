@@ -538,7 +538,7 @@ pub fn changed_count(
 
 /// `changed_count` measured from any revision: files that differ from it,
 /// committed or not, plus untracked ones.
-pub fn changed_count_from(dir: &Path, rev: &str) -> usize {
+fn changed_count_from(dir: &Path, rev: &str) -> usize {
     let tracked = run(dir, &["diff", "--name-only", rev])
         .map(|o| o.lines().filter(|l| !l.trim().is_empty()).count())
         .unwrap_or(0);
@@ -546,11 +546,6 @@ pub fn changed_count_from(dir: &Path, rev: &str) -> usize {
         .map(|o| o.lines().filter(|l| !l.trim().is_empty()).count())
         .unwrap_or(0);
     tracked + untracked
-}
-
-/// Whether `rev` names a commit this repository has.
-pub fn has_commit(dir: &Path, rev: &str) -> bool {
-    !rev.is_empty() && !rev.starts_with('-') && run(dir, &["cat-file", "-e", &format!("{rev}^{{commit}}")]).is_ok()
 }
 
 /// What the diff is measured against.

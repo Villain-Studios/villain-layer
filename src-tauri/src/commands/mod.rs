@@ -121,6 +121,7 @@ mod ticket_flow;
 mod messages;
 mod pr_task;
 mod open_prs;
+mod landed;
 mod task_context;
 mod notes;
 
@@ -138,6 +139,7 @@ pub use ticket_flow::*;
 pub use messages::*;
 pub use pr_task::*;
 pub use open_prs::*;
+pub(crate) use landed::{advance, landed};
 pub use notes::*;
 
 #[cfg(test)]

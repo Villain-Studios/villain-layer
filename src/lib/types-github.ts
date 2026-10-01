@@ -52,7 +52,7 @@ export interface CheckoutPr {
   verdict: Verdict;
   /** Where this repo's next PR is opened against; may differ from pr.base. */
   base: string;
-  /** Files changed on the branch — or, once its PR has merged, since what it landed. */
+  /** Files changed since the branch point, which a merged PR moves up to what it landed (UPD-6). */
   changed: number;
   error: string | null;
 }
@@ -63,7 +63,7 @@ export interface RepoBranchFacts {
   base: string;
   /** Abbreviated commit the branch is measured from. */
   baseline: string;
-  /** True when that is the branch point recorded at creation, not a merge base. */
+  /** True when that is the recorded branch point (TASK-3, UPD-6), not a merge base. */
   baseline_recorded: boolean;
   commits: number;
   unpushed: number;

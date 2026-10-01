@@ -353,9 +353,18 @@ integrations, the app's tools, the repos and the tasks in flight.
   history by folder.
 - **CHAT-2** A chat that is done MUST NOT count as needing you. One that is
   asking does. Its banners open the Chat view.
+- **CHAT-3** A task a chat's agent created (`start_work`, `create_task`)
+  MUST say so in its Terminals tab, with the chat's name and state and a
+  way to open it, for as long as that chat is open. The agent goes on
+  working on the task from the chat, so its pane is never one of the
+  task's: without this, the task read "No panes yet" while the work was
+  being done. The chat is known by its room folder, which outlives the
+  pane's id across a restart. Which pane called comes from `X-Villain-Pane`,
+  filled in by each CLI from `VILLAIN_PANE`. It is not a credential: an
+  agent could name another pane, and all that would do is attach this link.
 
-Code: `ChatView.tsx`, `commands/panes.rs` (`open_chat`,
-`write_chat_context`).
+Code: `ChatView.tsx`, `ChatLink.tsx`, `commands/panes.rs` (`open_chat`,
+`write_chat_context`), `mcp.rs` (`caller_chat`).
 
 Known gaps:
 - The room's "tasks in flight" list is written when the chat opens and at

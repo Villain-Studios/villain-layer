@@ -145,6 +145,8 @@ const cleanup: CleanupItem[] = [
 
 const clean = { ahead: 0, behind: 0, staged: 0, unstaged: 0, untracked: 0, conflicted: 0, dirty_files: 0 };
 
+const CHAT_ROOM = "/Users/you/.villain-worktrees/_chat/1a2b3c4d";
+
 const tasks: TaskView[] = [
   {
     id: "t-login",
@@ -185,6 +187,25 @@ const tasks: TaskView[] = [
       },
     ],
   },
+  {
+    // Filed and started by the chat's agent, which works on it from there (CHAT-3).
+    id: "t-release",
+    name: "ACME-141 Release checklist",
+    root: "/Users/you/.villain-worktrees/ACME-141",
+    branch: "ACME-141",
+    issue_key: "ACME-141",
+    issue_url: "https://acme.atlassian.net/browse/ACME-141",
+    created_at: ago(1800),
+    chat: CHAT_ROOM,
+    pane_count: 0,
+    checkouts: [
+      {
+        id: "c-release-api", task_id: "t-release", project_id: "p-api", project_name: "api",
+        path: "/Users/you/.villain-worktrees/ACME-141/api", base: "main", exists: true, broken: null, changed: 3,
+        status: { ...clean, branch: "ACME-141", unstaged: 2, untracked: 1, dirty_files: 3 },
+      },
+    ],
+  },
 ];
 
 function pane(
@@ -203,7 +224,7 @@ const panes: PaneInfo[] = [
   pane("pane-claude", "t-login", "agent", "Claude Code · api", "claude", "asking", 40, { topic: "Fix the login redirect loop" }),
   pane("pane-shell", "t-login", "shell", "Shell · api", null, "idle", 3600, { checkout_id: "c-login-api" }),
   pane("pane-copilot", "t-audit", "agent", "GitHub Copilot CLI", "copilot", "done", 300),
-  pane("pane-chat", "chat", "agent", "Claude Code (resumed)", "claude", "working", 12, { topic: "Which tickets block the release" }),
+  pane("pane-chat", "chat", "agent", "Claude Code (resumed)", "claude", "working", 12, { topic: "Which tickets block the release", cwd: CHAT_ROOM }),
 ];
 
 const pr = (number: number, repo: string, merged: boolean) => ({

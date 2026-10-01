@@ -466,6 +466,20 @@ pub async fn create_task(app: AppHandle, req: NewTask) -> Result<Task> {
     super::blocking(app, move |state| new_task(state, req)).await
 }
 
+/// Note on a task that a chat's agent created it, so the task can point at
+/// the chat its work is going on in (CHAT-3).
+pub(crate) fn link_chat(state: &AppState, mut task: Task, room: String) -> Result<Task> {
+    let id = task.id.clone();
+    let stored = room.clone();
+    state.config.update(move |c| {
+        if let Some(t) = c.tasks.iter_mut().find(|t| t.id == id) {
+            t.chat = Some(stored);
+        }
+    })?;
+    task.chat = Some(room);
+    Ok(task)
+}
+
 pub(crate) fn new_task(state: &AppState, req: NewTask) -> Result<Task> {
     if req.project_ids.is_empty() {
         return Err(Error::Other("pick at least one repository".into()));
@@ -497,6 +511,7 @@ pub(crate) fn new_task(state: &AppState, req: NewTask) -> Result<Task> {
         issue_url: req.issue_url,
         created_at: Utc::now(),
         ticket_stage: None,
+        chat: None,
     };
     state.config.update(|c| c.tasks.push(task.clone()))?;
 

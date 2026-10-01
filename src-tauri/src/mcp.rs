@@ -63,7 +63,12 @@ pub fn mcp_json() -> Option<Value> {
             SERVER_NAME: {
                 "type": "http",
                 "url": e.url,
-                "headers": { "Authorization": format!("Bearer {}", e.token) }
+                // Claude Code and Copilot both expand this. `:-` makes it
+                // empty, not the variable's own text, for a CLI run by hand.
+                "headers": {
+                    "Authorization": format!("Bearer {}", e.token),
+                    "X-Villain-Pane": "${VILLAIN_PANE:-}"
+                }
             }
         }
     }))
@@ -130,7 +135,12 @@ async fn handle(
         return StatusCode::ACCEPTED.into_response();
     }
 
-    let result = dispatch(&ctx.app, method, params).await;
+    let caller = headers
+        .get(PANE_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .filter(|v| !v.is_empty())
+        .map(str::to_string);
+    let result = dispatch(&ctx.app, method, params, caller.as_deref()).await;
     let response = match result {
         Ok(value) => json!({ "jsonrpc": "2.0", "id": id, "result": value }),
         Err(e) => json!({
@@ -180,6 +190,19 @@ pub(crate) fn take_hook(ptys: &crate::pty::PtyManager, pane: &str, payload: &Val
         .unwrap_or(false)
 }
 
+/// Which pane is calling. Each CLI fills it in from `VILLAIN_PANE`, set for
+/// every pane the app starts, so this is not authentication: an agent could
+/// name another pane. It decides nothing but where a task links back to.
+const PANE_HEADER: &str = "x-villain-pane";
+
+/// The room folder of the chat whose agent is calling, if it is a chat's
+/// (CHAT-3). The folder rather than the pane, which gets a new id at every
+/// launch while the room stays.
+fn caller_chat(ptys: &crate::pty::PtyManager, pane: Option<&str>) -> Option<String> {
+    let info = ptys.info(pane?).ok()?;
+    (info.task_id == commands::CHAT_TASK_ID).then_some(info.cwd)
+}
+
 fn bearer_ok(headers: &HeaderMap, token: &str) -> bool {
     headers
         .get("authorization")
@@ -188,7 +211,7 @@ fn bearer_ok(headers: &HeaderMap, token: &str) -> bool {
         .is_some_and(|t| t == token)
 }
 
-async fn dispatch(app: &AppHandle, method: &str, params: Value) -> Result<Value> {
+async fn dispatch(app: &AppHandle, method: &str, params: Value, caller: Option<&str>) -> Result<Value> {
     match method {
         "initialize" => Ok(json!({
             "protocolVersion": PROTOCOL_VERSION,
@@ -207,7 +230,7 @@ async fn dispatch(app: &AppHandle, method: &str, params: Value) -> Result<Value>
 
             // A tool failure is reported to the model, not as a protocol error,
             // so it can read the message and try something else.
-            match call(app, &name, args).await {
+            match call(app, &name, args, caller).await {
                 Ok(value) => Ok(json!({
                     "content": [{ "type": "text", "text": to_text(&value) }],
                     "isError": false
@@ -622,7 +645,7 @@ fn resolve_repos(
         .collect()
 }
 
-async fn call(app: &AppHandle, name: &str, args: Value) -> Result<Value> {
+async fn call(app: &AppHandle, name: &str, args: Value, caller: Option<&str>) -> Result<Value> {
     let state = app.state::<AppState>();
 
     // Listing transitions and dry-run cleanup are reads in all but name — they
@@ -845,7 +868,15 @@ async fn call(app: &AppHandle, name: &str, args: Value) -> Result<Value> {
                 issue_url: None,
                 epic_key: None,
             };
-            let task = commands::blocking(app.clone(), move |s| commands::new_task(s, req)).await?;
+            let chat = caller_chat(&state.ptys, caller);
+            let task = commands::blocking(app.clone(), move |s| {
+                let task = commands::new_task(s, req)?;
+                match chat {
+                    Some(room) => commands::link_chat(s, task, room),
+                    None => Ok(task),
+                }
+            })
+            .await?;
             Ok(serde_json::to_value(task)?)
         }
 
@@ -881,8 +912,9 @@ async fn call(app: &AppHandle, name: &str, args: Value) -> Result<Value> {
             let issue_key = required(&args, "issue_key")?.to_string();
 
             let ids = resolve_repos(&state, &args)?;
+            let chat = caller_chat(&state.ptys, caller);
 
-            let task = commands::jira_start_work(
+            let mut started = commands::jira_start_work(
                 app.clone(),
                 state,
                 issue_key,
@@ -892,7 +924,11 @@ async fn call(app: &AppHandle, name: &str, args: Value) -> Result<Value> {
                 arg(&args, "base").map(str::to_string),
             )
             .await?;
-            Ok(serde_json::to_value(task)?)
+            if let Some(room) = chat {
+                let task = started.task.clone();
+                started.task = commands::blocking(app.clone(), move |s| commands::link_chat(s, task, room)).await?;
+            }
+            Ok(serde_json::to_value(started)?)
         }
 
         "list_panes" => Ok(serde_json::to_value(
@@ -1103,12 +1139,16 @@ mod tests {
     }
 
     fn agent(ptys: &crate::pty::PtyManager, agent_id: &str, script: &str, title: bool) -> String {
+        agent_in(ptys, "t", agent_id, script, title)
+    }
+
+    fn agent_in(ptys: &crate::pty::PtyManager, task_id: &str, agent_id: &str, script: &str, title: bool) -> String {
         use crate::pty::{PaneKind, SpawnOptions};
         let app = tauri::test::mock_app();
         ptys.spawn(
             app.handle(),
             SpawnOptions {
-                task_id: "t".into(),
+                task_id: task_id.into(),
                 checkout_id: None,
                 cwd: std::env::temp_dir().to_string_lossy().to_string(),
                 kind: PaneKind::Agent,
@@ -1155,6 +1195,24 @@ mod tests {
         assert!(!take_hook(&ptys, &gemini, &json!({"hook_event_name": "Stop"})));
         assert!(!take_hook(&ptys, "no-such-pane", &json!({"hook_event_name": "Stop"})));
         for id in [claude, opencode, gemini] {
+            let _ = ptys.close(&id);
+        }
+    }
+
+    #[test]
+    fn only_a_chat_s_agent_links_the_task_it_creates_to_its_room() {
+        let ptys = crate::pty::PtyManager::default();
+        let chat = agent_in(&ptys, commands::CHAT_TASK_ID, "claude", "sleep 5", false);
+        let in_task = agent(&ptys, "claude", "sleep 5", false);
+
+        let room = ptys.info(&chat).unwrap().cwd;
+        assert_eq!(caller_chat(&ptys, Some(&chat)), Some(room));
+        // An agent already in a task is working where the task can see it.
+        assert_eq!(caller_chat(&ptys, Some(&in_task)), None);
+        // A CLI run by hand sends no pane, or one the app never started.
+        assert_eq!(caller_chat(&ptys, None), None);
+        assert_eq!(caller_chat(&ptys, Some("no-such-pane")), None);
+        for id in [chat, in_task] {
             let _ = ptys.close(&id);
         }
     }

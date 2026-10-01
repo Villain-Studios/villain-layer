@@ -425,7 +425,10 @@ fn gemini_project_settings(folder: &Path, url: Option<&str>) -> std::io::Result<
                 crate::mcp::SERVER_NAME.into(),
                 serde_json::json!({
                     "httpUrl": url,
-                    "headers": { "Authorization": "Bearer $VILLAIN_MCP_TOKEN" }
+                    "headers": {
+                        "Authorization": "Bearer $VILLAIN_MCP_TOKEN",
+                        "X-Villain-Pane": "$VILLAIN_PANE"
+                    }
                 }),
             );
         }
@@ -506,7 +509,10 @@ fn opencode_config_with(existing: Option<&str>, spec: &str, mcp_url: Option<&str
                 serde_json::json!({
                     "type": "remote",
                     "url": url,
-                    "headers": { "Authorization": "Bearer {env:VILLAIN_MCP_TOKEN}" },
+                    "headers": {
+                        "Authorization": "Bearer {env:VILLAIN_MCP_TOKEN}",
+                        "X-Villain-Pane": "{env:VILLAIN_PANE}"
+                    },
                     "enabled": true
                 }),
             );
@@ -1064,6 +1070,7 @@ mod tests {
         assert_eq!(merged["mcp"]["theirs"]["type"], "local");
         assert_eq!(merged["mcp"]["villain-layer"]["url"], "http://127.0.0.1:9/mcp");
         assert_eq!(merged["mcp"]["villain-layer"]["headers"]["Authorization"], "Bearer {env:VILLAIN_MCP_TOKEN}");
+        assert_eq!(merged["mcp"]["villain-layer"]["headers"]["X-Villain-Pane"], "{env:VILLAIN_PANE}");
         // Twice is still once.
         let again = opencode_config_with(Some(&merged.to_string()), spec, None);
         assert_eq!(again.matches(spec).count(), 1);
@@ -1143,6 +1150,7 @@ mod tests {
         assert_eq!(v["ui"]["theme"], "x");
         assert_eq!(v["mcpServers"]["villain-layer"]["httpUrl"], "http://127.0.0.1:9/mcp");
         assert_eq!(v["mcpServers"]["villain-layer"]["headers"]["Authorization"], "Bearer $VILLAIN_MCP_TOKEN");
+        assert_eq!(v["mcpServers"]["villain-layer"]["headers"]["X-Villain-Pane"], "$VILLAIN_PANE");
         // And it reads the context the app writes, which is not GEMINI.md.
         assert_eq!(v["context"]["fileName"], serde_json::json!(["AGENTS.md", "GEMINI.md"]));
         // In a worktree: nothing written at all.

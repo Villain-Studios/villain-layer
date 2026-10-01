@@ -74,6 +74,8 @@ export interface Task {
   created_at: string;
   /** The last stage its ticket was moved for (TKT-8). */
   ticket_stage?: "review" | "merged" | null;
+  /** The room folder of the chat whose agent created this task (CHAT-3). */
+  chat?: string | null;
 }
 
 /** One repository's worktree within a task. */

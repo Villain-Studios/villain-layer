@@ -5,6 +5,7 @@ import { read, write } from "../lib/persist";
 import { markStopping, useStore } from "../store";
 import { paneScope, paneState } from "../lib/derive";
 import type { PaneInfo, Resumable, TaskView } from "../lib/types";
+import { ChatLink } from "./ChatLink";
 import { TerminalPane } from "./Terminal";
 import { CloseIcon, PlusIcon, SwapIcon } from "./icons";
 import { ContextMenu, Field, Modal, Spinner } from "./ui";
@@ -390,6 +391,8 @@ export function Terminals({ task }: { task: TaskView }) {
           onClose={() => setAddMenu(null)}
         />
       )}
+
+      <ChatLink task={task} />
 
       {(() => {
         const p = panes.find((x) => x.id === active && x.notice);

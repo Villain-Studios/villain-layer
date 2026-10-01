@@ -210,6 +210,7 @@ mod tests {
             issue_url: None,
             created_at: chrono::Utc::now(),
             ticket_stage: moved.map(String::from),
+            chat: None,
         }
     }
 

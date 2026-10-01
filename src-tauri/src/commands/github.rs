@@ -449,6 +449,7 @@ pub(crate) async fn task_prs(
                             // The open one is the one still being decided. With
                             // none open, the newest says what became of the branch.
                             let at = all.iter().position(|p| p.state == "open").unwrap_or(0);
+                            let landed = super::landed(&all).map(|p| p.head_sha.clone());
                             let found = all.remove(at);
 
                             if found.state == "open" {
@@ -491,20 +492,10 @@ pub(crate) async fn task_prs(
                                 // a task with one repo merged and another in
                                 // review read "partly up for review, one repo
                                 // still without a PR".
-                                if found.merged {
-                                    let (dir, branch, base, point, sha) = (
-                                        PathBuf::from(&checkout.path),
-                                        task.branch.clone(),
-                                        checkout.base.clone(),
-                                        checkout.base_commit.clone(),
-                                        found.head_sha.clone(),
-                                    );
-                                    if let Ok((n, _)) = off_runtime(move || {
-                                        super::unlanded(&dir, &branch, &base, point.as_deref(), Some(&sha))
-                                    })
-                                    .await
-                                    {
-                                        row.changed = n;
+                                if let Some(sha) = landed {
+                                    let dir = PathBuf::from(&checkout.path);
+                                    if let Ok(Some(n)) = off_runtime(move || super::changed_past(&dir, &sha)).await {
+                                        row.changed = row.changed.min(n);
                                     }
                                 }
                                 row.pr = Some(found);

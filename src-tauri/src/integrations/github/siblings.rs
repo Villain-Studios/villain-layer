@@ -106,16 +106,16 @@ mod tests {
 
     #[test]
     fn a_later_repo_replaces_the_list_and_keeps_the_authors_edits() {
-        let (portal, iac) = (pr("web", 12), pr("infra", 3));
+        let (portal, infra) = (pr("web", 12), pr("infra", 3));
         let first = with_siblings("Serves the spec.", &[&portal], Some("ACME-7"));
         let edited = first.replace("Serves the spec.", "Serves the spec, and says so.");
 
-        let second = with_siblings(&edited, &[&portal, &iac], Some("ACME-7"));
+        let second = with_siblings(&edited, &[&portal, &infra], Some("ACME-7"));
 
         assert!(second.starts_with("Serves the spec, and says so.\n\n"));
         assert_eq!(second.matches("villain-layer:siblings -->").count(), 2);
         assert!(second.contains("infra: https://github.com/acme/infra/pull/3"));
-        assert_eq!(with_siblings(&second, &[&portal, &iac], Some("ACME-7")), second);
+        assert_eq!(with_siblings(&second, &[&portal, &infra], Some("ACME-7")), second);
     }
 
     #[test]

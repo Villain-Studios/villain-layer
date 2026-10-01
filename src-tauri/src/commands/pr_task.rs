@@ -197,8 +197,8 @@ mod tests {
     #[test]
     fn a_ticket_key_is_read_from_a_branch_or_a_title() {
         assert_eq!(ticket_key_in("feature/ACME-4821-new-flow").as_deref(), Some("ACME-4821"));
-        assert_eq!(ticket_key_in("feat(ACME-4810): remove gating").as_deref(), Some("ACME-4810"));
-        assert_eq!(ticket_key_in("ACME-4821 [FE] improve the analytics").as_deref(), Some("ACME-4821"));
+        assert_eq!(ticket_key_in("feat(ACME-4810): drop the old flag").as_deref(), Some("ACME-4810"));
+        assert_eq!(ticket_key_in("ACME-4821 [FE] tidy the header").as_deref(), Some("ACME-4821"));
         assert_eq!(ticket_key_in("Dt 19415 gbv from rebase"), None);
         assert_eq!(ticket_key_in("villain/some-task"), None);
     }

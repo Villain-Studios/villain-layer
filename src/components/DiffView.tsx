@@ -605,7 +605,7 @@ export function DiffView({ task }: { task: TaskView }) {
 
     const from = one
       ? one.baseline_recorded
-        ? `since ${one.baseline}, where this branch left ${one.base}`
+        ? `since ${one.baseline}, its branch point`
         : `since ${one.baseline}, the merge base with ${one.base}`
       : `across ${facts.length} repositories`;
 
@@ -621,7 +621,9 @@ export function DiffView({ task }: { task: TaskView }) {
         ? `No branch point was recorded for ${
             one ? "this worktree" : `${guessed.length} of these repositories`
           }, so the comparison falls back to the merge base — commits merged in from elsewhere are counted here too.`
-        : "Measured from the commit this worktree was created at, so a moving base branch cannot inflate it.",
+        : `Measured from the recorded branch point: where this worktree left ${
+            one ? one.base : "its base"
+          }, moved up when the base is merged in or a pull request of it merges. A moving base branch cannot inflate it.`,
       label: "Whole branch",
       adds,
       dels,

@@ -375,7 +375,8 @@ one. Commit commits every repo with changes, with one message.
 - **DIFF-2** Untracked files MUST show as all-additions patches. Binaries
   and files over 4MB are listed but never read.
 - **DIFF-3** Whole branch MUST measure from the recorded branch point
-  (TASK-3). The commit picker follows the first parent, so a merge of the
+  (TASK-3, moved by UPD-6), so after a merge it shows only what has not
+  landed. The commit picker follows the first parent, so a merge of the
   base does not list the base's history.
 - **DIFF-4** Commit MUST skip clean repos, and refuse in a repo mid-merge or
   mid-rebase. A failing commit hook keeps the dialog open with its output.
@@ -405,7 +406,15 @@ each repo its own team's way.
   told not to push, and how to continue) or to abandon. Abandoning restores
   the branch point as it was. Any other failure is aborted at once, so a
   worktree is never left half updated.
-- **UPD-6** The branch point moves to what was merged in, or rebased onto.
+- **UPD-6** The branch point moves to what was merged in, or rebased onto,
+  and to the head of a pull request of the branch once it has merged, as
+  soon as the PR watch or opening PRs sees it. Only forward: only to a
+  commit the branch grew from and that has the current point in it, never
+  during an unfinished update. A base merged back in after the PR already
+  holds its work, and moving back would count the base's work again.
+  Measured from where the branch was cut, merged work stayed in the Diff
+  view, the panel's counts, a follow-up PR's description and the agent's
+  history, and opening PRs opened a second PR for it.
 - **UPD-7** Each repo MUST start on its own way of updating: what it is set
   to in Repos, or the way it was last updated; else a guess, in the app's
   copy, from the first of these that says anything:
@@ -433,7 +442,7 @@ each repo its own team's way.
   could not be moved off.
 
 Code: `commands/diff.rs` (`update_from_base`), `git.rs`,
-`git/upkeep.rs` (`update_style`), `UpdateFromBase.tsx`.
+`git/upkeep.rs` (`update_style`), `commands/landed.rs` (UPD-6 after a merge), `UpdateFromBase.tsx`.
 
 Known gaps:
 - The guess reads only history. The site's own rules for the base branch
@@ -452,9 +461,9 @@ send feedback to an agent, and finish a merged task.
 - **PR-1** Opening PRs MUST push each repo that has commits, open one PR per
   repo against that checkout's base (draft by default), and reuse a PR that
   is already open. A repo with only uncommitted changes is refused: the app
-  never commits for you here. With no PR open, a merged one counts as having
-  landed everything up to its head: a repo with nothing since is skipped,
-  not opened again. Counted from the branch point, a repo merged while
+  never commits for you here. A merged PR first moves the branch point up
+  to what it landed (UPD-6), so a repo with nothing since is skipped, not
+  opened again. Counted from where the branch was cut, a repo merged while
   another was still in review got a second PR for the same work.
 - **PR-2** PRs this call opened MUST be linked on the Jira ticket as a
   comment, and posted to Slack if that is on. When the call opens a PR and
@@ -515,7 +524,7 @@ send feedback to an agent, and finish a merged task.
   out. One ticked on purpose goes to the agent marked as resolved, with a
   warning not to undo what was settled.
 
-Code: `commands/github.rs`, `commands/open_prs.rs`, `integrations/github.rs`, `PrPanel.tsx`,
+Code: `commands/github.rs`, `commands/open_prs.rs`, `commands/landed.rs`, `integrations/github.rs`, `PrPanel.tsx`,
 `PrFeedback.tsx`, `Markdown.tsx`, `lib/markdown.ts`.
 
 Known gaps:

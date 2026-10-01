@@ -94,33 +94,33 @@ mod tests {
 
     #[test]
     fn a_description_gains_the_other_prs_below_what_was_written() {
-        let portal = pr("customer-portal", 12);
-        let body = with_siblings("Serves the spec.\n", &[&portal], Some("DT-7"));
+        let portal = pr("web", 12);
+        let body = with_siblings("Serves the spec.\n", &[&portal], Some("ACME-7"));
         assert_eq!(
             body,
-            "Serves the spec.\n\n<!-- villain-layer:siblings -->\n---\nPart of DT-7, together with:\n\
-             - customer-portal: https://github.com/acme/customer-portal/pull/12\n\
+            "Serves the spec.\n\n<!-- villain-layer:siblings -->\n---\nPart of ACME-7, together with:\n\
+             - web: https://github.com/acme/web/pull/12\n\
              <!-- /villain-layer:siblings -->"
         );
     }
 
     #[test]
     fn a_later_repo_replaces_the_list_and_keeps_the_authors_edits() {
-        let (portal, iac) = (pr("customer-portal", 12), pr("dib-iac", 3));
-        let first = with_siblings("Serves the spec.", &[&portal], Some("DT-7"));
+        let (portal, infra) = (pr("web", 12), pr("infra", 3));
+        let first = with_siblings("Serves the spec.", &[&portal], Some("ACME-7"));
         let edited = first.replace("Serves the spec.", "Serves the spec, and says so.");
 
-        let second = with_siblings(&edited, &[&portal, &iac], Some("DT-7"));
+        let second = with_siblings(&edited, &[&portal, &infra], Some("ACME-7"));
 
         assert!(second.starts_with("Serves the spec, and says so.\n\n"));
         assert_eq!(second.matches("villain-layer:siblings -->").count(), 2);
-        assert!(second.contains("dib-iac: https://github.com/acme/dib-iac/pull/3"));
-        assert_eq!(with_siblings(&second, &[&portal, &iac], Some("DT-7")), second);
+        assert!(second.contains("infra: https://github.com/acme/infra/pull/3"));
+        assert_eq!(with_siblings(&second, &[&portal, &infra], Some("ACME-7")), second);
     }
 
     #[test]
     fn text_written_after_the_list_stays() {
-        let portal = pr("customer-portal", 12);
+        let portal = pr("web", 12);
         let body = format!("{}\n\nThanks!", with_siblings("Spec.", &[&portal], None));
 
         let again = with_siblings(&body, &[&portal], None);

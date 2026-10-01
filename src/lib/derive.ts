@@ -263,7 +263,7 @@ export function reviewComments(rows: CheckoutPr[]): number {
  * `last` is the suggestion made before this one. It is passed in, not read
  * from a ref inside a state updater: the updater ran after the ref had
  * already moved on, so the old suggestion looked typed and stuck. Pick
- * customer-portal (base `dev`), swap it for two repos on `development`, and
+ * web (base `dev`), swap it for two repos on `development`, and
  * Start work cut both from `dev`: "fatal: invalid reference: dev".
  */
 export function suggestBase(current: string, last: string, defaults: readonly string[]): string {

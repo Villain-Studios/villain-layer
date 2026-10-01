@@ -23,8 +23,8 @@ describe("the branch a new task starts from", () => {
   });
 
   test("follows the repos when one suggestion is swapped for another", () => {
-    // customer-portal alone, then with analytics-service, then analytics-service
-    // and flight-service-v2 without it: the box stayed on `dev`.
+    // web alone, then with billing, then billing
+    // and search without it: the box stayed on `dev`.
     expect(pick([["dev"], ["dev", "development"], ["development"], ["development", "development"]]))
       .toBe("development");
   });

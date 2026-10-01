@@ -596,8 +596,8 @@ offers Start work.
   in its largest whole unit ("5m", "3h", "2d", "1w", "4mo", "2y"), with the
   full date on hover.
 - **TKT-12** In Find work, a key MUST be looked up rather than searched for.
-  A bare number is a key in the project set in Settings ("21260" is
-  `ACME-21260`), since Jira's text search does not look at keys. If no
+  A bare number is a key in the project set in Settings ("4826" is
+  `ACME-4826`), since Jira's text search does not look at keys. If no
   ticket has that key, or the filters hide it, the number is searched for
   as text instead. Without a project set, a number is only text.
 

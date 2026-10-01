@@ -88,8 +88,8 @@ fn project_for(state: &AppState, repo: &str) -> Result<Project> {
         })
 }
 
-/// The first Jira key in a branch name or a title: `DT-21299` in
-/// `feature/DT-21299-new-flow` or `feat(DT-21299): new flow`.
+/// The first Jira key in a branch name or a title: `ACME-4821` in
+/// `feature/ACME-4821-new-flow` or `feat(ACME-4821): new flow`.
 pub(crate) fn ticket_key_in(text: &str) -> Option<String> {
     text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
         .filter_map(|word| {
@@ -161,24 +161,24 @@ mod tests {
     #[test]
     fn a_pull_request_only_github_has_becomes_a_task_on_its_own_commits() {
         let (root, _remote, clone) = github_and_clone();
-        git(&clone, &["switch", "-q", "-c", "DT-7-retry"]);
+        git(&clone, &["switch", "-q", "-c", "ACME-7-retry"]);
         std::fs::write(clone.join("a.txt"), "retried\n").unwrap();
         git(&clone, &["commit", "-qam", "retry"]);
-        git(&clone, &["push", "-q", "origin", "DT-7-retry"]);
+        git(&clone, &["push", "-q", "origin", "ACME-7-retry"]);
         let pushed = git(&clone, &["rev-parse", "HEAD"]);
         git(&clone, &["switch", "-q", "main"]);
-        git(&clone, &["branch", "-qD", "DT-7-retry"]);
+        git(&clone, &["branch", "-qD", "ACME-7-retry"]);
         let state = state(&root, &clone);
 
-        let task = task_for_pr_inner(&state, "Acme/API", "DT-7-retry", "main", "Retry the login").unwrap();
-        assert_eq!(task.branch, "DT-7-retry");
+        let task = task_for_pr_inner(&state, "Acme/API", "ACME-7-retry", "main", "Retry the login").unwrap();
+        assert_eq!(task.branch, "ACME-7-retry");
         assert_eq!(task.name, "Retry the login");
         assert_eq!(task.issue_key, None, "no Jira connected, so no ticket to link");
         let checkout = &state.config.checkouts_of(&task.id)[0];
         assert_eq!(git(Path::new(&checkout.path), &["rev-parse", "HEAD"]), pushed, "not cut again from main");
         assert_eq!(std::fs::read_to_string(Path::new(&checkout.path).join("a.txt")).unwrap(), "retried\n");
 
-        let again = task_for_pr_inner(&state, "acme/api", "DT-7-retry", "main", "Retry the login").unwrap();
+        let again = task_for_pr_inner(&state, "acme/api", "ACME-7-retry", "main", "Retry the login").unwrap();
         assert_eq!(again.id, task.id, "the second click opens the same task");
         assert_eq!(state.config.read().tasks.len(), 1);
         std::fs::remove_dir_all(&root).ok();
@@ -196,9 +196,9 @@ mod tests {
 
     #[test]
     fn a_ticket_key_is_read_from_a_branch_or_a_title() {
-        assert_eq!(ticket_key_in("feature/DT-21299-new-flow").as_deref(), Some("DT-21299"));
-        assert_eq!(ticket_key_in("feat(DT-21155): remove gating").as_deref(), Some("DT-21155"));
-        assert_eq!(ticket_key_in("DT-21299 [FE] improve the analytics").as_deref(), Some("DT-21299"));
+        assert_eq!(ticket_key_in("feature/ACME-4821-new-flow").as_deref(), Some("ACME-4821"));
+        assert_eq!(ticket_key_in("feat(ACME-4810): drop the old flag").as_deref(), Some("ACME-4810"));
+        assert_eq!(ticket_key_in("ACME-4821 [FE] tidy the header").as_deref(), Some("ACME-4821"));
         assert_eq!(ticket_key_in("Dt 19415 gbv from rebase"), None);
         assert_eq!(ticket_key_in("villain/some-task"), None);
     }

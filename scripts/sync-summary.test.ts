@@ -6,8 +6,8 @@ const row = (repo: string, ok: boolean): Synced => ({ project_id: `p-${repo}`, r
 
 describe("the line a Sync of several repos ends with", () => {
   test("names the repo that failed", () => {
-    expect(syncSummary([row("api", true), row("dibhub-actions", false), row("web", true)])).toBe(
-      "Synced 2 of 3. Failed: dibhub-actions. Each says why on its row.",
+    expect(syncSummary([row("api", true), row("shared-actions", false), row("web", true)])).toBe(
+      "Synced 2 of 3. Failed: shared-actions. Each says why on its row.",
     );
   });
 

@@ -1078,7 +1078,7 @@ mod tests {
             NewTask {
                 name: "Serve the spec".into(),
                 project_ids: vec![project_id.into()],
-                branch: Some("DT-1-spec".into()),
+                branch: Some("ACME-1-spec".into()),
                 branch_suffix: None,
                 base: Some(base.into()),
                 issue_key: None,
@@ -1100,7 +1100,7 @@ mod tests {
         let added = add_checkout_inner(&state, &task.id, "portal").unwrap();
 
         assert_eq!(added.base, "dev");
-        assert_eq!(git(Path::new(&added.path), &["rev-parse", "--abbrev-ref", "HEAD"]), "DT-1-spec");
+        assert_eq!(git(Path::new(&added.path), &["rev-parse", "--abbrev-ref", "HEAD"]), "ACME-1-spec");
         let _ = std::fs::remove_dir_all(&root);
     }
 

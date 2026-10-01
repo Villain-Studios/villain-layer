@@ -192,7 +192,7 @@ mod tests {
             "number": 7, "title": "Retry the login", "url": "https://github.com/acme/api/pull/7",
             "isDraft": false, "updatedAt": "2026-09-25T10:00:00Z", "mergeable": "MERGEABLE",
             "reviewDecision": null, "repository": { "nameWithOwner": "acme/api" },
-            "headRefName": "DT-7-retry", "baseRefName": "main",
+            "headRefName": "ACME-7-retry", "baseRefName": "main",
             "commits": { "nodes": [] },
             "reviewRequests": { "nodes": [] },
             "latestOpinionatedReviews": { "nodes": [] },
@@ -224,7 +224,7 @@ mod tests {
             "mergeable": "CONFLICTING",
         }));
         assert_eq!(pr.repo, "acme/api");
-        assert_eq!((pr.head.as_str(), pr.base.as_str()), ("DT-7-retry", "main"));
+        assert_eq!((pr.head.as_str(), pr.base.as_str()), ("ACME-7-retry", "main"));
         assert_eq!(pr.checks, "failing");
         assert_eq!(pr.review, "review_required");
         assert_eq!(pr.waiting_on, vec!["ana", "@fe"]);

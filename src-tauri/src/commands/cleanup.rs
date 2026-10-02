@@ -35,8 +35,8 @@ pub struct CleanupItem {
     /// What the item is and, for a branch, where it pointed: one that moved
     /// since the list was made no longer matches, and is not removed.
     pub id: String,
-    /// `worktree`, `folder`, `clone_branch`, `store_branch`, `records` or
-    /// `store`, which is also the order they are removed in.
+    /// `worktree`, `folder`, `clone_branch`, `store_branch`, `origin_branch`,
+    /// `records` or `store`, which is also the order they are removed in.
     pub kind: &'static str,
     pub repo: Option<String>,
     pub title: String,
@@ -44,23 +44,25 @@ pub struct CleanupItem {
     pub verdict: Verdict,
 }
 
-enum Action {
+pub(super) enum Action {
     /// The worktrees in it, each with the repository it belongs to; then
     /// the files the app made; then the folder, once empty.
     Folder(PathBuf, Vec<(PathBuf, PathBuf)>),
     Worktree(PathBuf, PathBuf),
     /// A branch in a repository, and the tip it was judged at.
     Branch(PathBuf, String, String),
+    /// A branch on the origin of an app's copy, and the tip it was judged at.
+    OriginBranch(PathBuf, String, String),
     Records(PathBuf),
     Store(PathBuf),
 }
 
-struct Planned {
-    item: CleanupItem,
-    action: Action,
+pub(super) struct Planned {
+    pub(super) item: CleanupItem,
+    pub(super) action: Action,
 }
 
-const ORDER: [&str; 6] = ["worktree", "folder", "clone_branch", "store_branch", "records", "store"];
+const ORDER: [&str; 7] = ["worktree", "folder", "clone_branch", "store_branch", "origin_branch", "records", "store"];
 
 #[derive(Debug, Serialize)]
 pub struct Cleaned {
@@ -72,26 +74,28 @@ pub struct Cleaned {
 /// What Clean up would remove, and why (REPO-8). Removes nothing.
 #[tauri::command]
 pub async fn cleanup_plan(app: AppHandle) -> Result<Vec<CleanupItem>> {
-    super::blocking(app, |state| Ok(plan(state).into_iter().map(|p| p.item).collect())).await
+    let remote = super::cleanup_remote::plan(&app).await;
+    super::blocking(app, |state| Ok(plan(state, remote).into_iter().map(|p| p.item).collect())).await
 }
 
 /// Remove the items picked from the plan. Everything is judged again first:
 /// what became unsafe since is refused, and what changed is not found.
 #[tauri::command]
 pub async fn cleanup_apply(app: AppHandle, ids: Vec<String>) -> Result<Vec<Cleaned>> {
-    super::blocking(app, move |state| Ok(apply(state, &ids))).await
+    let remote = super::cleanup_remote::plan(&app).await;
+    super::blocking(app, move |state| Ok(apply(state, remote, &ids))).await
 }
 
 /// What some build of the app still uses.
 #[derive(Default)]
-struct InUse {
+pub(super) struct InUse {
     roots: HashSet<PathBuf>,
     checkouts: HashSet<PathBuf>,
     stores: HashSet<PathBuf>,
-    branches: HashSet<String>,
+    pub(super) branches: HashSet<String>,
 }
 
-fn in_use(state: &AppState, cfg: &AppConfig) -> InUse {
+pub(super) fn in_use(state: &AppState, cfg: &AppConfig) -> InUse {
     let mut used = InUse::default();
     for t in &cfg.tasks {
         used.roots.insert(canon(&t.root));
@@ -116,7 +120,9 @@ fn in_use(state: &AppState, cfg: &AppConfig) -> InUse {
     used
 }
 
-fn plan(state: &AppState) -> Vec<Planned> {
+/// Everything found on disk, then `remote`: the branches on origin, which
+/// only GitHub can judge, asked before this runs.
+fn plan(state: &AppState, remote: Vec<Planned>) -> Vec<Planned> {
     let cfg = state.config.read();
     let used = in_use(state, &cfg);
     let root = state.config.worktree_root();
@@ -133,6 +139,7 @@ fn plan(state: &AppState) -> Vec<Planned> {
         records(project, store, &mut out);
     }
     unused_stores(&root.join(".repos"), &used, &mut out);
+    out.extend(remote);
     out
 }
 
@@ -426,8 +433,8 @@ fn unused_stores(repos: &Path, used: &InUse, out: &mut Vec<Planned>) {
     }
 }
 
-fn apply(state: &AppState, ids: &[String]) -> Vec<Cleaned> {
-    let planned = plan(state);
+fn apply(state: &AppState, remote: Vec<Planned>, ids: &[String]) -> Vec<Cleaned> {
+    let planned = plan(state, remote);
     let mut results: Vec<Cleaned> = ids
         .iter()
         .filter(|id| !planned.iter().any(|p| &p.item.id == *id))
@@ -462,6 +469,7 @@ fn remove(action: &Action) -> Result<()> {
         }
         Action::Worktree(owner, wt) => git::remove_worktree(owner, &wt.to_string_lossy(), false),
         Action::Branch(repo, branch, tip) => git::delete_branch_at(repo, branch, tip),
+        Action::OriginBranch(store, branch, tip) => git::delete_origin_branch(store, branch, tip),
         Action::Records(store) => {
             let staging = store.join("villain-adopting");
             // Each an empty folder with a `.git` link, never checked out;
@@ -484,7 +492,7 @@ mod tests {
     use crate::commands::repos::tests::{add_task, commit, git, setup, state};
 
     fn items(state: &AppState) -> Vec<CleanupItem> {
-        plan(state).into_iter().map(|p| p.item).collect()
+        plan(state, Vec::new()).into_iter().map(|p| p.item).collect()
     }
 
     fn verdict(items: &[CleanupItem], kind: &str, title: &str) -> Option<Verdict> {
@@ -540,7 +548,7 @@ mod tests {
         assert!(found.iter().all(|i| !i.title.contains("DEV-1")), "the other build's task is not offered");
 
         let ids: Vec<String> = found.iter().map(|i| i.id.clone()).collect();
-        let done = apply(&state, &ids);
+        let done = apply(&state, Vec::new(), &ids);
         assert!(succeeded(&done, &found, "folder", "OLD-1") && succeeded(&done, &found, "folder", "OLD-2"));
         assert!(!succeeded(&done, &found, "folder", "OLD-3") && !succeeded(&done, &found, "folder", "OLD-4"));
         assert!(!old.exists() && !clean.exists());
@@ -578,7 +586,7 @@ mod tests {
         assert_eq!(verdict(&found, "store_branch", "T-1"), None, "a task is on it");
 
         let ids: Vec<String> = found.iter().map(|i| i.id.clone()).collect();
-        let done = apply(&state, &ids);
+        let done = apply(&state, Vec::new(), &ids);
         assert!(succeeded(&done, &found, "clone_branch", "T-1"));
         assert!(!crate::git::branch_exists(&clone, "T-1"));
         assert!(crate::git::branch_exists(&store, "T-1"), "the task's own copy stays");

@@ -87,6 +87,20 @@ up** removes what tasks left behind.
     app's copy and they are not checked out;
   - branches in the app's copies that no task uses, pre-selected only when
     every commit on them is on origin;
+  - your branches on origin that are done with, in repos on the connected
+    GitHub, as origin stood at the last Sync. Yours means your newest pull
+    request from it is merged or closed, or, with no pull request of yours,
+    you wrote its last commit (the app's copy's `user.email`). Done with
+    means that pull request merged and nothing was pushed to it since, or
+    every commit on it is in the default branch: both pre-selected, since
+    GitHub can restore the first from the pull request and the second loses
+    nothing. A pull request closed unmerged, or a branch pushed to after
+    its pull request merged, is offered, not pre-selected. Never the
+    default branch, a branch a task of any build is on, or one an open pull
+    request of anyone's comes from. It is deleted only if origin's branch
+    is still at the commit it was judged at. Your 300 most recently created
+    pull requests in each repo are read; when there are more, it says so.
+    A repo GitHub could not be asked about says why;
   - copies no repo uses, never one a worktree still belongs to (the other
     build's, say);
   - git's records, in the app's copies, of worktrees whose folders are
@@ -96,7 +110,8 @@ up** removes what tasks left behind.
   folder is removed only once it is empty.
 
 Code: `commands/projects.rs`, `commands/repos.rs`, `commands/cleanup.rs`,
-`git/store.rs`, `git/upkeep.rs`, `ReposView.tsx`, `AddRepos.tsx`,
+`commands/cleanup_remote.rs`, `git/store.rs`, `git/upkeep.rs`,
+`integrations/github/branches.rs`, `ReposView.tsx`, `AddRepos.tsx`,
 `CleanUp.tsx`.
 
 Known gaps:

@@ -15,9 +15,9 @@ pub use store::{
     is_own_clone, is_store_of, owner, reclaim_clone, relink_worktree, take_branch_from_clone, take_branch_from_origin,
 };
 pub use upkeep::{
-    branch_tips, delete_branch_at, fast_forward, fetch_store, holds, is_bare,
-    list_worktrees, only_here, origin_url, remote_key, same_remote, standing, synced_at, update_style,
-    Forwarded,
+    branch_tips, delete_branch_at, delete_origin_branch, fast_forward, fetch_store, holds, is_bare,
+    list_worktrees, only_here, origin_branches, origin_url, remote_key, same_remote, standing, synced_at,
+    update_style, user_email, Forwarded, OriginBranch,
 };
 
 fn command(dir: &Path, args: &[&str]) -> Command {

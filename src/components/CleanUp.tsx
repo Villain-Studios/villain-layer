@@ -9,6 +9,7 @@ const SECTIONS: { kind: CleanupItem["kind"]; title: string }[] = [
   { kind: "worktree", title: "Worktrees in a task's folder that are none of its repos" },
   { kind: "clone_branch", title: "Task branches left in your clones" },
   { kind: "store_branch", title: "Branches in the app's copies that no task uses" },
+  { kind: "origin_branch", title: "Your branches on origin that are done with" },
   { kind: "records", title: "Git's records of deleted worktrees" },
   { kind: "store", title: "Copies no repository uses" },
 ];

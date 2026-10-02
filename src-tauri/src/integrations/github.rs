@@ -9,9 +9,11 @@ use crate::config::GithubConfig;
 use crate::error::{Error, Result};
 
 mod authored;
+mod branches;
 mod hunk;
 mod siblings;
 pub use authored::AuthoredPr;
+pub use branches::{BranchPr, PrState, MY_PULLS_LIMIT};
 pub use hunk::CodeLine;
 pub use siblings::Sibling;
 

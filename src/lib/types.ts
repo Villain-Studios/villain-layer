@@ -43,7 +43,7 @@ export interface Synced {
 /** Something Clean up would remove (REPO-8). */
 export interface CleanupItem {
   id: string;
-  kind: "worktree" | "folder" | "clone_branch" | "store_branch" | "records" | "store";
+  kind: "worktree" | "folder" | "clone_branch" | "store_branch" | "origin_branch" | "records" | "store";
   repo: string | null;
   title: string;
   detail: string;

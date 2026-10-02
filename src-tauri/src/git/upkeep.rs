@@ -365,6 +365,75 @@ pub fn delete_branch_at(repo: &Path, branch: &str, tip_was: &str) -> Result<()> 
     run(repo, &["branch", "-D", "--", branch]).map(|_| ())
 }
 
+/// A branch on origin, as the app's copy last fetched it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OriginBranch {
+    pub name: String,
+    pub tip: String,
+    /// Who wrote its last commit, lowercased.
+    pub author: String,
+    /// Every commit on it is on origin's `base`.
+    pub in_base: bool,
+}
+
+/// Every branch on origin but `base` itself, as the app's copy last fetched
+/// it.
+pub fn origin_branches(store: &Path, base: &str) -> Result<Vec<OriginBranch>> {
+    check_names("HEAD", base)?;
+    let theirs = format!("refs/remotes/origin/{base}");
+    if tip(store, &theirs).is_none() {
+        return Err(Error::Git(format!("origin has no {base}")));
+    }
+    let merged = run(store, &["for-each-ref", "--format=%(refname)", "--merged", &theirs, "refs/remotes/origin"])?;
+    let merged: std::collections::HashSet<&str> = merged.lines().collect();
+    let out = run(store, &["for-each-ref", "--format=%(refname)%00%(objectname)%00%(authoremail)", "refs/remotes/origin"])?;
+    Ok(out
+        .lines()
+        .filter_map(|l| {
+            let mut f = l.split('\0');
+            let refname = f.next()?;
+            let name = refname.strip_prefix("refs/remotes/origin/")?;
+            // `origin/HEAD` names the default branch; it is not one.
+            if name == base || name == "HEAD" {
+                return None;
+            }
+            Some(OriginBranch {
+                name: name.to_string(),
+                tip: f.next()?.to_string(),
+                author: f.next()?.trim_matches(['<', '>']).to_ascii_lowercase(),
+                in_base: merged.contains(refname),
+            })
+        })
+        .collect())
+}
+
+/// The email git writes commits here as, lowercased.
+pub fn user_email(repo: &Path) -> Option<String> {
+    run(repo, &["config", "--get", "user.email"])
+        .ok()
+        .map(|e| e.trim().to_ascii_lowercase())
+        .filter(|e| !e.is_empty())
+}
+
+/// Delete `branch` on origin if it is still at `tip_was` there.
+///
+/// The lease is what makes this safe to offer from a list made at the last
+/// Sync: whatever was pushed to the branch since, by anyone, makes git
+/// refuse, and the branch is judged again.
+pub fn delete_origin_branch(store: &Path, branch: &str, tip_was: &str) -> Result<()> {
+    check_names(branch, "HEAD")?;
+    commit_id(tip_was)?;
+    let name = format!("refs/heads/{branch}");
+    run(store, &["push", "--quiet", &format!("--force-with-lease={name}:{tip_was}"), "origin", &format!(":{name}")])
+        .map(|_| ())
+        .map_err(|e| match e {
+            Error::Git(msg) if msg.contains("stale info") => {
+                Error::Git(format!("{branch} has moved on origin since it was checked; Sync and check again"))
+            }
+            other => other,
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::{add_worktree, create_store};
@@ -602,6 +671,39 @@ mod tests {
         assert!(delete_branch_at(&store, "task", &main).is_err(), "not where it was judged");
         delete_branch_at(&store, "task", &work).unwrap();
         assert!(!super::super::branch_exists(&store, "task"));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_branch_on_origin_is_deleted_only_while_it_is_where_it_was_judged() {
+        let root = sandbox();
+        let (_clone, mate, store) = scene(&root);
+        run(&mate, &["push", "-q", "origin", "HEAD:refs/heads/landed"]).unwrap();
+        run(&mate, &["switch", "-q", "-c", "work"]).unwrap();
+        std::fs::write(mate.join("w.txt"), "work\n").unwrap();
+        run(&mate, &["add", "-A"]).unwrap();
+        run(&mate, &["commit", "-qm", "work"]).unwrap();
+        run(&mate, &["push", "-q", "origin", "work"]).unwrap();
+        fetch_store(&store).unwrap();
+
+        let mut found = origin_branches(&store, "main").unwrap();
+        found.sort_by(|a, b| a.name.cmp(&b.name));
+        let seen: Vec<(&str, bool, &str)> = found.iter().map(|b| (b.name.as_str(), b.in_base, b.author.as_str())).collect();
+        assert_eq!(seen, vec![("landed", true, "t@villain.local"), ("work", false, "t@villain.local")], "main itself is not listed");
+
+        // Pushed to after it was judged: the lease refuses.
+        let judged = found[1].tip.clone();
+        std::fs::write(mate.join("w.txt"), "more\n").unwrap();
+        run(&mate, &["commit", "-qam", "more"]).unwrap();
+        run(&mate, &["push", "-q", "origin", "work"]).unwrap();
+        assert!(delete_origin_branch(&store, "work", &judged).unwrap_err().to_string().contains("moved on origin"));
+
+        delete_origin_branch(&store, "landed", &found[0].tip).unwrap();
+        let remote = root.join("remote.git");
+        assert!(tip(&remote, "refs/heads/landed").is_none());
+        assert!(tip(&remote, "refs/heads/work").is_some());
+        assert!(tip(&store, "refs/remotes/origin/landed").is_none(), "the copy forgets it too");
+        assert!(delete_origin_branch(&store, "-f", &judged).is_err());
         std::fs::remove_dir_all(&root).ok();
     }
 

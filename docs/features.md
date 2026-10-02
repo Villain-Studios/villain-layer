@@ -390,8 +390,9 @@ Known gaps:
 The Diff tab shows the task's changes across all its repos. There are two
 scopes: Uncommitted (against HEAD) and Whole branch (against the branch
 point). Whole branch can also show one commit at a time. Clicking a line
-number leaves a note on it. The notes go to a running agent, or start a new
-one. Commit commits every repo with changes, with one message.
+number leaves a note on it. Review asks a fresh model to read the branch
+and leave notes of its own. The notes go to a running agent, or start a
+new one. Commit commits every repo with changes, with one message.
 
 - **DIFF-1** The file list and patches MUST come from git as the user's
   config would not change them. That means `--no-ext-diff`, untracked files
@@ -406,8 +407,28 @@ one. Commit commits every repo with changes, with one message.
   mid-rebase. A failing commit hook keeps the dialog open with its output.
 - **DIFF-5** A note sent to an agent at the task folder MUST name its repo
   (`api/src/auth.ts:42`), so it is never ambiguous which repo is meant.
+- **DIFF-6** Review MUST run a fresh one-shot model over the task's whole
+  branch in every repo: its commits, the diff as PR-4 gathers it, the
+  saved ticket (as data, not instructions), and, for a review task, whose
+  pull request it is. It runs through Claude Code on the model chosen in
+  Settings (Sonnet by default), may read the repositories, and may not
+  write, run or fetch anything. Its findings come back as notes on lines,
+  each a bug, a risk or a nit, and each a suggestion until kept: only
+  your notes and kept findings are sent. A finding naming no file or line
+  of the task is dropped, and one on a line the patch does not draw is
+  listed above it with its line number. A new run replaces the last one's
+  findings that were not kept. An answer that is not findings is an
+  error, never a clean review. Notes are held per task while the app
+  runs: kept by the tab, they were lost by switching to another, and a
+  run takes a minute or more.
 
-Code: `commands/diff.rs`, `git.rs`, `DiffView.tsx`.
+Code: `commands/diff.rs`, `commands/reviewer.rs`, `git.rs`, `DiffView.tsx`,
+`DiffNote.tsx`.
+
+Known gaps:
+- Notes and findings do not survive a restart of the app.
+- The reviewer runs on Claude Code only, whichever agent CLI did the work.
+- A run cannot be stopped once started, and has no time limit of its own.
 
 ## 7. Update from base
 
@@ -852,6 +873,7 @@ Known gaps:
 | Put terminals back when the app reopens | on | PANE-7 |
 | Let agents read terminal output | **off** | MCP `pane_output`, `handoff_prompt` |
 | Move the ticket when work starts | on | TKT-1 |
+| Reviewer | Sonnet | the model Review runs on (DIFF-6) |
 | Tickets follow the work (Jira) | not chosen | TKT-8, per Jira project |
 | Trust the folders this app creates | on | PANE-10 |
 | Terminal text | 13px | 9–24px |

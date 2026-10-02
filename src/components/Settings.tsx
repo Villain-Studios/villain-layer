@@ -332,6 +332,20 @@ export function Settings() {
           </Field>
 
           <Field
+            label="Reviewer"
+            hint="The model the Review button in the Diff tab runs on, through Claude Code. Sonnet is the balance; Opus reviews deeper and costs several times as much a run; Haiku is quick and shallow."
+          >
+            <select
+              value={settings.ui.reviewer_model}
+              onChange={(e) => void saveUi({ reviewer_model: e.target.value as UiPrefs["reviewer_model"] })}
+            >
+              <option value="sonnet">Sonnet</option>
+              <option value="opus">Opus</option>
+              <option value="haiku">Haiku</option>
+            </select>
+          </Field>
+
+          <Field
             label={`Terminal text — ${ui!.terminal_font_size}px`}
             hint="Applies to running panes immediately; they re-fit to the new cell size."
           >

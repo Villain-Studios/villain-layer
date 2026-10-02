@@ -256,6 +256,7 @@ pub fn run() {
             commands::task_for_pr,
             commands::task_for_review,
             commands::review_take_latest,
+            commands::review_branch,
             commands::set_checkout_base,
             commands::checkout_branches,
             commands::task_branch_facts,

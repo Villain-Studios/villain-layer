@@ -13,6 +13,7 @@ import type {
   Project,
   RepoHealth,
   ReviewQueue,
+  ReviewerRun,
   Settings,
   Target,
   TaskView,
@@ -40,6 +41,34 @@ interface ToastOpts {
    * for news the backend has recorded already (MSG-3).
    */
   record?: MessageKind | false;
+}
+
+/**
+ * A note on a line of the Diff tab: one you wrote, or one the reviewer pass
+ * found (DIFF-6). Held here rather than in the tab, so switching to another
+ * tab, or a reviewer answering while you are on one, loses none.
+ */
+export interface ReviewNote {
+  id: number;
+  checkoutId: string;
+  repo: string;
+  path: string;
+  line: number;
+  body: string;
+  code: string;
+  by: "you" | "reviewer";
+  severity?: "bug" | "risk" | "nit";
+  /** A finding is a suggestion until kept; only kept notes are sent. */
+  kept: boolean;
+}
+
+/** The reviewer pass of one task: running, or what it last said. */
+export interface ReviewerState {
+  running: boolean;
+  /** When the run under way started, or the last one ended (ms). */
+  at: number;
+  last: ReviewerRun | null;
+  error: string | null;
 }
 
 interface State {
@@ -127,12 +156,21 @@ interface State {
   refreshMessages: () => Promise<void>;
   /** Replace one task's PR rows, for a panel that fetched them itself. */
   setTaskPrs: (taskId: string, rows: CheckoutPr[]) => void;
+  /** Notes on the Diff tab, by task id (DIFF-6). */
+  notes: Record<string, ReviewNote[]>;
+  addNote: (taskId: string, note: Omit<ReviewNote, "id">) => void;
+  dropNotes: (taskId: string, ids: number[]) => void;
+  keepNote: (taskId: string, id: number) => void;
+  /** The reviewer pass, by task id (DIFF-6). */
+  reviewer: Record<string, ReviewerState>;
+  runReviewer: (taskId: string) => Promise<void>;
   refreshSettings: () => Promise<void>;
   /** `quiet` is a timer tick: no toast, and no spinner over a list already shown. */
   refreshIssues: (opts?: { quiet?: boolean }) => Promise<void>;
 }
 
 let toastSeq = 0;
+let noteSeq = 0;
 
 /**
  * Whether a PR sweep is already in the air.
@@ -456,6 +494,53 @@ export const useStore = create<State>((set, get) => {
       // Left as it was: stale rows beat empty ones.
     } finally {
       sweeping = false;
+    }
+  },
+
+  notes: {},
+  addNote: (taskId, note) =>
+    set((s) => ({ notes: { ...s.notes, [taskId]: [...(s.notes[taskId] ?? []), { ...note, id: ++noteSeq }] } })),
+  dropNotes: (taskId, ids) =>
+    set((s) => ({ notes: { ...s.notes, [taskId]: (s.notes[taskId] ?? []).filter((n) => !ids.includes(n.id)) } })),
+  keepNote: (taskId, id) =>
+    set((s) => ({
+      notes: { ...s.notes, [taskId]: (s.notes[taskId] ?? []).map((n) => (n.id === id ? { ...n, kept: true } : n)) },
+    })),
+
+  reviewer: {},
+  runReviewer: async (taskId) => {
+    if (get().reviewer[taskId]?.running) return;
+    const put = (r: Partial<ReviewerState>) =>
+      set((s) => {
+        const prev = s.reviewer[taskId] ?? { running: false, at: 0, last: null, error: null };
+        return { reviewer: { ...s.reviewer, [taskId]: { ...prev, running: false, at: Date.now(), ...r } } };
+      });
+    put({ running: true, error: null });
+    try {
+      const run = await api.reviewBranch(taskId);
+      // A new run replaces the findings of the last that were not kept:
+      // judged already, or about code that has changed since.
+      set((s) => ({
+        notes: {
+          ...s.notes,
+          [taskId]: [
+            ...(s.notes[taskId] ?? []).filter((n) => n.by === "you" || n.kept),
+            ...run.findings.map((f) => ({
+              id: ++noteSeq, checkoutId: f.checkout_id, repo: f.repo, path: f.path, line: f.line,
+              body: f.body, code: f.code, by: "reviewer" as const, severity: f.severity, kept: false,
+            })),
+          ],
+        },
+      }));
+      put({ last: run });
+      const n = run.findings.length;
+      const name = get().tasks.find((t) => t.id === taskId)?.name ?? "the task";
+      get().toast(n ? "info" : "success", n ? `The reviewer left ${n} note${n === 1 ? "" : "s"} on ${name}` : `The reviewer found nothing in ${name}`, {
+        target: `task:${taskId}`,
+      });
+    } catch (e) {
+      put({ error: errMessage(e) });
+      get().fail(e);
     }
   },
 

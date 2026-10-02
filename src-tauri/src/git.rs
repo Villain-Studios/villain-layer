@@ -758,7 +758,10 @@ pub fn diff_stat(dir: &Path, from: &str) -> Result<String> {
 /// The patch from `from` to the worktree, leaving out the `excluded` pathspecs
 /// (`:!*.lock`). `--no-ext-diff` for the same reason as `file_diff`.
 pub fn diff_patch(dir: &Path, from: &str, excluded: &[&str]) -> Result<String> {
-    let mut args = vec!["diff", "--no-color", "--no-ext-diff", from];
+    // The prefixes spelled out: `diff.mnemonicPrefix` writes `w/` and `c/`,
+    // and `diff.noprefix` none, so a reader of `+++ b/<path>` found no file
+    // and the reviewer's findings all read as off the diff.
+    let mut args = vec!["diff", "--no-color", "--no-ext-diff", "--src-prefix=a/", "--dst-prefix=b/", from];
     if !excluded.is_empty() {
         args.extend_from_slice(&["--", "."]);
         args.extend_from_slice(excluded);

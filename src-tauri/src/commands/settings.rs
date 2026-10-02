@@ -65,6 +65,11 @@ pub fn set_ui_prefs(state: State<AppState>, ui: UiPrefs) -> Result<()> {
         sync_jira_status: ui.sync_jira_status,
         system_notifications: ui.system_notifications,
         notify_waiting_agents: ui.notify_waiting_agents,
+        reviewer_model: if crate::config::REVIEWER_MODELS.contains(&ui.reviewer_model.as_str()) {
+            ui.reviewer_model
+        } else {
+            crate::config::UiPrefs::default().reviewer_model
+        },
     };
     state.config.update(|c| c.ui = ui)
 }

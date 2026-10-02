@@ -31,6 +31,7 @@ import type {
   Resumable,
   ReviewComment,
   ReviewQueue,
+  ReviewerRun,
   Settings,
   SlackConfig,
   Started,
@@ -95,6 +96,8 @@ export const api = {
     invoke<Task>("task_for_review", { pr }),
   /** Move a review task to its pull request's head now (REV-10). */
   reviewTakeLatest: (taskId: string) => invoke<Task>("review_take_latest", { taskId }),
+  /** A fresh model's review of the task's whole branch (DIFF-6). Takes minutes, not seconds. */
+  reviewBranch: (taskId: string) => invoke<ReviewerRun>("review_branch", { taskId }),
   deleteTask: (id: string, force = false) =>
     invoke<RepoResult[]>("delete_task", { id, force }),
   /**

@@ -2,11 +2,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api, errMessage } from "../lib/api";
 import { paneName } from "../lib/derive";
 import { reportRepoResults } from "../lib/report";
-import { useStore } from "../store";
+import { useStore, type ReviewNote } from "../store";
 import type {
   ChangedFile, CommitInfo, DiffScope, RepoBranchFacts, RepoCommits, ReviewComment, TaskView,
 } from "../lib/types";
 import { parseDiff, toTree, type Node } from "../lib/diff";
+import { NoteCard, ReviewerButton } from "./DiffNote";
 import { ChevronIcon } from "./icons";
 import { Field, Modal, Spinner } from "./ui";
 import { read, write } from "../lib/persist";
@@ -22,17 +23,8 @@ function reviewPrompt(comments: ReviewComment[]): string {
   return prompt;
 }
 
-interface Draft {
-  id: number;
-  checkoutId: string;
-  repo: string;
-  path: string;
-  line: number;
-  body: string;
-  code: string;
-}
-
-let draftSeq = 0;
+/** No notes, one array: a fresh `[]` per render would redraw every row. */
+const NO_NOTES: ReviewNote[] = [];
 
 const fileKey = (f: ChangedFile) => `${f.checkout_id}:${f.path}`;
 
@@ -99,7 +91,14 @@ export function DiffView({ task }: { task: TaskView }) {
   const [patch, setPatch] = useState<{ key: string; text: string } | null>(null);
   /** Why there is no patch to draw, when there is a reason. */
   const [patchNote, setPatchNote] = useState<string | null>(null);
-  const [drafts, setDrafts] = useState<Draft[]>([]);
+  const notes = useStore((s) => s.notes[task.id] ?? NO_NOTES);
+  const addNote = useStore((s) => s.addNote);
+  const dropNotes = useStore((s) => s.dropNotes);
+  const keepNote = useStore((s) => s.keepNote);
+  // What Send sends: yours, and the reviewer's you kept. The rest are its
+  // findings still waiting on you to keep or drop.
+  const queued = useMemo(() => notes.filter((n) => n.by === "you" || n.kept), [notes]);
+  const undecided = notes.length - queued.length;
   const [composing, setComposing] = useState<{ line: number; code: string } | null>(null);
   const [committing, setCommitting] = useState(false);
   const [commitBusy, setCommitBusy] = useState(false);
@@ -289,10 +288,21 @@ export function DiffView({ task }: { task: TaskView }) {
     [parsed, wholeFile],
   );
   const hidden = parsed.length - lines.length;
-  const fileDrafts = useMemo(
-    () => drafts.filter((d) => selected && `${d.checkoutId}:${d.path}` === selected),
-    [drafts, selected],
+  const fileNotes = useMemo(
+    () => notes.filter((d) => selected && `${d.checkoutId}:${d.path}` === selected),
+    [notes, selected],
   );
+  // A finding on a line this patch does not draw: outside its hunks, or
+  // past the lines held back. Listed above the diff rather than lost.
+  const offLine = useMemo(() => {
+    const drawn = new Set(lines.map((l) => l.newLine));
+    return fileNotes.filter((n) => !drawn.has(n.line));
+  }, [lines, fileNotes]);
+  const notesPerFile = useMemo(() => {
+    const count = new Map<string, number>();
+    for (const n of notes) count.set(`${n.checkoutId}:${n.path}`, (count.get(`${n.checkoutId}:${n.path}`) ?? 0) + 1);
+    return count;
+  }, [notes]);
 
   // Files grouped by repo, in the order the task's repos are listed.
   const groups = useMemo(() => {
@@ -340,6 +350,9 @@ export function DiffView({ task }: { task: TaskView }) {
         >
           <span className="chev-spacer" aria-hidden />
           <span className="p">{node.name}</span>
+          {notesPerFile.has(fileKey(f)) && (
+            <span className="badge" title="Notes on this file">{notesPerFile.get(fileKey(f))}</span>
+          )}
           <span className="n" style={{ color: "var(--green)" }}>+{f.additions}</span>
           <span className="n" style={{ color: "var(--red)" }}>-{f.deletions}</span>
         </div>
@@ -349,18 +362,16 @@ export function DiffView({ task }: { task: TaskView }) {
 
   function addDraft(text: string) {
     if (!composing || !current || !text.trim()) { setComposing(null); return; }
-    setDrafts((d) => [
-      ...d,
-      {
-        id: ++draftSeq,
-        checkoutId: current.checkout_id,
-        repo: current.repo,
-        path: current.path,
-        line: composing.line,
-        body: text.trim(),
-        code: composing.code,
-      },
-    ]);
+    addNote(task.id, {
+      checkoutId: current.checkout_id,
+      repo: current.repo,
+      path: current.path,
+      line: composing.line,
+      body: text.trim(),
+      code: composing.code,
+      by: "you",
+      kept: true,
+    });
     setComposing(null);
   }
   // Read through a ref so the rows below can be memoised without holding an
@@ -369,7 +380,7 @@ export function DiffView({ task }: { task: TaskView }) {
   addDraftRef.current = addDraft;
 
   function commentsFor(checkoutId: string | null): ReviewComment[] {
-    return drafts.map((d) => ({
+    return queued.map((d) => ({
       // Only qualify the path when the agent is not already inside that repo.
       repo: checkoutId === d.checkoutId ? null : d.repo,
       path: d.path,
@@ -380,13 +391,14 @@ export function DiffView({ task }: { task: TaskView }) {
   }
 
   async function send() {
-    if (drafts.length === 0) return;
+    if (queued.length === 0) return;
     const pane = agentPanes.find((p) => p.id === target);
     if (pane) {
       try {
-        const n = drafts.length;
+        const n = queued.length;
+        const sent = queued.map((d) => d.id);
         await api.sendReview(pane.id, commentsFor(pane.checkout_id));
-        setDrafts([]);
+        dropNotes(task.id, sent);
         toast("success", `Sent ${n} note${n === 1 ? "" : "s"} to ${pane.title}.`);
       } catch (e) {
         fail(e);
@@ -403,17 +415,18 @@ export function DiffView({ task }: { task: TaskView }) {
   }
 
   async function startAndSend() {
-    if (!startAgentId || drafts.length === 0) return;
+    if (!startAgentId || queued.length === 0) return;
     setStartingBusy(true);
     try {
-      const n = drafts.length;
+      const n = queued.length;
+      const sent = queued.map((d) => d.id);
       const pane = await api.spawnAgent(
         task.id,
         startAgentId,
         startScope,
         reviewPrompt(commentsFor(startScope)),
       );
-      setDrafts([]);
+      dropNotes(task.id, sent);
       setStarting(false);
       await refreshPanes();
       setTab("terminals");
@@ -602,7 +615,7 @@ export function DiffView({ task }: { task: TaskView }) {
     () =>
       lines.map((l, i) => {
         const anchored = l.newLine !== null
-          ? fileDrafts.filter((d) => d.line === l.newLine)
+          ? fileNotes.filter((d) => d.line === l.newLine)
           : [];
         const isComposing = composingLine === l.newLine && l.newLine !== null;
         return (
@@ -628,17 +641,12 @@ export function DiffView({ task }: { task: TaskView }) {
             </div>
 
             {anchored.map((d) => (
-              <div key={d.id} className="inline-comment">
-                <div className="body">{d.body}</div>
-                <div className="actions">
-                  <button
-                    className="btn btn-sm btn-danger"
-                    onClick={() => setDrafts((all) => all.filter((x) => x.id !== d.id))}
-                  >
-                    Remove
-                  </button>
-                </div>
-              </div>
+              <NoteCard
+                key={d.id}
+                note={d}
+                onKeep={() => keepNote(task.id, d.id)}
+                onDrop={() => dropNotes(task.id, [d.id])}
+              />
             ))}
 
             {isComposing && (
@@ -650,7 +658,7 @@ export function DiffView({ task }: { task: TaskView }) {
           </div>
         );
       }),
-    [lines, fileDrafts, composingLine],
+    [lines, fileNotes, composingLine, task.id, keepNote, dropNotes],
   );
 
   // A worktree git cannot read has no changes to list, which looked exactly
@@ -699,6 +707,8 @@ export function DiffView({ task }: { task: TaskView }) {
             {scopeTabs}
           </div>
           {commitPicker}
+          <div className="spacer" />
+          <ReviewerButton taskId={task.id} />
         </div>
       </>
     );
@@ -766,6 +776,19 @@ export function DiffView({ task }: { task: TaskView }) {
             </div>
           )}
           {patchNote && <div className="diff-more">{patchNote}</div>}
+          {offLine.length > 0 && (
+            <div className="diff-offline">
+              {offLine.map((d) => (
+                <NoteCard
+                  key={d.id}
+                  note={d}
+                  where={`L${d.line}`}
+                  onKeep={() => keepNote(task.id, d.id)}
+                  onDrop={() => dropNotes(task.id, [d.id])}
+                />
+              ))}
+            </div>
+          )}
           <div className="diff-body">
           <div className="diff-lines">
           {linesView}
@@ -780,11 +803,12 @@ export function DiffView({ task }: { task: TaskView }) {
         </div>
         {commitPicker}
         <span className="review-tray-hint">
-          {drafts.length === 0
+          {undecided > 0 && `${undecided} finding${undecided === 1 ? "" : "s"} to keep or drop · `}
+          {queued.length === 0
             ? "Click a line number to leave a note"
             : agentPanes.length === 0
-              ? `${drafts.length} note${drafts.length === 1 ? "" : "s"} queued · no agent running — Send will start one`
-              : `${drafts.length} note${drafts.length === 1 ? "" : "s"} queued`}
+              ? `${queued.length} note${queued.length === 1 ? "" : "s"} queued · no agent running — Send will start one`
+              : `${queued.length} note${queued.length === 1 ? "" : "s"} queued`}
         </span>
         <div className="spacer" />
         <div className="review-tray-actions">
@@ -801,14 +825,15 @@ export function DiffView({ task }: { task: TaskView }) {
               </select>
             </label>
           )}
+          <ReviewerButton taskId={task.id} />
           <button className="btn btn-sm" onClick={() => void load()}>Refresh</button>
           <button className="btn btn-sm" onClick={() => setCommitting(true)}>Commit…</button>
           <button
             className="btn btn-sm btn-primary"
-            disabled={drafts.length === 0}
+            disabled={queued.length === 0}
             onClick={() => void send()}
             title={
-              drafts.length === 0
+              queued.length === 0
                 ? "Add notes on line numbers first"
                 : agentPanes.length === 0
                   ? installed.length === 0
@@ -819,8 +844,8 @@ export function DiffView({ task }: { task: TaskView }) {
                     : "Send queued notes to the agent"
             }
           >
-            {agentPanes.length === 0 && drafts.length > 0 ? "Start agent & send" : "Send to agent"}
-            {drafts.length > 0 && <span className="badge">{drafts.length}</span>}
+            {agentPanes.length === 0 && queued.length > 0 ? "Start agent & send" : "Send to agent"}
+            {queued.length > 0 && <span className="badge">{queued.length}</span>}
           </button>
         </div>
       </div>
@@ -846,7 +871,7 @@ export function DiffView({ task }: { task: TaskView }) {
         >
           <p style={{ marginTop: 0, color: "var(--dim)", fontSize: 13, lineHeight: 1.5 }}>
             Nothing is running in this task. Pick an agent to start — your{" "}
-            {drafts.length} queued note{drafts.length === 1 ? "" : "s"} become its opening prompt.
+            {queued.length} queued note{queued.length === 1 ? "" : "s"} become its opening prompt.
           </p>
           <Field label="Agent">
             <select

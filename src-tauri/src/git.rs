@@ -8,9 +8,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 
+mod outgoing;
 mod review;
 mod store;
 mod upkeep;
+pub use outgoing::{outgoing_commits, outgoing_from, outgoing_patch};
 pub use review::{follow_pull, take_pull};
 pub use store::{
     adopt_worktree, belongs_to, changed_between, copy_local_config, create_store, default_tip,

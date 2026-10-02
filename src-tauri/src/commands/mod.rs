@@ -124,6 +124,7 @@ mod pr_task;
 mod reviewer;
 mod post_review;
 mod open_prs;
+mod outgoing;
 mod landed;
 mod task_context;
 mod notes;
@@ -144,6 +145,7 @@ pub use pr_task::*;
 pub use reviewer::*;
 pub use post_review::*;
 pub use open_prs::*;
+pub use outgoing::*;
 pub(crate) use landed::{advance, landed};
 pub use notes::*;
 

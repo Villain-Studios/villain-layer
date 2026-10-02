@@ -510,3 +510,22 @@ export interface PostedReview {
   moved_all: boolean;
 }
 
+/** Something in a push's added lines that is usually there by accident (PR-11). */
+export interface Leftover {
+  path: string;
+  line: number;
+  kind: "debug" | "focused test" | "conflict marker" | "todo";
+  text: string;
+}
+
+/** What a push of one repo would send (PR-11). */
+export interface RepoOutgoing {
+  checkout_id: string;
+  repo: string;
+  head: string;
+  commits: CommitInfo[];
+  leftovers: Leftover[];
+  leftovers_more: boolean;
+  error: string | null;
+}
+

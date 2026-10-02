@@ -362,6 +362,15 @@ textarea { resize: vertical; font-family: var(--mono); }
 .diff-file .n { font-size: 11px; }
 .diff-file .badge { font-family: var(--mono); font-size: 11px; color: var(--amber); }
 
+/* Open pull requests, before it pushes (PR-11): advice, not a gate. */
+.outgoing { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; }
+.outgoing-head { display: flex; align-items: center; gap: 8px; }
+.outgoing-repo { display: flex; flex-direction: column; gap: 3px; line-height: 1.5; }
+.outgoing-repo .del { color: var(--red); }
+.outgoing-leftover { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.outgoing-leftover code { font-family: var(--mono); font-size: 11.5px; color: var(--dim); flex: none; }
+.outgoing-leftover .text { font-family: var(--mono); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* Post review (REV-11): the verdict, and every note as it will go. */
 .verdicts { display: flex; gap: 6px; }
 .verdicts label { display: flex; align-items: center; gap: 6px; white-space: nowrap; padding: 5px 10px; border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; font-size: 13px; }

@@ -144,6 +144,18 @@ const answer: Record<string, Answer> = {
   task_commits: () => world.tasks.flatMap((t) =>
     t.checkouts.map((c) => ({ checkout_id: c.id, repo: c.project_name, commits: [] }))),
   task_branch_facts: () => [],
+  task_outgoing: (a) => {
+    const task = world.tasks.find((t) => t.id === a.taskId);
+    return (task?.checkouts ?? []).map((c, i) => ({
+      checkout_id: c.id, repo: c.project_name, head: "f".repeat(40), error: null, leftovers_more: false,
+      commits: i === 0
+        ? [{ sha: "a".repeat(40), short: "aaaaaaa", subject: "Count retries from zero" }, { sha: "b".repeat(40), short: "bbbbbbb", subject: "Log the token while debugging" }]
+        : [],
+      leftovers: i === 0
+        ? [{ path: "src/auth.ts", line: 14, kind: "debug", text: "console.log(\"token\", token);" }, { path: "src/auth.ts", line: 22, kind: "todo", text: "// TODO: cap the backoff" }]
+        : [],
+    }));
+  },
   // A few seconds, as a real one takes a minute: long enough to see it run.
   review_branch: (a) => {
     const task = world.tasks.find((t) => t.id === a.taskId);

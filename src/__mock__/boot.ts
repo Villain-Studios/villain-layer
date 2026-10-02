@@ -136,6 +136,22 @@ const answer: Record<string, Answer> = {
   task_commits: () => world.tasks.flatMap((t) =>
     t.checkouts.map((c) => ({ checkout_id: c.id, repo: c.project_name, commits: [] }))),
   task_branch_facts: () => [],
+  // A few seconds, as a real one takes a minute: long enough to see it run.
+  review_branch: (a) => {
+    const task = world.tasks.find((t) => t.id === a.taskId);
+    const c = task?.checkouts[0];
+    const at = (line: number, severity: "bug" | "risk" | "nit", body: string, code: string, in_diff = true) => ({
+      checkout_id: c?.id ?? "", repo: c?.project_name ?? "", path: "src/auth.ts", line, severity, body, code, in_diff,
+    });
+    const findings = [
+      at(2, "bug", "Starting at 0 makes `attempt < retries` run one try more than configured: three retries become four requests.", "let attempt = 0;"),
+      at(3, "nit", "The comment says what the line does; say why counting from zero is right here.", "// Counted from zero: the first try is not a retry."),
+      at(40, "risk", "The backoff is never capped: with retries raised in config, the last wait is minutes long.", "await sleep(2 ** attempt * 100);", false),
+    ];
+    return new Promise((done) => setTimeout(() => done({
+      findings, heads: (task?.checkouts ?? []).map((x) => ({ checkout_id: x.id, head: "f".repeat(40) })), model: "sonnet", dropped: 1,
+    }), 2500));
+  },
 
   // GitHub.
   task_for_pr: (a) => {

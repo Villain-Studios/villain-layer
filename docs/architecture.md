@@ -206,6 +206,7 @@ the app relies on is spelled out:
 | `merge.ff = only` | every Update from base: "Not possible to fast-forward" | `merge --ff` |
 | `status.showUntrackedFiles = no` | a worktree of only new files read as clean, and was removed with them | `--untracked-files=normal`, `-c status.showUntrackedFiles=normal` |
 | `diff.external` (difftastic) | the Diff view showed no hunks | `--no-ext-diff` |
+| `diff.mnemonicPrefix`, `diff.noprefix` | the reviewer's findings all read as off the diff | `--src-prefix=a/ --dst-prefix=b/` |
 | `rebase.autoStash`, `autoSquash`, `updateRefs` | rebases that did more than asked | `-c rebase.*=false` |
 | a `--single-branch` clone | fetches that updated nothing | explicit refspecs |
 

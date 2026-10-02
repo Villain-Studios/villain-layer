@@ -370,6 +370,8 @@ export interface UiPrefs {
   /** A banner when an agent stops to wait on you while the window is away, and the dock count. */
   notify_waiting_agents: boolean;
   agents_read_panes: boolean;
+  /** The model the reviewer pass runs on (DIFF-6). */
+  reviewer_model: "sonnet" | "opus" | "haiku";
 }
 
 export interface Settings {
@@ -466,3 +468,32 @@ export interface ProjectNotes {
   project_id: string;
   notes: RepoNote[];
 }
+
+/** Something the reviewer pass found (DIFF-6), on a line of the task's branch. */
+export interface Finding {
+  checkout_id: string;
+  repo: string;
+  path: string;
+  /** In the new version of the file. */
+  line: number;
+  severity: "bug" | "risk" | "nit";
+  body: string;
+  code: string;
+  /** On a line of the diff's hunks: drawn there, and anchorable on GitHub. */
+  in_diff: boolean;
+}
+
+export interface ReviewedHead {
+  checkout_id: string;
+  head: string;
+}
+
+export interface ReviewerRun {
+  findings: Finding[];
+  /** Each repo's HEAD the review was of. */
+  heads: ReviewedHead[];
+  model: string;
+  /** Findings that named nothing in this task, and were dropped. */
+  dropped: number;
+}
+

@@ -213,7 +213,19 @@ pub struct UiPrefs {
     /// a failing script or a remote URL with credentials in it.
     #[serde(default)]
     pub agents_read_panes: bool,
+    /// The model the reviewer pass runs on (DIFF-6): "sonnet", "opus" or
+    /// "haiku". Sonnet by default: a review is reasoning, not summarising,
+    /// and Opus costs several times as much for each run.
+    #[serde(default = "sonnet")]
+    pub reviewer_model: String,
 }
+
+fn sonnet() -> String {
+    "sonnet".into()
+}
+
+/// The models the reviewer pass may run on, as `claude --model` names them.
+pub const REVIEWER_MODELS: &[&str] = &["sonnet", "opus", "haiku"];
 
 impl Default for UiPrefs {
     fn default() -> Self {
@@ -226,6 +238,7 @@ impl Default for UiPrefs {
             system_notifications: true,
             notify_waiting_agents: true,
             agents_read_panes: false,
+            reviewer_model: sonnet(),
         }
     }
 }

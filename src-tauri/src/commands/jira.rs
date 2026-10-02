@@ -451,10 +451,11 @@ pub(crate) const DIFF_BUDGET: usize = 60_000;
 
 /// One repository's place in a task, resolved from config before any git runs.
 pub(crate) struct Reviewed {
-    repo: String,
-    dir: PathBuf,
-    base: String,
-    base_commit: Option<String>,
+    pub checkout_id: String,
+    pub repo: String,
+    pub dir: PathBuf,
+    pub base: String,
+    pub base_commit: Option<String>,
 }
 
 pub(crate) fn reviewed_repos(state: &AppState, task: &Task) -> Vec<Reviewed> {
@@ -463,6 +464,7 @@ pub(crate) fn reviewed_repos(state: &AppState, task: &Task) -> Vec<Reviewed> {
         .checkouts_of(&task.id)
         .into_iter()
         .map(|c| Reviewed {
+            checkout_id: c.id.clone(),
             repo: state
                 .config
                 .project(&c.project_id)
@@ -561,45 +563,75 @@ fn oneshot_haiku(
     program: impl AsRef<std::path::Path>,
     cwd: impl AsRef<std::path::Path>,
     prompt: &str,
+    on_delta: impl FnMut(&str),
+) -> Result<String> {
+    // Cheap and fast: this is a summarising job, not a reasoning one.
+    // Everything it needs is in the prompt, and nothing in it is worth
+    // thinking about first: the thinking block is dead time the reader
+    // spends watching a spinner.
+    oneshot(program, cwd, Oneshot { model: "haiku", read: false, think: false }, prompt, on_delta)
+}
+
+/// What a one-shot run may do beyond answering the prompt.
+pub(crate) struct Oneshot<'a> {
+    /// A model alias `claude --model` takes: "haiku", "sonnet", "opus".
+    pub model: &'a str,
+    /// Read the files under `cwd` (Read, Glob, Grep). Nothing that writes or
+    /// runs is ever allowed.
+    pub read: bool,
+    pub think: bool,
+}
+
+/// A one-shot `claude -p` run with no MCP, streamed text deltas.
+pub(crate) fn oneshot(
+    program: impl AsRef<std::path::Path>,
+    cwd: impl AsRef<std::path::Path>,
+    how: Oneshot,
+    prompt: &str,
     mut on_delta: impl FnMut(&str),
 ) -> Result<String> {
     use std::io::{BufRead, BufReader, Write};
     use std::process::{Command, Stdio};
 
     let env = shellenv::user_env().clone();
-    let mut child = Command::new(program.as_ref())
-        .args([
-            "-p",
-            // Cheap and fast: this is a summarising job, not a reasoning one.
-            "--model",
-            "haiku",
-            // Connecting to MCP servers is the single largest part of a cold
-            // start, and this run needs none of them.
-            "--strict-mcp-config",
-            // Streamed, so the description appears as it is written rather
-            // than all at once at the end.
-            "--output-format",
-            "stream-json",
-            "--include-partial-messages",
-            "--verbose",
-            // Everything it needs is in the prompt. Without this it may go
-            // reading the repository and turn seconds into minutes.
-            "--disallowed-tools",
-            "Bash",
-            "Read",
-            "Edit",
-            "Write",
-            "Glob",
-            "Grep",
-            "WebFetch",
-            "WebSearch",
-        ])
+    let mut command = Command::new(program.as_ref());
+    command.args([
+        "-p",
+        "--model",
+        how.model,
+        // Connecting to MCP servers is the single largest part of a cold
+        // start, and this run needs none of them.
+        "--strict-mcp-config",
+        // Streamed, so the description appears as it is written rather
+        // than all at once at the end.
+        "--output-format",
+        "stream-json",
+        "--include-partial-messages",
+        "--verbose",
+        // Without this it may go reading the repository and turn seconds
+        // into minutes, where the prompt already holds what it needs.
+        "--disallowed-tools",
+        "Bash",
+        "Edit",
+        "Write",
+        "NotebookEdit",
+        "WebFetch",
+        "WebSearch",
+        // Subagents, under both the names Claude Code has given them.
+        "Task",
+        "Agent",
+    ]);
+    if !how.read {
+        command.args(["Read", "Glob", "Grep"]);
+    }
+    command
         .current_dir(cwd.as_ref())
         .env_clear()
-        .envs(&env)
-        // Nothing here is worth thinking about first, and the thinking block
-        // is dead time the reader spends watching a spinner.
-        .env("MAX_THINKING_TOKENS", "0")
+        .envs(&env);
+    if !how.think {
+        command.env("MAX_THINKING_TOKENS", "0");
+    }
+    let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -672,7 +704,7 @@ fn oneshot_haiku(
     if !status.success() {
         let why = stderr.trim();
         return Err(Error::Other(if why.is_empty() {
-            "claude could not draft the description".into()
+            "claude stopped without an answer".into()
         } else {
             format!("claude: {why}")
         }));

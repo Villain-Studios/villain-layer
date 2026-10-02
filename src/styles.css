@@ -360,6 +360,7 @@ textarea { resize: vertical; font-family: var(--mono); }
 .diff-file.active { background: var(--panel-2); color: var(--accent); }
 .diff-file .p { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .diff-file .n { font-size: 11px; }
+.diff-file .badge { font-family: var(--mono); font-size: 11px; color: var(--amber); }
 
 /* A size container, so a note can be as wide as the pane showing it — see
    `.inline-comment`. */
@@ -417,6 +418,12 @@ textarea { resize: vertical; font-family: var(--mono); }
 /* Notes keep the line breaks they were written with. */
 .inline-comment .body { font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
 .inline-comment .actions { margin-top: 6px; display: flex; gap: 6px; }
+/* A reviewer's finding not yet kept: a suggestion, not your note (DIFF-6). */
+.inline-comment.finding { border-left-color: var(--amber); border-left-style: dashed; }
+.inline-comment .note-head { display: flex; gap: 6px; align-items: center; margin-bottom: 4px; font-size: 12px; }
+/* Notes on lines this patch does not draw, above it rather than lost. */
+.diff-offline { flex: none; max-height: 40%; overflow-y: auto; border-bottom: 1px solid var(--border); padding: 2px 0; }
+.diff-offline .inline-comment { position: static; margin-left: 12px; width: min(640px, calc(100% - 24px)); }
 
 /* Wraps rather than running off the edge: with a couple of agents and the
    commit picker it outgrew windows narrower than ~1450px, and `.content`

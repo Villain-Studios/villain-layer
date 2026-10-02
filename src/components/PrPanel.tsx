@@ -10,6 +10,7 @@ import type { CheckoutPr, CheckRun, Review, TaskView } from "../lib/types";
 import { ChevronIcon, CopyIcon, ExternalIcon, PlusIcon } from "./icons";
 import { Combo, Field, Modal, Spinner } from "./ui";
 import { PrFeedback } from "./PrFeedback";
+import { Outgoing } from "./Outgoing";
 import { FinishTask } from "./FinishTask";
 
 /**
@@ -163,6 +164,8 @@ export function PrPanel({
   /** Repos the user unticked in the dialog: no push, no PR. Everything starts picked. */
   const [leftOut, setLeftOut] = useState<string[]>([]);
   const [drafting, setDrafting] = useState(false);
+  /** What the review step before pushing asks a second look at (PR-11). */
+  const [flags, setFlags] = useState(0);
   const pollRef = useRef<number | null>(null);
 
   const load = useCallback(async () => {
@@ -727,12 +730,13 @@ export function PrPanel({
               >
                 {busy
                   ? "Working…"
-                  : `Push & open ${picked.length} PR${picked.length === 1 ? "" : "s"}`}
+                  : `${flags ? "Open anyway: " : "Push & open "}${picked.length} PR${picked.length === 1 ? "" : "s"}`}
               </button>
             </>
           }
         >
           {repoRows}
+          <Outgoing taskId={task.id} onFlags={setFlags} />
 
           {pending.length === 0 ? (
             <div className="muted" style={{ lineHeight: 1.6 }}>

@@ -34,6 +34,7 @@ import type {
   ReviewerRun,
   ReviewVerdict,
   PostedReview,
+  RepoOutgoing,
   Settings,
   SlackConfig,
   Started,
@@ -103,6 +104,8 @@ export const api = {
   /** A review task's notes as one review of its pull request, after the user confirmed exactly this (REV-11). */
   githubPostReview: (taskId: string, verdict: ReviewVerdict, body: string, notes: ReviewComment[]) =>
     invoke<PostedReview>("github_post_review", { taskId, verdict, body, notes }),
+  /** Per repo, the commits a push would send and the leftovers they add (PR-11). */
+  taskOutgoing: (taskId: string) => invoke<RepoOutgoing[]>("task_outgoing", { taskId }),
   deleteTask: (id: string, force = false) =>
     invoke<RepoResult[]>("delete_task", { id, force }),
   /**

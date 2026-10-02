@@ -571,8 +571,20 @@ send feedback to an agent, and finish a merged task.
   one click on its arrow. It is never picked for you, and "All" leaves it
   out. One ticked on purpose goes to the agent marked as resolved, with a
   warning not to undo what was settled.
+- **PR-11** Open pull requests MUST show what it is about to push before
+  it does, per repo: the commits origin does not have yet (from the
+  branch on origin, or the branch point when there is none or it was
+  rebased), and in their added lines what is usually there by accident:
+  debug output (`console.log`, `dbg!`, `debugger`, `binding.pry`, …), a
+  focused test (`.only`, `fit`), a conflict marker, a new TODO or FIXME.
+  Prose files (`.md`, `.txt`, …) are not read for these, nor is anything
+  uncommitted, which a push does not send. It says whether the reviewer
+  (DIFF-6) has read these commits, findings still to keep or drop, and
+  notes not yet sent, and offers Review there. It is advice, never a
+  gate: with anything flagged, the button reads "Open anyway". A push used
+  to be the first time anyone saw the branch whole.
 
-Code: `commands/github.rs`, `commands/open_prs.rs`, `commands/landed.rs`, `integrations/github.rs`, `PrPanel.tsx`,
+Code: `commands/github.rs`, `commands/open_prs.rs`, `commands/outgoing.rs`, `git/outgoing.rs`, `Outgoing.tsx`, `commands/landed.rs`, `integrations/github.rs`, `PrPanel.tsx`,
 `PrFeedback.tsx`, `Markdown.tsx`, `lib/markdown.ts`.
 
 Known gaps:

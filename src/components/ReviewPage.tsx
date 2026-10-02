@@ -90,7 +90,15 @@ export function ReviewPage({ task }: { task: TaskView }) {
         <li>Read the changes. Click a line number to leave a comment.</li>
         <li className={running ? "active" : ""}>
           Optionally, <b>Review with Claude</b> for a first pass: keep or drop what it finds.
-          {undecided > 0 && <span className="chip warn">{undecided} to decide</span>}
+          {undecided > 0 && (
+            <button
+              className="chip warn"
+              title="Go to the next finding"
+              onClick={() => useStore.getState().showNextFinding(task.id)}
+            >
+              {undecided} to decide →
+            </button>
+          )}
         </li>
         <li className={ready > 0 ? "active" : ""}>
           <b>Post review…</b> sends your comments to GitHub as one review, after showing you all of it.

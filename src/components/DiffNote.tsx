@@ -23,7 +23,7 @@ export function NoteCard({
 }) {
   const finding = note.by === "reviewer";
   return (
-    <div className={`inline-comment${finding && !note.kept ? " finding" : ""}`}>
+    <div className={`inline-comment${finding && !note.kept ? " finding" : ""}`} data-note={note.id}>
       {(finding || where) && (
         <div className="note-head">
           {where && <span className="chip">{where}</span>}

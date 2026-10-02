@@ -78,7 +78,7 @@ export function ReviewerButton({ taskId }: { taskId: string }) {
     <button className="btn btn-sm" disabled={running} title={title} onClick={() => void run(taskId)}>
       {running ? (
         <span className="btn-busy"><Spinner />Reviewing… {clock(now - (state?.at ?? now))}</span>
-      ) : last ? "Review again" : "Review"}
+      ) : last ? "Review with Claude again" : "Review with Claude"}
     </button>
   );
 }

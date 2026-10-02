@@ -8,7 +8,6 @@ import { Sidebar } from "./components/sidebar/Sidebar";
 import { Terminals } from "./components/Terminals";
 import { DiffView } from "./components/DiffView";
 import { PrPanel } from "./components/PrPanel";
-import { ReviewHeader } from "./components/ReviewHeader";
 import { TicketsView } from "./components/tickets/TicketsView";
 import { AgentsView } from "./components/AgentsView";
 import { ChatView } from "./components/ChatView";
@@ -174,17 +173,13 @@ function TaskMain({ task }: { task: TaskView }) {
               {totals.conflicted} conflict{totals.conflicted === 1 ? "" : "s"}
             </button>
           )}
-          {task.review ? (
-            <ReviewHeader taskId={task.id} review={task.review} />
-          ) : (
-            <button
-              className="btn btn-sm"
-              title="Fetch each repo's base branch and merge or rebase this task's branch onto it"
-              onClick={() => setUpdating(true)}
-            >
-              Update from base
-            </button>
-          )}
+          <button
+            className="btn btn-sm"
+            title="Fetch each repo's base branch and merge or rebase this task's branch onto it"
+            onClick={() => setUpdating(true)}
+          >
+            Update from base
+          </button>
           {cursorIde && (
             <button
               className="btn btn-sm"
@@ -216,15 +211,12 @@ function TaskMain({ task }: { task: TaskView }) {
         <button className={tab === "diff" ? "active" : ""} onClick={() => setTab("diff")}>
           Diff{changed > 0 && <span className="badge">{changed}</span>}
         </button>
-        {/* A review is never pushed or opened as a pull request (REV-10). */}
-        {!task.review && (
-          <button className={tab === "pr" ? "active" : ""} onClick={() => setTab("pr")}>
-            Pull requests
-            {task.checkouts.length > 1 && (
-              <span className="badge">{task.checkouts.length}</span>
-            )}
-          </button>
-        )}
+        <button className={tab === "pr" ? "active" : ""} onClick={() => setTab("pr")}>
+          Pull requests
+          {task.checkouts.length > 1 && (
+            <span className="badge">{task.checkouts.length}</span>
+          )}
+        </button>
       </div>
 
       <div className="content">
@@ -239,8 +231,8 @@ function TaskMain({ task }: { task: TaskView }) {
         >
           <Terminals task={task} />
         </div>
-        {(tab === "diff" || (tab === "pr" && task.review)) && <DiffView task={task} />}
-        {tab === "pr" && !task.review && <PrPanel task={task} onUpdateFromBase={() => setUpdating(true)} />}
+        {tab === "diff" && <DiffView task={task} />}
+        {tab === "pr" && <PrPanel task={task} onUpdateFromBase={() => setUpdating(true)} />}
       </div>
       {updating && <UpdateFromBase task={task} onClose={() => setUpdating(false)} />}
     </>

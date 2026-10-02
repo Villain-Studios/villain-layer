@@ -54,8 +54,27 @@ pub struct ReviewedHead {
     pub head: String,
 }
 
+/// A changed file's place in the order to read the change in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PlanFile {
+    pub checkout_id: String,
+    pub path: String,
+    /// "start" (read these first), "tests", or "routine" (low risk:
+    /// translations, generated files, styles, renames).
+    pub group: String,
+    /// Why it is there, in a few words.
+    pub why: String,
+}
+
+/// More files than this in a plan is not a reading order.
+const MAX_PLAN: usize = 300;
+
 #[derive(Debug, Serialize)]
 pub struct ReviewerRun {
+    /// What the change does and where its risk is, in two or three sentences.
+    pub summary: String,
+    /// The order to read it in. A changed file it leaves out is read after.
+    pub plan: Vec<PlanFile>,
     pub findings: Vec<Finding>,
     /// Each repository's HEAD when the review was made: what it is of.
     pub heads: Vec<ReviewedHead>,
@@ -98,7 +117,8 @@ fn review_branch_inner(state: &AppState, task_id: &str) -> Result<ReviewerRun> {
 
     let answer = oneshot(program, &cwd, Oneshot { model: &model, read: true, think: true }, &prompt, |_| {})?;
     let (findings, dropped) = findings_from(&answer, &repos)?;
-    Ok(ReviewerRun { findings, heads, model, dropped })
+    let (summary, plan) = plan_from(&answer, &repos)?;
+    Ok(ReviewerRun { summary, plan, findings, heads, model, dropped })
 }
 
 fn reviewer_prompt(task: &Task, repos: &[Reviewed], cwd: &Path, ticket: &str, context: &str) -> String {
@@ -134,24 +154,64 @@ fn reviewer_prompt(task: &Task, repos: &[Reviewed], cwd: &Path, ticket: &str, co
          a bug. Fewer, surer findings are better than many guesses.\n\n\
          You may read the repositories to check a suspicion (Read, Grep, Glob). Change \
          nothing.\n\n{folders}\n\n\
+         Also give the reviewer a way in: a summary of what the change does and \
+         where its risk is, and an order to read the changed files in. Put the files \
+         that carry the change and its risk in \"start\", most important first; \
+         tests in \"tests\"; and only plainly routine files (translations, \
+         generated files, styles, lockfiles, renames) in \"routine\".\n\n\
          Answer with JSON only, no prose and no code fence, in exactly this shape:\n\
-         {{\"findings\": [{{\"repo\": \"<repo name>\", \"path\": \"<path within the repo>\", \
+         {{\"summary\": \"<two or three sentences>\", \
+         \"plan\": [{{\"repo\": \"<repo name>\", \"path\": \"<path within the repo>\", \
+         \"group\": \"start|tests|routine\", \"why\": \"<a few words>\"}}], \
+         \"findings\": [{{\"repo\": \"<repo name>\", \"path\": \"<path within the repo>\", \
          \"line\": <line in the new version of the file>, \"severity\": \"bug|risk|nit\", \
          \"body\": \"<what is wrong, why, and what to do instead>\"}}]}}\n\n\
          Put each finding on a line the diff adds or keeps. No findings is a fine \
-         answer: {{\"findings\": []}}.\n{ticket}\n# The change\n{context}"
+         answer: \"findings\": [].\n{ticket}\n# The change\n{context}"
     )
+}
+
+/// The JSON object in the model's answer, whatever it wrote around it.
+fn answer_json(answer: &str) -> Result<Value> {
+    let json = match (answer.find('{'), answer.rfind('}')) {
+        (Some(a), Some(b)) if a < b => &answer[a..=b],
+        _ => return Err(Error::Other("the reviewer did not answer with findings".into())),
+    };
+    serde_json::from_str(json).map_err(|e| Error::Other(format!("the reviewer's answer could not be read: {e}")))
+}
+
+/// The summary and the reading order in the model's answer. A file named
+/// in no repository of this task, or outside one, is left out; one named
+/// twice keeps its first place.
+fn plan_from(answer: &str, repos: &[Reviewed]) -> Result<(String, Vec<PlanFile>)> {
+    let v = answer_json(answer)?;
+    let summary = v.get("summary").and_then(|s| s.as_str()).unwrap_or_default().trim().to_string();
+    let raw = v.get("plan").and_then(|p| p.as_array()).cloned().unwrap_or_default();
+    let mut plan: Vec<PlanFile> = Vec::new();
+    for f in &raw {
+        let text = |k: &str| f.get(k).and_then(|x| x.as_str()).unwrap_or_default().trim().to_string();
+        let named = text("repo");
+        let repo = match repos {
+            [only] => Some(only),
+            _ => repos.iter().find(|r| r.repo.eq_ignore_ascii_case(&named)),
+        };
+        let (Some(repo), Some(path)) = (repo, repo.and_then(|r| within(&text("path"), &r.repo))) else { continue };
+        if plan.len() >= MAX_PLAN || plan.iter().any(|p| p.checkout_id == repo.checkout_id && p.path == path) {
+            continue;
+        }
+        let group = match text("group").to_ascii_lowercase().as_str() {
+            g @ ("start" | "tests" | "routine") => g.to_string(),
+            _ => "start".into(),
+        };
+        plan.push(PlanFile { checkout_id: repo.checkout_id.clone(), path, group, why: text("why") });
+    }
+    Ok((summary, plan))
 }
 
 /// The findings in the model's answer, each tied to a repository, a file and
 /// a line of this task, and how many named nothing that is here.
 fn findings_from(answer: &str, repos: &[Reviewed]) -> Result<(Vec<Finding>, u32)> {
-    let json = match (answer.find('{'), answer.rfind('}')) {
-        (Some(a), Some(b)) if a < b => &answer[a..=b],
-        _ => return Err(Error::Other("the reviewer did not answer with findings".into())),
-    };
-    let v: Value = serde_json::from_str(json)
-        .map_err(|e| Error::Other(format!("the reviewer's answer could not be read: {e}")))?;
+    let v = answer_json(answer)?;
     let raw = v.get("findings").and_then(|f| f.as_array()).cloned().unwrap_or_default();
 
     let mut hunks: HashMap<String, Hunks> = HashMap::new();
@@ -314,6 +374,29 @@ mod tests {
         assert!(findings_from("I could not finish.", &repos).is_err());
         assert!(findings_from("{not json}", &repos).is_err());
         assert_eq!(findings_from(r#"{"findings": []}"#, &repos).unwrap(), (vec![], 0));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn the_plan_keeps_the_files_of_this_task_in_the_order_given() {
+        let root = std::env::temp_dir().join(format!("vl-reviewer-{}", uuid::Uuid::new_v4()));
+        let repos = vec![repo(&root)];
+        let answer = r#"{"summary": "Counts retries from zero.", "plan": [
+          {"repo": "api", "path": "api/src/auth.ts", "group": "start", "why": "the change"},
+          {"repo": "api", "path": "../outside", "group": "start", "why": "no"},
+          {"repo": "api", "path": "src/auth.ts", "group": "routine", "why": "twice"},
+          {"repo": "api", "path": "src/locale.json", "group": "Routine", "why": "copy"},
+          {"repo": "api", "path": "src/auth.test.ts", "group": "whatever", "why": ""}
+        ], "findings": []}"#;
+        let (summary, plan) = plan_from(answer, &repos).unwrap();
+        assert_eq!(summary, "Counts retries from zero.");
+        let got: Vec<_> = plan.iter().map(|p| (p.path.as_str(), p.group.as_str())).collect();
+        assert_eq!(
+            got,
+            vec![("src/auth.ts", "start"), ("src/locale.json", "routine"), ("src/auth.test.ts", "start")],
+            "first place kept, a path outside dropped, an unknown group read as start"
+        );
+        assert_eq!(plan_from(r#"{"findings": []}"#, &repos).unwrap(), (String::new(), vec![]), "an older answer has no plan");
         std::fs::remove_dir_all(&root).ok();
     }
 

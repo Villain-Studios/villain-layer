@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api } from "../lib/api";
 import { reportRepoResults } from "../lib/report";
@@ -44,6 +44,14 @@ export function ReviewPage({ task }: { task: TaskView }) {
   const running = useStore((s) => s.reviewer[task.id]?.running ?? false);
   const pr = useQueued(task);
   const [finishing, setFinishing] = useState(false);
+  // Claude's plan, summary and findings, asked for once when a review is
+  // first opened (DIFF-6): the plan is how the page says where to start.
+  const started = useStore((s) => !!s.reviewer[task.id]);
+  const runReviewer = useStore((s) => s.runReviewer);
+  useEffect(() => {
+    if (!started) void runReviewer(task.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [task.id]);
   const ready = notes.filter((n) => n.by === "you" || n.kept).length;
   const undecided = notes.length - ready;
 

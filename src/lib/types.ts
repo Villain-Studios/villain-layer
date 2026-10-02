@@ -488,7 +488,19 @@ export interface ReviewedHead {
   head: string;
 }
 
+/** A changed file's place in the order to read a change in (DIFF-6). */
+export interface PlanFile {
+  checkout_id: string;
+  path: string;
+  group: "start" | "tests" | "routine";
+  why: string;
+}
+
 export interface ReviewerRun {
+  /** What the change does and where its risk is. */
+  summary: string;
+  /** The order to read it in; a changed file left out is read after. */
+  plan: PlanFile[];
   findings: Finding[];
   /** Each repo's HEAD the review was of. */
   heads: ReviewedHead[];

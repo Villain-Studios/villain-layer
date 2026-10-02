@@ -684,7 +684,13 @@ pub fn file_diff(
     // path, where reading them from disk fails.
     // `--no-ext-diff`: a global `diff.external` (difftastic, say) answered with
     // its own rendering and no hunks, and the Diff view showed nothing.
-    let patch = run(dir, &["diff", "--no-color", "--no-ext-diff", &merge_base, "--", path]).unwrap_or_default();
+    // Prefixes spelled out: `diff.mnemonicPrefix` headed every file
+    // `c/… w/…`, which read as two folders that do not exist.
+    let patch = run(
+        dir,
+        &["diff", "--no-color", "--no-ext-diff", "--src-prefix=a/", "--dst-prefix=b/", &merge_base, "--", path],
+    )
+    .unwrap_or_default();
     if !patch.trim().is_empty() {
         return Ok(patch);
     }
@@ -844,7 +850,10 @@ pub fn commit_file_diff(dir: &Path, sha: &str, path: &str) -> Result<String> {
     let sha = commit_id(sha)?;
     // `--pretty=format:` drops the commit header so the UI gets a bare patch,
     // the same shape `file_diff` returns for working-tree changes.
-    let patch = run(dir, &["show", "--no-color", "--pretty=format:", sha, "--", path])?;
+    let patch = run(
+        dir,
+        &["show", "--no-color", "--src-prefix=a/", "--dst-prefix=b/", "--pretty=format:", sha, "--", path],
+    )?;
     Ok(patch)
 }
 
@@ -1802,5 +1811,19 @@ mod tests {
         fetch_bases(&[(narrow.clone(), "develop".into())]);
         assert!(remote_tip(&narrow, "develop").is_some());
         std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn a_file_diff_names_its_sides_a_and_b_whatever_the_users_prefix_config() {
+        let dir = fixture();
+        run(&dir, &["config", "diff.mnemonicPrefix", "true"]).unwrap();
+        std::fs::write(dir.join("a.txt"), "one\ntwo\nthree\nfour\n").unwrap();
+        let patch = file_diff(&dir, "main", None, Scope::Uncommitted, "a.txt").unwrap();
+        assert!(patch.contains("--- a/a.txt\n+++ b/a.txt"), "{patch}");
+        run(&dir, &["commit", "-qam", "four"]).unwrap();
+        let sha = run(&dir, &["rev-parse", "HEAD"]).unwrap();
+        let patch = commit_file_diff(&dir, sha.trim(), "a.txt").unwrap();
+        assert!(patch.contains("--- a/a.txt\n+++ b/a.txt"), "{patch}");
+        std::fs::remove_dir_all(dir.parent().unwrap()).ok();
     }
 }

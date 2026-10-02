@@ -778,6 +778,13 @@ used to show only the first, so seven PRs of yours read as none.
   file, there or in its header, opens the next one not viewed. Viewed
   counts at the commit the review is on, so a later push starts it over.
   In folder order, 36 files gave no hint of which three mattered.
+- **REV-13** A comment MUST be able to say what GitHub's can: any note,
+  Claude's findings included, can be edited, and a finding edited is
+  yours and kept. "Suggest a change" adds a GitHub suggestion block
+  holding the line's code, selected, so typing replaces it with what it
+  should read; posted, the author applies it from GitHub in one click.
+  A suggestion block is shown as a suggested change wherever notes and
+  GitHub comments are drawn.
 
 Code: `commands/github.rs` (`review_queue`, `github_review_queue`),
 `integrations/github/authored.rs`, `integrations/github/requested.rs`,

@@ -7,7 +7,7 @@ import type {
   ChangedFile, CommitInfo, DiffScope, RepoBranchFacts, RepoCommits, ReviewComment, TaskView,
 } from "../lib/types";
 import { parseDiff, toTree, type Node } from "../lib/diff";
-import { NoteCard, ReviewerButton } from "./DiffNote";
+import { NoteCard, NoteEditor, ReviewerButton } from "./DiffNote";
 import { PostReview } from "./PostReview";
 import { ReviewFileBar, ReviewPlan } from "./ReviewPlan";
 import { ChevronIcon } from "./icons";
@@ -32,42 +32,6 @@ const fileKey = (f: ChangedFile) => `${f.checkout_id}:${f.path}`;
 
 /** Lines drawn before the rest is held back behind a click. */
 const LINE_BUDGET = 3000;
-
-/**
- * The box a note is typed into, holding its own text.
- *
- * In the diff's state, every keystroke re-rendered the whole diff — three
- * thousand rows — to change one textarea.
- */
-function NoteEditor({
-  onAdd, onCancel, placeholder,
-}: { onAdd: (text: string) => void; onCancel: () => void; placeholder: string }) {
-  const [text, setText] = useState("");
-  return (
-    <div className="inline-comment">
-      <textarea
-        rows={3}
-        autoFocus
-        value={text}
-        placeholder={placeholder}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) onAdd(text);
-          if (e.key === "Escape") onCancel();
-        }}
-      />
-      <div className="actions">
-        <button className="btn btn-sm btn-primary" onClick={() => onAdd(text)}>
-          Add note
-        </button>
-        <button className="btn btn-sm" onClick={onCancel}>
-          Cancel
-        </button>
-        <span style={{ color: "var(--dimmer)", fontSize: 11 }}>⌘↵ to add</span>
-      </div>
-    </div>
-  );
-}
 
 export function DiffView({ task }: { task: TaskView }) {
   const fail = useStore((s) => s.fail);
@@ -99,6 +63,7 @@ export function DiffView({ task }: { task: TaskView }) {
   const addNote = useStore((s) => s.addNote);
   const dropNotes = useStore((s) => s.dropNotes);
   const keepNote = useStore((s) => s.keepNote);
+  const editNote = useStore((s) => s.editNote);
   // What Send sends: yours, and the reviewer's you kept. The rest are its
   // findings still waiting on you to keep or drop.
   const queued = useMemo(() => notes.filter((n) => n.by === "you" || n.kept), [notes]);
@@ -685,6 +650,7 @@ export function DiffView({ task }: { task: TaskView }) {
                 key={d.id}
                 note={d}
                 onKeep={() => keepNote(task.id, d.id)}
+                onEdit={(body) => editNote(task.id, d.id, body)}
                 onDrop={() => dropNotes(task.id, [d.id])}
               />
             ))}
@@ -692,6 +658,7 @@ export function DiffView({ task }: { task: TaskView }) {
             {isComposing && (
               <NoteEditor
                 placeholder={task.review ? "What should the author know about this line?" : "What should the agent change here?"}
+                code={composing?.code ?? ""}
                 onAdd={(text) => addDraftRef.current(text)}
                 onCancel={() => setComposing(null)}
               />
@@ -699,7 +666,7 @@ export function DiffView({ task }: { task: TaskView }) {
           </div>
         );
       }),
-    [lines, fileNotes, composingLine, task.id, keepNote, dropNotes],
+    [lines, fileNotes, composingLine, task.id, keepNote, dropNotes, editNote],
   );
 
   // A worktree git cannot read has no changes to list, which looked exactly
@@ -840,6 +807,7 @@ export function DiffView({ task }: { task: TaskView }) {
                   note={d}
                   where={`L${d.line}`}
                   onKeep={() => keepNote(task.id, d.id)}
+                  onEdit={(body) => editNote(task.id, d.id, body)}
                   onDrop={() => dropNotes(task.id, [d.id])}
                 />
               ))}

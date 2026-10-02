@@ -1,8 +1,93 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useStore, type ReviewNote } from "../store";
+import { Markdown } from "./Markdown";
 import { Spinner } from "./ui";
 
 const SEVERITY = { bug: "del", risk: "warn", nit: "" } as const;
+
+/**
+ * `text` with a suggested change for `code` added at the end, as GitHub
+ * writes one: on GitHub the author applies it in one click.
+ */
+function withSuggestion(text: string, code: string): string {
+  const lead = text.trim() ? `${text.trimEnd()}\n\n` : "";
+  return `${lead}\`\`\`suggestion\n${code}\n\`\`\``;
+}
+
+/**
+ * A note's text being written: a new one, or one edited. "Suggest a change"
+ * starts a suggestion from the line's code, to be edited into what it
+ * should read.
+ */
+function NoteText({
+  initial, code, placeholder, saveLabel, onSave, onCancel,
+}: {
+  initial: string;
+  code: string;
+  placeholder: string;
+  saveLabel: string;
+  onSave: (text: string) => void;
+  onCancel: () => void;
+}) {
+  const [text, setText] = useState(initial);
+  const box = useRef<HTMLTextAreaElement>(null);
+  return (
+    <>
+      <textarea
+        ref={box}
+        rows={Math.min(12, Math.max(3, text.split("\n").length + 1))}
+        autoFocus
+        value={text}
+        placeholder={placeholder}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) onSave(text);
+          if (e.key === "Escape") onCancel();
+        }}
+      />
+      <div className="actions">
+        <button className="btn btn-sm btn-primary" onClick={() => onSave(text)}>{saveLabel}</button>
+        <button className="btn btn-sm" onClick={onCancel}>Cancel</button>
+        {code !== "" && !text.includes("```suggestion") && (
+          <button
+            className="btn btn-sm"
+            title="Write what the line should read; the author can apply it from GitHub"
+            onClick={() => {
+              const next = withSuggestion(text, code);
+              setText(next);
+              // The line's code selected inside the block: typing replaces
+              // it with what it should read.
+              const end = next.length - "\n```".length;
+              requestAnimationFrame(() => {
+                box.current?.focus();
+                box.current?.setSelectionRange(end - code.length, end);
+              });
+            }}
+          >
+            Suggest a change
+          </button>
+        )}
+        <span style={{ color: "var(--dimmer)", fontSize: 11 }}>⌘↵ to {saveLabel.toLowerCase()}</span>
+      </div>
+    </>
+  );
+}
+
+/**
+ * The box a note is typed into, holding its own text.
+ *
+ * In the diff's state, every keystroke re-rendered the whole diff — three
+ * thousand rows — to change one textarea.
+ */
+export function NoteEditor({
+  onAdd, onCancel, placeholder, code,
+}: { onAdd: (text: string) => void; onCancel: () => void; placeholder: string; code: string }) {
+  return (
+    <div className="inline-comment">
+      <NoteText initial="" code={code} placeholder={placeholder} saveLabel="Add note" onSave={onAdd} onCancel={onCancel} />
+    </div>
+  );
+}
 
 /**
  * A note under a line of the Diff tab (DIFF-6). Yours is queued to send as
@@ -13,15 +98,33 @@ export function NoteCard({
   note,
   onKeep,
   onDrop,
+  onEdit,
   where,
 }: {
   note: ReviewNote;
   onKeep: () => void;
   onDrop: () => void;
+  /** Reworded: a finding reworded is yours, and kept. */
+  onEdit: (body: string) => void;
   /** Said when the note is not under its line: `L120`. */
   where?: string;
 }) {
   const finding = note.by === "reviewer";
+  const [editing, setEditing] = useState(false);
+  if (editing) {
+    return (
+      <div className="inline-comment" data-note={note.id}>
+        <NoteText
+          initial={note.body}
+          code={note.code}
+          placeholder="What should the author know about this line?"
+          saveLabel="Save"
+          onSave={(body) => { if (body.trim()) onEdit(body.trim()); setEditing(false); }}
+          onCancel={() => setEditing(false)}
+        />
+      </div>
+    );
+  }
   return (
     <div className={`inline-comment${finding && !note.kept ? " finding" : ""}`} data-note={note.id}>
       {(finding || where) && (
@@ -31,13 +134,16 @@ export function NoteCard({
           {finding && <span className="muted">{note.kept ? "reviewer, kept" : "reviewer"}</span>}
         </div>
       )}
-      <div className="body">{note.body}</div>
+      <div className="body"><Markdown text={note.body} /></div>
       <div className="actions">
         {finding && !note.kept && (
           <button className="btn btn-sm btn-primary" onClick={onKeep} title="Queue it to send with your notes">
             Keep
           </button>
         )}
+        <button className="btn btn-sm" onClick={() => setEditing(true)} title={finding && !note.kept ? "Reword it, and keep it as yours" : "Reword it"}>
+          Edit
+        </button>
         <button className="btn btn-sm btn-danger" onClick={onDrop}>
           {finding && !note.kept ? "Drop" : "Remove"}
         </button>

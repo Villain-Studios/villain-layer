@@ -44,7 +44,10 @@ function block(b: Block, i: number): ReactNode {
       return <H key={i}>{inlines(b.c)}</H>;
     }
     case "p": return <p key={i}>{inlines(b.c)}</p>;
-    case "pre": return <pre key={i}><code>{b.v}</code></pre>;
+    // GitHub's suggested change: said as one, since it is applied, not read.
+    case "pre": return b.lang === "suggestion"
+      ? <div key={i} className="suggestion"><span>Suggested change</span><pre><code>{b.v}</code></pre></div>
+      : <pre key={i}><code>{b.v}</code></pre>;
     case "quote": return <blockquote key={i}>{b.c.map(block)}</blockquote>;
     case "hr": return <hr key={i} />;
     case "table":

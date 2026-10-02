@@ -170,6 +170,8 @@ interface State {
   addNote: (taskId: string, note: Omit<ReviewNote, "id">) => void;
   dropNotes: (taskId: string, ids: number[]) => void;
   keepNote: (taskId: string, id: number) => void;
+  /** Reword a note; a finding reworded is yours, and kept. */
+  editNote: (taskId: string, id: number, body: string) => void;
   /** A note for the Diff tab to open its file at and bring into view, then clear. */
   noteFocus: { taskId: string; id: number } | null;
   focusNote: (taskId: string, id: number | null) => void;
@@ -538,6 +540,10 @@ export const useStore = create<State>((set, get) => {
       notes: { ...s.notes, [taskId]: (s.notes[taskId] ?? []).map((n) => (n.id === id ? { ...n, kept: true } : n)) },
     })),
 
+  editNote: (taskId, id, body) =>
+    set((s) => ({
+      notes: { ...s.notes, [taskId]: (s.notes[taskId] ?? []).map((n) => (n.id === id ? { ...n, body, kept: true } : n)) },
+    })),
   noteFocus: null,
   focusNote: (taskId, id) => set({ noteFocus: id === null ? null : { taskId, id } }),
   showNextFinding: (taskId) => {

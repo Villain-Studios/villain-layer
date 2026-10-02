@@ -28,6 +28,7 @@ pub async fn github_open_prs(
     skip: Vec<String>,
 ) -> Result<Vec<RepoResult>> {
     let task = state.config.task(&task_id)?;
+    super::pr_task::not_a_review(&task, "pushed or opened as a pull request")?;
     let (client, _) = github_client(&state)?;
 
     let mut results = Vec::new();

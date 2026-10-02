@@ -2,7 +2,7 @@ import { useEffect, useState, type MouseEvent, type ReactNode } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api } from "../lib/api";
 import { copyText } from "../lib/clipboard";
-import { authoredGroups, countOf, reviewCounts, taskOfPr } from "../lib/derive";
+import { authoredGroups, countOf, reviewCounts, reviewTaskOf, taskOfPr } from "../lib/derive";
 import { goTo } from "../lib/goto";
 import { readOneOf, write } from "../lib/persist";
 import { ago } from "../lib/time";
@@ -23,6 +23,11 @@ function identity(pr: { repo: string; number: number }): string {
   return pr.repo ? `${pr.repo}#${pr.number}` : `#${pr.number}`;
 }
 
+/**
+ * A pull request waiting on your review, what it asks of you (REV-9), and
+ * the way to review it here (REV-10): "Review" checks it out as a task of
+ * its own and opens its diff. With a review task, a click goes there.
+ */
 function ReviewCard({
   pr,
   focused,
@@ -33,14 +38,50 @@ function ReviewCard({
   onContextMenu: (e: MouseEvent) => void;
 }) {
   const fail = useStore((s) => s.fail);
+  const refreshTasks = useStore((s) => s.refreshTasks);
+  const task = useStore((s) => reviewTaskOf(pr, s.tasks));
+  const [starting, setStarting] = useState(false);
+  const openGitHub = () => void openUrl(pr.url).catch(fail);
+  const openReview = (id: string) => {
+    goTo(`task:${id}`);
+    useStore.getState().setTab("diff");
+  };
+  const open = () => (task ? openReview(task.id) : openGitHub());
+
+  async function review() {
+    if (task) return openReview(task.id);
+    setStarting(true);
+    try {
+      const made = await api.taskForReview({
+        repo: pr.repo, number: pr.number, title: pr.title, url: pr.url, author: pr.author, head: pr.head, base: pr.base,
+      });
+      // In the list before going to it: a task the store has not seen yet
+      // routes to the overview instead.
+      await refreshTasks();
+      openReview(made.id);
+    } catch (e) {
+      fail(e);
+    } finally {
+      setStarting(false);
+    }
+  }
+
   return (
-    <button
-      type="button"
+    // A div, not a button: it holds buttons of its own.
+    <div
+      role="button"
+      tabIndex={0}
       className={`review-card${focused ? " focused" : ""}`}
       data-review={identity(pr)}
-      onClick={() => void openUrl(pr.url).catch(fail)}
+      onClick={open}
+      onKeyDown={(e) => {
+        if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
+          e.preventDefault();
+          open();
+        }
+      }}
       onContextMenu={onContextMenu}
-      title={pr.url}
+      title={task ? `Open ${task.name}` : pr.url}
     >
       <div className="top">
         <span className="repo">{pr.repo || "pull request"}</span>
@@ -48,6 +89,14 @@ function ReviewCard({
         {pr.draft && <span className="chip">draft</span>}
         <span className="spacer" />
         <span className="when">{ago(pr.updated_at)}</span>
+        <button
+          type="button"
+          className="btn btn-sm"
+          title={pr.url}
+          onClick={(e) => { e.stopPropagation(); openGitHub(); }}
+        >
+          GitHub ↗
+        </button>
       </div>
       <div className="title">{pr.title}</div>
       <div className="chips standing">
@@ -61,8 +110,18 @@ function ReviewCard({
         {pr.checks === "pending" && <span className="chip warn">checks running</span>}
         {pr.checks === "passing" && <span className="chip add">checks pass</span>}
         <MyReview pr={pr} />
+        {task && <span className="chip task">{task.name}</span>}
+        <button
+          type="button"
+          className="btn btn-sm start"
+          disabled={starting}
+          title={task ? `Open ${task.name}` : `Check out #${pr.number} in a task of its own, to read and run it here`}
+          onClick={(e) => { e.stopPropagation(); void review(); }}
+        >
+          {starting ? <Spinner /> : task ? "Open review" : "Review"}
+        </button>
       </div>
-    </button>
+    </div>
   );
 }
 

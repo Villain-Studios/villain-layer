@@ -165,6 +165,24 @@ fn task_context(task: &Task, repos: &[(String, String)], ticket: Option<&str>) -
          branch `{}`.\n\n",
         task.name, task.branch,
     );
+    if let Some(r) = &task.review {
+        // An agent runs git itself. Told nothing, one asked to fix what the
+        // review found pushed the app's own branch name to the author's
+        // repository as a branch of its own.
+        md.push_str(&format!(
+            "## This is a review
+
+This task reviews pull request {}#{}{}, at commit `{}`: {}.              `{}` is Villain Layer's own name for it, and is never pushed. Do not push, open              pull requests, or comment on GitHub; what the review finds goes back to the              person reviewing.
+
+",
+            r.repo,
+            r.number,
+            if r.author.is_empty() { String::new() } else { format!(" by {}", r.author) },
+            r.head_sha,
+            r.url,
+            task.branch,
+        ));
+    }
     match ticket.filter(|t| !t.trim().is_empty()) {
         Some(ticket) => {
             md.push_str(ticket.trim_end());
@@ -306,6 +324,7 @@ mod tests {
             created_at: chrono::Utc::now(),
             ticket_stage: None,
             chat: None,
+            review: None,
         }
     }
 
@@ -321,6 +340,25 @@ mod tests {
         assert!(md.contains("> 1. Pay with two cards"));
         assert!(!md.contains("\nTicket: https://"));
         assert!(md.contains("| `api/` | `/repos/api` |"));
+    }
+
+    #[test]
+    fn an_agent_in_a_review_is_told_it_never_pushes() {
+        let review = Task {
+            branch: "review/api-61".into(),
+            review: Some(crate::config::ReviewOf {
+                repo: "acme/api".into(),
+                number: 61,
+                url: "https://github.com/acme/api/pull/61".into(),
+                author: "ana".into(),
+                head_sha: "abc123".into(),
+            }),
+            ..task()
+        };
+        let md = task_context(&review, &[], None);
+        assert!(md.contains("reviews pull request acme/api#61 by ana, at commit `abc123`"));
+        assert!(md.contains("Do not push"));
+        assert!(!task_context(&task(), &[], None).contains("This is a review"));
     }
 
     #[test]

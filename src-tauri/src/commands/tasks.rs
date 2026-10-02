@@ -512,6 +512,7 @@ pub(crate) fn new_task(state: &AppState, req: NewTask) -> Result<Task> {
         created_at: Utc::now(),
         ticket_stage: None,
         chat: None,
+        review: None,
     };
     state.config.update(|c| c.tasks.push(task.clone()))?;
 

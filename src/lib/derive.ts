@@ -326,6 +326,15 @@ export function taskOfPr(
   return tasks.find((t) => t.branch === pr.head)?.id ?? null;
 }
 
+/** The task reviewing a pull request someone else opened (REV-10), if any. */
+export function reviewTaskOf<T extends { review?: { repo: string; number: number } | null }>(
+  pr: { repo: string; number: number },
+  tasks: T[],
+): T | null {
+  const repo = pr.repo.toLowerCase();
+  return tasks.find((t) => t.review?.repo.toLowerCase() === repo && t.review.number === pr.number) ?? null;
+}
+
 /** A count as a list shows it: `50+` when the list was cut there (REV-6). */
 export function countOf(n: number, more: boolean): string {
   return more ? `${n}+` : String(n);

@@ -221,7 +221,9 @@ export function DiffView({ task }: { task: TaskView }) {
   // holding and what git status agrees with. The whole branch is a different
   // and equally real question, and only worth asking when the branch was cut
   // for this work — which is not true of every worktree.
-  const [scope, setScope] = useState<DiffScope>(() => read("diffScope", "uncommitted"));
+  // A review opens on what the pull request changed (REV-10): it has nothing
+  // uncommitted, and the scope you last chose for your own work stays yours.
+  const [scope, setScope] = useState<DiffScope>(() => (task.review ? "branch" : read("diffScope", "uncommitted")));
   // A single commit on the branch, when set. Cleared on Uncommitted — that
   // view is about the working tree, not history.
   const [pin, setPin] = useState<{ checkoutId: string; sha: string } | null>(null);

@@ -73,6 +73,24 @@ pub struct Task {
     /// That agent works on it from the chat, where the task cannot see it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chat: Option<String>,
+    /// Someone else's pull request, checked out to review it (REV-10). Such
+    /// a task is never pushed, opens no pull request and moves no ticket.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<ReviewOf>,
+}
+
+/// The pull request a review task is of.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewOf {
+    /// `owner/name` of the repository it merges into.
+    pub repo: String,
+    pub number: u64,
+    pub url: String,
+    #[serde(default)]
+    pub author: String,
+    /// The commit its worktree was last moved to: what the review is of,
+    /// and what a line comment posted to GitHub is pinned to.
+    pub head_sha: String,
 }
 
 /// One repository's worktree within a task.
@@ -278,6 +296,7 @@ impl AppConfig {
                 created_at: w.created_at,
                 ticket_stage: None,
                 chat: None,
+                review: None,
             });
             self.checkouts.push(Checkout {
                 id: uuid::Uuid::new_v4().to_string(),

@@ -156,6 +156,36 @@ const answer: Record<string, Answer> = {
     world.tasks = [...world.tasks, task];
     return task;
   },
+  task_for_review: (a) => {
+    const pr = a.pr as { repo: string; number: number; title: string; url: string; author: string; base: string };
+    const had = world.tasks.find((t) => t.review?.repo === pr.repo && t.review.number === pr.number);
+    if (had) return had;
+    const repo = pr.repo.split("/").pop() ?? "repo";
+    const id = `t-review-${world.tasks.length}`;
+    const branch = `review/${repo}-${pr.number}`;
+    const root = `/Users/you/.villain-worktrees/review-${repo}-${pr.number}`;
+    const queued = [...world.reviews.mine, ...(world.reviews.team?.prs ?? [])].find((r) => r.url === pr.url);
+    const task: TaskView = {
+      id, name: `Review: ${pr.title}`, root, branch, issue_key: null, issue_url: null,
+      created_at: ago(0), pane_count: 0,
+      review: { repo: pr.repo, number: pr.number, url: pr.url, author: pr.author, head_sha: queued?.head_sha ?? "c".repeat(40) },
+      checkouts: [{
+        id: `c-${id}`, task_id: id, project_id: `p-${repo}`, project_name: repo, path: `${root}/${repo}`,
+        base: pr.base, exists: true, broken: null, changed: 0,
+        status: { ahead: 0, behind: 0, staged: 0, unstaged: 0, untracked: 0, conflicted: 0, dirty_files: 0, branch },
+      }],
+    };
+    world.tasks = [...world.tasks, task];
+    return task;
+  },
+  review_take_latest: (a) => {
+    const task = world.tasks.find((t) => t.id === a.taskId);
+    if (!task?.review) throw new Error("not a review of a pull request");
+    const queued = [...world.reviews.mine, ...(world.reviews.team?.prs ?? [])].find((r) => r.url === task.review?.url);
+    task.review = { ...task.review, head_sha: queued?.head_sha ?? task.review.head_sha };
+    world.tasks = world.tasks.map((t) => (t.id === task.id ? { ...task } : t));
+    return task;
+  },
   github_all_prs: () => world.prs,
   github_task_prs: (a) => structuredClone(world.prs.find((p) => p.task_id === a.taskId)?.rows ?? []),
   github_review_queue: () => world.reviews,

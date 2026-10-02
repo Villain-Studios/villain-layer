@@ -696,10 +696,27 @@ used to show only the first, so seven PRs of yours read as none.
   so when there are more. Before this, every card was a title and an
   author: a one-line fix looked like a rewrite, and a PR you had approved
   before its author pushed again looked like one you had already done.
+- **REV-10** A PR in "To review" MUST be reviewable here: "Review" makes a
+  review task, a worktree of the app's copy (TASK-3) on the PR's head as
+  `refs/pull/<n>/head` gives it, under the app's own branch name
+  (`review/<repo>-<n>`), measured from where it left its base. A second
+  click opens the same task, and so does clicking the card. The PR's own
+  branch is never used: a fork's is not on origin, and one of the same
+  name there is someone else's code. A review task opens on its Diff tab's
+  Whole branch. It is never pushed and never opens a pull request (both
+  are refused, from the UI and from an agent), has no Pull requests tab
+  and no Update from base, and is left out of the PR sweep, so its ticket
+  never moves (TKT-8). "Take latest" moves it to the PR's head now,
+  following a rewritten head too, and refuses while it holds edits to
+  tracked files, an update under way, or commits of its own. The header
+  says when "To review" has seen a newer head than the one it is on.
+  Its context file (PANE-13) tells an agent there which pull request and
+  commit it is reviewing, and that it never pushes, opens pull requests or
+  comments on GitHub: agents run git themselves.
 
 Code: `commands/github.rs` (`review_queue`, `github_review_queue`),
 `integrations/github/authored.rs`, `integrations/github/requested.rs`,
-`commands/pr_task.rs`, `ReviewsView.tsx`.
+`commands/pr_task.rs`, `git/review.rs`, `ReviewsView.tsx`, `ReviewHeader.tsx`.
 
 ## 11. Notifications
 

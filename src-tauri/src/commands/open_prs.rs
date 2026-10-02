@@ -17,6 +17,7 @@ use super::{off_runtime, AppState};
 
 /// Push and open a PR in every repository that has changes, then post the whole
 /// set back to the Jira ticket and Slack, and list in each PR the others.
+/// `skip` names checkouts the user left out: not pushed, not opened.
 #[tauri::command]
 pub async fn github_open_prs(
     state: State<'_, AppState>,
@@ -24,6 +25,7 @@ pub async fn github_open_prs(
     title: String,
     body: String,
     draft: bool,
+    skip: Vec<String>,
 ) -> Result<Vec<RepoResult>> {
     let task = state.config.task(&task_id)?;
     let (client, _) = github_client(&state)?;
@@ -35,6 +37,9 @@ pub async fn github_open_prs(
     let mut set: Vec<github::Sibling> = Vec::new();
 
     for checkout in state.config.checkouts_of(&task_id) {
+        if skip.contains(&checkout.id) {
+            continue;
+        }
         let dir = PathBuf::from(&checkout.path);
         let project = state.config.project(&checkout.project_id)?;
         let repo = project.name.clone();

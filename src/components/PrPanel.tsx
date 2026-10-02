@@ -160,6 +160,8 @@ export function PrPanel({
   const [title, setTitle] = useState(task.name);
   const [body, setBody] = useState("");
   const [draft, setDraft] = useState(true);
+  /** Repos the user unticked in the dialog: no push, no PR. Everything starts picked. */
+  const [leftOut, setLeftOut] = useState<string[]>([]);
   const [drafting, setDrafting] = useState(false);
   const pollRef = useRef<number | null>(null);
 
@@ -329,7 +331,11 @@ export function PrPanel({
   async function openPrs() {
     setBusy(true);
     try {
-      reportRepoResults(toast, await api.githubOpenPrs(task.id, title.trim(), body, draft), "Opened");
+      reportRepoResults(
+        toast,
+        await api.githubOpenPrs(task.id, title.trim(), body, draft, leftOut),
+        "Opened",
+      );
       setCreating(false);
       await load();
     } catch (e) {
@@ -353,6 +359,7 @@ export function PrPanel({
   // after it landed still needs one, and the row keeps the old PR only so the
   // panel can show what became of it.
   const pending = rows.filter((r) => (!r.pr || r.pr.state !== "open") && r.changed > 0);
+  const picked = pending.filter((r) => !leftOut.includes(r.checkout_id));
   const review = taskReview(rows);
   const said = reviewComments(rows);
 
@@ -375,6 +382,24 @@ export function PrPanel({
     <div className="muted" style={{ marginBottom: 10, lineHeight: 1.6 }}>
       {rows.map((r) => (
         <div key={r.checkout_id} className="row">
+          {/*
+            Only a repo that would get a new PR can be left out. One with a PR
+            already open is pushed with the rest, and is listed in the others.
+          */}
+          <input
+            type="checkbox"
+            style={{ width: "auto", visibility: pending.includes(r) ? "visible" : "hidden" }}
+            title={`Open a pull request in ${r.repo}`}
+            checked={pending.includes(r) && !leftOut.includes(r.checkout_id)}
+            disabled={!pending.includes(r)}
+            onChange={(e) =>
+              setLeftOut((out) =>
+                e.target.checked
+                  ? out.filter((id) => id !== r.checkout_id)
+                  : [...out, r.checkout_id],
+              )
+            }
+          />
           <span
             className="dot"
             style={{
@@ -450,7 +475,7 @@ export function PrPanel({
                     pending.length === 1 ? "y" : "ies"
                   }`
             }
-            onClick={() => setCreating(true)}
+            onClick={() => { setLeftOut([]); setCreating(true); }}
           >
             <PlusIcon />
           </button>
@@ -485,7 +510,7 @@ export function PrPanel({
           <button
             className="btn btn-primary"
             disabled={pending.length === 0}
-            onClick={() => setCreating(true)}
+            onClick={() => { setLeftOut([]); setCreating(true); }}
           >
             Open pull request
           </button>
@@ -697,12 +722,12 @@ export function PrPanel({
               <button className="btn" onClick={() => setCreating(false)}>Cancel</button>
               <button
                 className="btn btn-primary"
-                disabled={busy || pending.length === 0 || !title.trim()}
+                disabled={busy || picked.length === 0 || !title.trim()}
                 onClick={() => void openPrs()}
               >
                 {busy
                   ? "Working…"
-                  : `Push & open ${pending.length} PR${pending.length === 1 ? "" : "s"}`}
+                  : `Push & open ${picked.length} PR${picked.length === 1 ? "" : "s"}`}
               </button>
             </>
           }
@@ -754,7 +779,7 @@ export function PrPanel({
           )}
 
           <div className="muted" style={{ lineHeight: 1.55 }}>
-            Opens one PR per repository with changes, all from <code>{task.branch}</code>, with this
+            Opens one PR per ticked repository, all from <code>{task.branch}</code>, with this
             title and description. When there is more than one, each PR lists the others below it.
             {task.issue_key
               ? ` The links are also posted back to ${task.issue_key} as a single comment.`

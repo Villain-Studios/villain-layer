@@ -962,7 +962,7 @@ async fn call(app: &AppHandle, name: &str, args: Value, caller: Option<&str>) ->
             let body = arg(&args, "body").unwrap_or_default().to_string();
             let draft = args.get("draft").and_then(|d| d.as_bool()).unwrap_or(true);
             Ok(serde_json::to_value(
-                commands::github_open_prs(state, task_id, title, body, draft).await?,
+                commands::github_open_prs(state, task_id, title, body, draft, Vec::new()).await?,
             )?)
         }
 

@@ -130,7 +130,15 @@ const answer: Record<string, Answer> = {
   },
 
   // Diff.
-  diff_files: () => world.changed,
+  // The same files for every task, as that task's own: a task made in the
+  // harness has checkouts the world's list never named.
+  diff_files: (a) => {
+    const task = world.tasks.find((t) => t.id === a.taskId);
+    const known = new Set(task?.checkouts.map((c) => c.id));
+    const own = task?.checkouts[0];
+    return world.changed.map((f) =>
+      known.has(f.checkout_id) || !own ? f : { ...f, checkout_id: own.id, repo: own.project_name });
+  },
   diff_file: (a) =>
     `--- a/${a.path}\n+++ b/${a.path}\n@@ -1,3 +1,4 @@\n const retries = config.retries;\n-let attempt = 1;\n+let attempt = 0;\n+// Counted from zero: the first try is not a retry.\n while (attempt < retries) {\n`,
   task_commits: () => world.tasks.flatMap((t) =>
@@ -193,6 +201,10 @@ const answer: Record<string, Answer> = {
     };
     world.tasks = [...world.tasks, task];
     return task;
+  },
+  github_post_review: (a) => {
+    const notes = (a.notes as unknown[]) ?? [];
+    return { url: "https://github.com/acme/api/pull/61#pullrequestreview-1", inline: notes.length, in_body: 0, moved_all: false };
   },
   review_take_latest: (a) => {
     const task = world.tasks.find((t) => t.id === a.taskId);

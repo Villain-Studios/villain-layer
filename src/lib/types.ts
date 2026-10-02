@@ -497,3 +497,16 @@ export interface ReviewerRun {
   dropped: number;
 }
 
+/** How a review posted to GitHub ends (REV-11). */
+export type ReviewVerdict = "comment" | "approve" | "request_changes";
+
+export interface PostedReview {
+  url: string;
+  /** Posted as line comments. */
+  inline: number;
+  /** Posted in the body, under their `file:line`. */
+  in_body: number;
+  /** GitHub refused the line comments, so every note went in the body. */
+  moved_all: boolean;
+}
+

@@ -734,10 +734,23 @@ used to show only the first, so seven PRs of yours read as none.
   Its context file (PANE-13) tells an agent there which pull request and
   commit it is reviewing, and that it never pushes, opens pull requests or
   comments on GitHub: agents run git themselves.
+- **REV-11** A review task's notes MUST be postable to its PR as one
+  GitHub review: a verdict (comment, approve, request changes), a summary,
+  and each note a comment on its line, pinned to the commit the review was
+  taken at. "Post review…" shows all of it before anything is sent, and
+  posts once, with one click. A note on a line outside the PR's diff goes
+  into the body under its `file:line`; if GitHub still refuses a line, the
+  review is posted with every note in its body, and says so. It is
+  refused while the worktree is not at that commit or holds edits to
+  tracked files, since its line numbers would then be another version's.
+  Posted notes leave the Diff tab. Reviewing here used to end in copying
+  each note into GitHub by hand.
 
 Code: `commands/github.rs` (`review_queue`, `github_review_queue`),
 `integrations/github/authored.rs`, `integrations/github/requested.rs`,
-`commands/pr_task.rs`, `git/review.rs`, `ReviewsView.tsx`, `ReviewHeader.tsx`.
+`commands/pr_task.rs`, `git/review.rs`, `commands/post_review.rs`,
+`integrations/github/posting.rs`, `ReviewsView.tsx`, `ReviewHeader.tsx`,
+`PostReview.tsx`.
 
 ## 11. Notifications
 

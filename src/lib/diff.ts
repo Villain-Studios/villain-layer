@@ -7,12 +7,21 @@ export interface DiffLine {
   kind: LineKind;
   text: string;
   newLine: number | null;
+  /** In the old version of the file: where a removed line is commented on. */
+  oldLine: number | null;
 }
 
-/** Parse a unified patch, tracking new-file line numbers for comment anchors. */
+/** A line a note can be left on: a removed one on the old side, the rest on the new. */
+export function lineOf(l: DiffLine): { side: "LEFT" | "RIGHT"; line: number } | null {
+  if (l.kind === "del") return l.oldLine === null ? null : { side: "LEFT", line: l.oldLine };
+  return l.newLine === null ? null : { side: "RIGHT", line: l.newLine };
+}
+
+/** Parse a unified patch, tracking both sides' line numbers for comment anchors. */
 export function parseDiff(patch: string): DiffLine[] {
   const out: DiffLine[] = [];
   let newLine = 0;
+  let oldLine = 0;
   // Whether the line belongs to a hunk or to the header before one. It
   // matters for `---` and `+++`: in the header they name the two files, but
   // inside a hunk a removed `-- SQL comment` or an added `++ counter` looks
@@ -26,26 +35,27 @@ export function parseDiff(patch: string): DiffLine[] {
 
   for (const raw of body.split("\n")) {
     if (raw.startsWith("@@")) {
-      const m = /@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(raw);
-      newLine = m ? Number(m[1]) : 0;
+      const m = /@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(raw);
+      oldLine = m ? Number(m[1]) : 0;
+      newLine = m ? Number(m[2]) : 0;
       inHunk = true;
-      out.push({ kind: "hunk", text: raw, newLine: null });
+      out.push({ kind: "hunk", text: raw, newLine: null, oldLine: null });
     } else if (raw.startsWith("diff ")) {
       inHunk = false;
-      out.push({ kind: "meta", text: raw, newLine: null });
+      out.push({ kind: "meta", text: raw, newLine: null, oldLine: null });
     } else if (!inHunk) {
       // Before the first hunk it is all header: the names, the index, and
       // anything git adds — "old mode", "Binary files … differ" — which,
       // unlisted, was numbered from 0 as though it were the file.
-      out.push({ kind: "meta", text: raw, newLine: null });
+      out.push({ kind: "meta", text: raw, newLine: null, oldLine: null });
     } else if (raw.startsWith("+")) {
-      out.push({ kind: "add", text: raw, newLine: newLine++ });
+      out.push({ kind: "add", text: raw, newLine: newLine++, oldLine: null });
     } else if (raw.startsWith("-")) {
-      out.push({ kind: "del", text: raw, newLine: null });
+      out.push({ kind: "del", text: raw, newLine: null, oldLine: oldLine++ });
     } else if (raw.startsWith("\\")) {
-      out.push({ kind: "meta", text: raw, newLine: null });
+      out.push({ kind: "meta", text: raw, newLine: null, oldLine: null });
     } else {
-      out.push({ kind: "ctx", text: raw, newLine: newLine++ });
+      out.push({ kind: "ctx", text: raw, newLine: newLine++, oldLine: oldLine++ });
     }
   }
   return out;

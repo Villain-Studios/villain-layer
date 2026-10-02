@@ -434,6 +434,10 @@ export interface ReviewComment {
   body: string;
   code?: string | null;
   repo?: string | null;
+  /** "LEFT" for a removed line; the new side otherwise. */
+  side?: "LEFT" | "RIGHT" | null;
+  /** The first line of a range ending at `line`. */
+  start_line?: number | null;
 }
 
 export interface FoundRepo {

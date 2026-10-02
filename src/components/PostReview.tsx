@@ -46,7 +46,10 @@ export function PostReview({
         taskId,
         verdict,
         body,
-        notes.map((n) => ({ path: n.path, line: n.line, body: n.body, code: n.code, repo: null })),
+        notes.map((n) => ({
+          path: n.path, line: n.line, body: n.body, code: n.code, repo: null,
+          side: n.side ?? null, start_line: n.startLine ?? null,
+        })),
       );
       dropNotes(taskId, sent);
       const where = posted.moved_all
@@ -110,7 +113,10 @@ export function PostReview({
           {notes.length === 0 && <li className="muted">No notes: only the verdict and summary are posted.</li>}
           {notes.map((n) => (
             <li key={n.id}>
-              <code>{n.path}:{n.line}</code>
+              <code>
+                {n.path}:{n.startLine ? `${n.startLine}-${n.line}` : n.line}
+                {n.side === "LEFT" && " (removed)"}
+              </code>
               <span>{n.body}</span>
             </li>
           ))}

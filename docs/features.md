@@ -785,6 +785,12 @@ used to show only the first, so seven PRs of yours read as none.
   should read; posted, the author applies it from GitHub in one click.
   A suggestion block is shown as a suggested change wherever notes and
   GitHub comments are drawn.
+  A removed line can be commented on, numbered in the old version of the
+  file; shift-clicking a second line number on the same side stretches
+  the note being written over every line between. Both go to GitHub as
+  it takes them (`side`, `start_line`), a range only when it lies within
+  one hunk, else into the body under `file:12-16`; and to an agent as
+  `file:12-16` or `file:3 (removed)`, with the lines they read.
 
 Code: `commands/github.rs` (`review_queue`, `github_review_queue`),
 `integrations/github/authored.rs`, `integrations/github/requested.rs`,

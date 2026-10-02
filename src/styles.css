@@ -457,6 +457,10 @@ textarea { resize: vertical; font-family: var(--mono); }
 .diff-line.hunk { background: var(--panel-2); color: var(--blue); }
 .diff-line.meta { color: var(--dimmer); }
 .diff-line.commented { background: rgba(167, 139, 250, 0.1); }
+/* The lines a note being written covers (REV-13): one, or a shift-clicked range. */
+.diff-line.picked { box-shadow: inset 3px 0 0 var(--accent); background: rgba(167, 139, 250, 0.14); }
+/* A removed line's number is the old file's: dimmer, so the two columns' worth read apart. */
+.diff-line .ln.old { color: var(--dimmer); }
 
 /* A width of its own, and held in view. Inside `.diff-lines`, which is as wide
    as its longest line, a note was sized as one unwrapped line — a long one

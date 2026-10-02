@@ -182,6 +182,29 @@ pub struct ReviewComment {
     /// the agent is sitting at the task root.
     #[serde(default)]
     pub repo: Option<String>,
+    /// "LEFT" for a removed line, numbered in the old version of the file.
+    #[serde(default)]
+    pub side: Option<String>,
+    /// The first line of a range that ends at `line`.
+    #[serde(default)]
+    pub start_line: Option<u32>,
+}
+
+impl ReviewComment {
+    /// Whether it is on a removed line.
+    pub fn removed(&self) -> bool {
+        self.side.as_deref() == Some("LEFT")
+    }
+
+    /// Where it is, as a reader names it: `path:12`, `path:12-16`, and
+    /// `(removed)` after a line that is gone.
+    pub fn place(&self, path: &str) -> String {
+        let at = match self.start_line.filter(|s| *s < self.line) {
+            Some(start) => format!("{start}-{}", self.line),
+            None => self.line.to_string(),
+        };
+        format!("{path}:{at}{}", if self.removed() { " (removed)" } else { "" })
+    }
 }
 
 /// Batch review notes into one prompt and type it straight into the agent pane.
@@ -201,9 +224,17 @@ pub fn send_review(
             Some(repo) => format!("{repo}/{}", c.path),
             None => c.path.clone(),
         };
-        prompt.push_str(&format!("- {path}:{} — {}\n", c.line, c.body.trim()));
-        if let Some(code) = c.code.as_ref().filter(|s| !s.trim().is_empty()) {
-            prompt.push_str(&format!("    (line reads: `{}`)\n", code.trim()));
+        prompt.push_str(&format!("- {} — {}\n", c.place(&path), c.body.trim()));
+        match c.code.as_ref().filter(|s| !s.trim().is_empty()) {
+            Some(code) if code.contains('\n') => {
+                prompt.push_str("    (lines read:\n");
+                for l in code.lines() {
+                    prompt.push_str(&format!("      {l}\n"));
+                }
+                prompt.push_str("    )\n");
+            }
+            Some(code) => prompt.push_str(&format!("    (line reads: `{}`)\n", code.trim())),
+            None => {}
         }
     }
 
@@ -611,6 +642,18 @@ pub async fn send_merge_conflicts(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_note_on_a_range_or_a_removed_line_says_so_to_the_agent() {
+        let c = |line, side: Option<&str>, start_line| ReviewComment {
+            path: "a.ts".into(), line, body: String::new(), code: None, repo: None,
+            side: side.map(str::to_string), start_line,
+        };
+        assert_eq!(c(4, None, None).place("api/a.ts"), "api/a.ts:4");
+        assert_eq!(c(6, Some("RIGHT"), Some(2)).place("a.ts"), "a.ts:2-6");
+        assert_eq!(c(3, Some("LEFT"), None).place("a.ts"), "a.ts:3 (removed)");
+        assert_eq!(c(5, None, Some(5)).place("a.ts"), "a.ts:5", "a range of one line is a line");
+    }
 
     #[test]
     fn conflicts_are_named_from_where_the_agent_stands() {

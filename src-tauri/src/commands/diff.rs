@@ -283,6 +283,7 @@ pub async fn push_task(app: AppHandle, task_id: String) -> Result<Vec<RepoResult
 
 fn push_task_inner(state: &AppState, task_id: String) -> Result<Vec<RepoResult>> {
     let task = state.config.task(&task_id)?;
+    super::pr_task::not_a_review(&task, "pushed")?;
     // Every repository at once: each is a round trip to the remote, and
     // nothing in one waits on another.
     let results = std::thread::scope(|scope| {

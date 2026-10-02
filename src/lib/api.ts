@@ -90,6 +90,11 @@ export const api = {
   /** The task for one of your pull requests, made on its branch if there is none (REV-7). */
   taskForPr: (repo: string, head: string, base: string, title: string) =>
     invoke<Task>("task_for_pr", { repo, head, base, title }),
+  /** The task reviewing someone else's pull request, made on its head if there is none (REV-10). */
+  taskForReview: (pr: { repo: string; number: number; title: string; url: string; author: string; head: string; base: string }) =>
+    invoke<Task>("task_for_review", { pr }),
+  /** Move a review task to its pull request's head now (REV-10). */
+  reviewTakeLatest: (taskId: string) => invoke<Task>("review_take_latest", { taskId }),
   deleteTask: (id: string, force = false) =>
     invoke<RepoResult[]>("delete_task", { id, force }),
   /**

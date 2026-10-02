@@ -76,6 +76,19 @@ export interface Task {
   ticket_stage?: "review" | "merged" | null;
   /** The room folder of the chat whose agent created this task (CHAT-3). */
   chat?: string | null;
+  /** Someone else's pull request this task reviews (REV-10). */
+  review?: ReviewOf | null;
+}
+
+/** The pull request a review task is of. */
+export interface ReviewOf {
+  /** `owner/name`. */
+  repo: string;
+  number: number;
+  url: string;
+  author: string;
+  /** The commit the worktree was last moved to: what the review is of. */
+  head_sha: string;
 }
 
 /** One repository's worktree within a task. */

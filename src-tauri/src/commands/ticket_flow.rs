@@ -211,6 +211,7 @@ mod tests {
             created_at: chrono::Utc::now(),
             ticket_stage: moved.map(String::from),
             chat: None,
+            review: None,
         }
     }
 

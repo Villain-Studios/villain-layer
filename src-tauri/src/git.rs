@@ -8,8 +8,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 
+mod review;
 mod store;
 mod upkeep;
+pub use review::{follow_pull, take_pull};
 pub use store::{
     adopt_worktree, belongs_to, changed_between, copy_local_config, create_store, default_tip,
     is_own_clone, is_store_of, owner, reclaim_clone, relink_worktree, take_branch_from_clone, take_branch_from_origin,

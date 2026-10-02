@@ -11,10 +11,13 @@ use crate::error::{Error, Result};
 mod authored;
 mod branches;
 mod hunk;
+mod requested;
 mod siblings;
 pub use authored::AuthoredPr;
 pub use branches::{BranchPr, PrState, MY_PULLS_LIMIT};
 pub use hunk::CodeLine;
+pub(crate) use requested::{drop_already_listed, mine_review_query, team_review_query};
+pub use requested::ReviewRequest;
 pub use siblings::Sibling;
 
 pub struct GitHub {
@@ -96,6 +99,19 @@ impl GitHub {
             return Ok(Value::Null);
         }
         Ok(serde_json::from_str(&body)?)
+    }
+
+    /// A GraphQL query. GitHub answers 200 with a failure inside, so the
+    /// parser of each answer still looks at `errors`.
+    async fn graphql(&self, query: &str, variables: Value) -> Result<Value> {
+        self.json(
+            self.client
+                .post(graphql_url(&self.api_url))
+                .header("Authorization", format!("Bearer {}", self.token))
+                .header("User-Agent", "villain-layer")
+                .json(&json!({ "query": query, "variables": variables })),
+        )
+        .await
     }
 
     pub async fn login(&self) -> Result<String> {
@@ -336,18 +352,9 @@ impl GitHub {
         let mut after: Option<String> = None;
         for page in 0..MAX_PAGES {
             let got = self
-                .json(
-                    self.client
-                        .post(graphql_url(&self.api_url))
-                        .header("Authorization", format!("Bearer {}", self.token))
-                        .header("User-Agent", "villain-layer")
-                        .json(&json!({
-                            "query": QUERY,
-                            "variables": {
-                                "owner": owner, "name": repo, "number": number,
-                                "after": after, "first": page == 0,
-                            },
-                        })),
+                .graphql(
+                    QUERY,
+                    json!({ "owner": owner, "name": repo, "number": number, "after": after, "first": page == 0 }),
                 )
                 .await;
             // A later page that failed is a shorter list, not no list.
@@ -456,24 +463,6 @@ impl GitHub {
         Ok(log_excerpt(&String::from_utf8_lossy(&tail)))
     }
 
-    /// Open pull requests matching a search query, newest activity first.
-    ///
-    /// One page. This feeds an inbox, and the search API is rate-limited
-    /// separately from the rest of REST — a second page on every poll would
-    /// spend that budget on rows nobody scrolls to. `more` is set when GitHub
-    /// had further hits.
-    pub async fn search_prs(&self, query: &str) -> Result<(Vec<ReviewRequest>, bool)> {
-        let v = self
-            .json(self.req(reqwest::Method::GET, "/search/issues").query(&[
-                ("q", query),
-                ("sort", "updated"),
-                ("order", "desc"),
-                ("per_page", "100"),
-            ]))
-            .await?;
-        Ok(parse_search_page(&v))
-    }
-
     /// Teams the token's user belongs to.
     ///
     /// Capped. A server that ignores `page` would otherwise be followed
@@ -528,38 +517,11 @@ impl GitHub {
     }
 }
 
-/// A pull request someone is being asked to review. Search results, not the
-/// pull endpoint: the queue is every repo on the install, not the ones this
-/// app has checked out.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct ReviewRequest {
-    pub repo: String,
-    pub number: u64,
-    pub title: String,
-    pub url: String,
-    pub author: String,
-    pub draft: bool,
-    pub updated_at: String,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GhTeam {
     pub org: String,
     pub slug: String,
     pub name: String,
-}
-
-/// Reviews requested of the signed-in user, excluding ones they opened.
-///
-/// A pull request you authored is not waiting for your review, even if you
-/// are also on the requested list.
-pub(crate) fn mine_review_query() -> &'static str {
-    "is:pr is:open review-requested:@me -author:@me"
-}
-
-/// Reviews requested of a team, excluding ones the signed-in user opened.
-pub(crate) fn team_review_query(org: &str, slug: &str) -> String {
-    format!("is:pr is:open team-review-requested:{org}/{slug} -author:@me")
 }
 
 /// What to store for the review team. Blank and a lone `@` are "no team".
@@ -612,87 +574,6 @@ pub(crate) fn pick_team(raw: &str, teams: &[GhTeam]) -> std::result::Result<GhTe
                 .collect::<Vec<_>>()
                 .join(", ")
         )),
-    }
-}
-
-/// Drop team rows that are already in the personal queue.
-///
-/// Requested of you and of the team at once would sit in both columns. The
-/// personal one is the one that names you, so the team column keeps only what
-/// you would otherwise miss.
-pub(crate) fn drop_already_listed(team: &mut Vec<ReviewRequest>, mine: &[ReviewRequest]) {
-    team.retain(|pr| !mine.iter().any(|m| same_pr(m, pr)));
-}
-
-fn same_pr(a: &ReviewRequest, b: &ReviewRequest) -> bool {
-    if !a.repo.is_empty() && a.repo == b.repo && a.number == b.number {
-        return true;
-    }
-    a.url == b.url
-}
-
-pub(crate) fn parse_search_page(v: &Value) -> (Vec<ReviewRequest>, bool) {
-    let items = v.get("items").and_then(|i| i.as_array());
-    // Compare against what GitHub returned, not what we could parse. A hit we
-    // drop for having no number is not a further page.
-    let returned = items.map(|a| a.len()).unwrap_or(0);
-    let prs = items
-        .map(|a| a.iter().filter_map(to_review_request).collect())
-        .unwrap_or_default();
-    let total = v
-        .get("total_count")
-        .and_then(|n| n.as_u64())
-        .unwrap_or(returned as u64);
-    let incomplete = v
-        .get("incomplete_results")
-        .and_then(|b| b.as_bool())
-        .unwrap_or(false);
-    let more = incomplete || total > returned as u64;
-    (prs, more)
-}
-
-fn to_review_request(v: &Value) -> Option<ReviewRequest> {
-    let number = v
-        .get("number")
-        .and_then(|n| n.as_u64())
-        .filter(|n| *n > 0)?;
-    let url = v
-        .pointer("/pull_request/html_url")
-        .and_then(|u| u.as_str())
-        .filter(|u| !u.is_empty())
-        .or_else(|| {
-            v.get("html_url")
-                .and_then(|u| u.as_str())
-                .filter(|u| !u.is_empty())
-        })?;
-    Some(ReviewRequest {
-        repo: repo_slug(
-            v.get("repository_url")
-                .and_then(|u| u.as_str())
-                .unwrap_or(""),
-        ),
-        number,
-        title: s(v, "title"),
-        url: url.to_string(),
-        author: v
-            .pointer("/user/login")
-            .and_then(|l| l.as_str())
-            .unwrap_or_default()
-            .to_string(),
-        draft: v.get("draft").and_then(|d| d.as_bool()).unwrap_or(false),
-        updated_at: s(v, "updated_at"),
-    })
-}
-
-/// `https://ghe.example.com/api/v3/repos/acme/web` → `acme/web`.
-fn repo_slug(repository_url: &str) -> String {
-    let Some(rest) = repository_url.split("/repos/").nth(1) else {
-        return String::new();
-    };
-    let mut parts = rest.split('/').filter(|p| !p.is_empty());
-    match (parts.next(), parts.next()) {
-        (Some(owner), Some(name)) => format!("{owner}/{name}"),
-        _ => String::new(),
     }
 }
 
@@ -1086,50 +967,6 @@ mod tests {
     }
 
     #[test]
-    fn a_search_hit_from_enterprise_keeps_the_repo() {
-        let v = json!({
-            "total_count": 2,
-            "incomplete_results": false,
-            "items": [{
-                "number": 14,
-                "title": "Fix the race",
-                "draft": true,
-                "html_url": "https://ghe.example.com/acme/web/issues/14",
-                "updated_at": "2026-09-23T08:00:00Z",
-                "user": { "login": "ada" },
-                "repository_url": "https://ghe.example.com/api/v3/repos/acme/web",
-                "pull_request": { "html_url": "https://ghe.example.com/acme/web/pull/14" }
-            }, {
-                "number": 0,
-                "title": "not a pull"
-            }]
-        });
-        let (prs, more) = parse_search_page(&v);
-        assert!(!more);
-        assert_eq!(prs.len(), 1);
-        assert_eq!(prs[0].repo, "acme/web");
-        assert_eq!(prs[0].url, "https://ghe.example.com/acme/web/pull/14");
-        assert!(prs[0].draft);
-        assert_eq!(prs[0].author, "ada");
-    }
-
-    #[test]
-    fn a_short_page_with_a_higher_total_is_not_the_whole_queue() {
-        let v = json!({
-            "total_count": 4,
-            "items": [{
-                "number": 1,
-                "title": "One",
-                "html_url": "https://github.com/acme/web/pull/1",
-                "repository_url": "https://api.github.com/repos/acme/web"
-            }]
-        });
-        let (prs, more) = parse_search_page(&v);
-        assert_eq!(prs.len(), 1);
-        assert!(more);
-    }
-
-    #[test]
     fn a_bare_slug_matches_the_one_team_you_are_on() {
         let teams = vec![
             GhTeam {
@@ -1181,29 +1018,9 @@ mod tests {
     }
 
     #[test]
-    fn blank_is_no_team_and_a_personal_row_leaves_the_team_list() {
+    fn blank_is_no_team() {
         assert_eq!(normalize_review_team("  @fe "), Some("fe".into()));
         assert_eq!(normalize_review_team(" @ "), None);
-        assert!(mine_review_query().contains("review-requested:@me"));
-        assert!(mine_review_query().contains("-author:@me"));
-
-        let mine = vec![req("acme/web", 3)];
-        let mut team = vec![req("acme/web", 3), req("acme/web", 9)];
-        drop_already_listed(&mut team, &mine);
-        assert_eq!(team.len(), 1);
-        assert_eq!(team[0].number, 9);
-    }
-
-    fn req(repo: &str, number: u64) -> ReviewRequest {
-        ReviewRequest {
-            repo: repo.into(),
-            number,
-            title: String::new(),
-            url: format!("https://github.com/{repo}/pull/{number}"),
-            author: String::new(),
-            draft: false,
-            updated_at: String::new(),
-        }
     }
 
     #[test]

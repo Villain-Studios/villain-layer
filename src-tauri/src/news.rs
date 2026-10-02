@@ -223,10 +223,7 @@ mod tests {
             repo: repo.into(),
             number,
             title: format!("t{number}"),
-            url: String::new(),
-            author: String::new(),
-            draft: false,
-            updated_at: String::new(),
+            ..Default::default()
         }
     }
 

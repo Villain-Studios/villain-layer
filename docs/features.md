@@ -686,9 +686,20 @@ used to show only the first, so seven PRs of yours read as none.
   review, drafts. A group with nothing in it is not shown. Each group can
   be folded, and keeps the most recently updated first. A flat list of a
   dozen PRs hid the two that needed you among the drafts.
+- **REV-9** Every PR in "To review" MUST say what it asks of you: its size
+  (lines added and removed, files), its checks as GitHub rolls them up,
+  whether it comes from a fork, and your own standing: not reviewed yet,
+  your latest review (approved, changes asked for, commented, dismissed),
+  or new commits since your review, when its head has moved past the
+  commit your latest review was of. A pending review of yours is a draft,
+  not a review given. The list is the 100 most recently updated, and says
+  so when there are more. Before this, every card was a title and an
+  author: a one-line fix looked like a rewrite, and a PR you had approved
+  before its author pushed again looked like one you had already done.
 
 Code: `commands/github.rs` (`review_queue`, `github_review_queue`),
-`integrations/github/authored.rs`, `commands/pr_task.rs`, `ReviewsView.tsx`.
+`integrations/github/authored.rs`, `integrations/github/requested.rs`,
+`commands/pr_task.rs`, `ReviewsView.tsx`.
 
 ## 11. Notifications
 

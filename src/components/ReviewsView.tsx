@@ -50,9 +50,34 @@ function ReviewCard({
         <span className="when">{ago(pr.updated_at)}</span>
       </div>
       <div className="title">{pr.title}</div>
-      {pr.author && <div className="by">{pr.author}</div>}
+      <div className="chips standing">
+        {pr.author && <span className="by">{pr.author}</span>}
+        <span className="chip size" title={`${pr.changed_files} files, opened ${ago(pr.created_at)} ago`}>
+          <span className="add">+{pr.additions}</span> <span className="del">−{pr.deletions}</span>
+          {" · "}{pr.changed_files} {pr.changed_files === 1 ? "file" : "files"}
+        </span>
+        {pr.cross_repo && <span className="chip" title="Its branch is on a fork">fork</span>}
+        {pr.checks === "failing" && <span className="chip del">checks failing</span>}
+        {pr.checks === "pending" && <span className="chip warn">checks running</span>}
+        {pr.checks === "passing" && <span className="chip add">checks pass</span>}
+        <MyReview pr={pr} />
+      </div>
     </button>
   );
+}
+
+/** Where your own review of it stands (REV-9): what this request asks of you. */
+function MyReview({ pr }: { pr: ReviewRequest }) {
+  if (pr.new_since_review) {
+    return <span className="chip warn" title="Its author pushed after your last review">new commits since your review</span>;
+  }
+  switch (pr.my_review) {
+    case "approved": return <span className="chip add">you approved</span>;
+    case "changes_requested": return <span className="chip del">you asked for changes</span>;
+    case "commented": return <span className="chip">you commented</span>;
+    case "dismissed": return <span className="chip">your review was dismissed</span>;
+    default: return <span className="chip warn">not reviewed yet</span>;
+  }
 }
 
 const TONE = { good: "add", bad: "del", wait: "warn", draft: "" } as const;

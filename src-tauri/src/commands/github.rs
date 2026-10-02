@@ -311,7 +311,7 @@ pub(crate) async fn review_queue(state: &AppState) -> Result<ReviewQueue> {
             None => None,
         }
     };
-    let (mine, team) = tokio::join!(client.search_prs(github::mine_review_query()), team);
+    let (mine, team) = tokio::join!(client.requested_prs(github::mine_review_query()), team);
     let (mine, mine_more) = mine?;
     let team = team.map(|mut t| {
         github::drop_already_listed(&mut t.prs, &mine);
@@ -364,7 +364,7 @@ async fn load_team_reviews(client: &GitHub, api_url: &str, raw: &str) -> TeamRev
     };
     let slug = format!("{}/{}", team.org, team.slug);
     match client
-        .search_prs(&github::team_review_query(&team.org, &team.slug))
+        .requested_prs(&github::team_review_query(&team.org, &team.slug))
         .await
     {
         Ok((prs, more)) => TeamReviews {

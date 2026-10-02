@@ -416,7 +416,10 @@ new one. Commit commits every repo with changes, with one message.
   each a bug, a risk or a nit, and each a suggestion until kept: only
   your notes and kept findings are sent. A finding naming no file or line
   of the task is dropped, and one on a line the patch does not draw is
-  listed above it with its line number. A new run replaces the last one's
+  listed above it with its line number. A finished run opens the first
+  finding still to keep or drop, and the count of them goes to the next;
+  a file with notes is marked in the tree. Found on a file not open, a
+  finding was a count with nothing to see. A new run replaces the last one's
   findings that were not kept. An answer that is not findings is an
   error, never a clean review. Notes are held per task while the app
   runs: kept by the tab, they were lost by switching to another, and a

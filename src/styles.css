@@ -360,7 +360,8 @@ textarea { resize: vertical; font-family: var(--mono); }
 .diff-file.active { background: var(--panel-2); color: var(--accent); }
 .diff-file .p { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .diff-file .n { font-size: 11px; }
-.diff-file .badge { font-family: var(--mono); font-size: 11px; color: var(--amber); }
+/* Notes on a file: a pill, not a digit that reads as part of its +/- counts. */
+.diff-file .badge { font-family: var(--mono); font-size: 10.5px; color: var(--bg); background: var(--amber); border-radius: 8px; padding: 0 6px; line-height: 15px; font-weight: 600; }
 
 /* Open pull requests, before it pushes (PR-11): advice, not a gate. */
 .outgoing { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; }
@@ -379,6 +380,10 @@ textarea { resize: vertical; font-family: var(--mono); }
 .review-steps li { padding-left: 2px; }
 .review-steps li.active { color: var(--text); }
 .review-steps .chip { margin-left: 6px; }
+.review-steps button.chip { cursor: pointer; background: none; }
+.review-tray-hint .link { background: none; border: 0; padding: 0; font: inherit; color: var(--amber); cursor: pointer; text-decoration: underline; }
+/* A note just jumped to, lit up for a moment. */
+.inline-comment.flash { outline: 1px solid var(--amber); }
 
 /* Post review (REV-11): the verdict, and every note as it will go. */
 .verdicts { display: flex; gap: 6px; }

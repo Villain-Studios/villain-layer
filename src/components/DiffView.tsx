@@ -303,6 +303,31 @@ export function DiffView({ task }: { task: TaskView }) {
     const drawn = new Set(lines.map((l) => l.newLine));
     return fileNotes.filter((n) => !drawn.has(n.line));
   }, [lines, fileNotes]);
+  // A note asked for from elsewhere (a count, a finished run): its file
+  // opened, then the note brought into view once that file's patch is drawn.
+  const noteFocus = useStore((s) => (s.noteFocus?.taskId === task.id ? s.noteFocus : null));
+  useEffect(() => {
+    if (!noteFocus) return;
+    const n = notes.find((x) => x.id === noteFocus.id);
+    if (!n) return void useStore.getState().focusNote(task.id, null);
+    const key = `${n.checkoutId}:${n.path}`;
+    if (!files.some((f) => fileKey(f) === key)) {
+      // Only Whole branch lists a committed file; a list without it in
+      // either scope leaves the note in the count.
+      if (scope !== "branch") pickScope("branch");
+      else useStore.getState().focusNote(task.id, null);
+      return;
+    }
+    if (selected !== key) return setSelected(key);
+    if (patch?.key !== key) return;
+    const el = document.querySelector(`[data-note="${n.id}"]`);
+    el?.scrollIntoView({ block: "center", behavior: "smooth" });
+    el?.classList.add("flash");
+    window.setTimeout(() => el?.classList.remove("flash"), 1600);
+    useStore.getState().focusNote(task.id, null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [noteFocus, files, selected, patch]);
+
   const notesPerFile = useMemo(() => {
     const count = new Map<string, number>();
     for (const n of notes) count.set(`${n.checkoutId}:${n.path}`, (count.get(`${n.checkoutId}:${n.path}`) ?? 0) + 1);
@@ -356,7 +381,7 @@ export function DiffView({ task }: { task: TaskView }) {
           <span className="chev-spacer" aria-hidden />
           <span className="p">{node.name}</span>
           {notesPerFile.has(fileKey(f)) && (
-            <span className="badge" title="Notes on this file">{notesPerFile.get(fileKey(f))}</span>
+            <span className="badge" title="Notes on this file: open it to keep or drop them">●&nbsp;{notesPerFile.get(fileKey(f))}</span>
           )}
           <span className="n" style={{ color: "var(--green)" }}>+{f.additions}</span>
           <span className="n" style={{ color: "var(--red)" }}>-{f.deletions}</span>
@@ -824,7 +849,14 @@ export function DiffView({ task }: { task: TaskView }) {
         )}
         {commitPicker}
         <span className="review-tray-hint">
-          {undecided > 0 && `${undecided} finding${undecided === 1 ? "" : "s"} to keep or drop · `}
+          {undecided > 0 && (
+            <>
+              <button className="link" title="Go to the next finding" onClick={() => useStore.getState().showNextFinding(task.id)}>
+                {undecided} finding{undecided === 1 ? "" : "s"} to keep or drop
+              </button>
+              {" · "}
+            </>
+          )}
           {queued.length === 0
             ? "Click a line number to leave a note"
             : task.review

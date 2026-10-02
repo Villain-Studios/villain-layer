@@ -170,6 +170,11 @@ interface State {
   addNote: (taskId: string, note: Omit<ReviewNote, "id">) => void;
   dropNotes: (taskId: string, ids: number[]) => void;
   keepNote: (taskId: string, id: number) => void;
+  /** A note for the Diff tab to open its file at and bring into view, then clear. */
+  noteFocus: { taskId: string; id: number } | null;
+  focusNote: (taskId: string, id: number | null) => void;
+  /** Bring the first finding still to keep or drop into view. */
+  showNextFinding: (taskId: string) => void;
   /** The reviewer pass, by task id (DIFF-6). */
   reviewer: Record<string, ReviewerState>;
   runReviewer: (taskId: string) => Promise<void>;
@@ -527,6 +532,13 @@ export const useStore = create<State>((set, get) => {
       notes: { ...s.notes, [taskId]: (s.notes[taskId] ?? []).map((n) => (n.id === id ? { ...n, kept: true } : n)) },
     })),
 
+  noteFocus: null,
+  focusNote: (taskId, id) => set({ noteFocus: id === null ? null : { taskId, id } }),
+  showNextFinding: (taskId) => {
+    const next = (get().notes[taskId] ?? []).find((n) => n.by === "reviewer" && !n.kept);
+    if (next) get().focusNote(taskId, next.id);
+  },
+
   reviewer: {},
   runReviewer: async (taskId) => {
     if (get().reviewer[taskId]?.running) return;
@@ -553,6 +565,9 @@ export const useStore = create<State>((set, get) => {
         },
       }));
       put({ last: run });
+      // Where it found something, not wherever the diff happened to be: a
+      // finding on another file was a count with nothing to see.
+      get().showNextFinding(taskId);
       const n = run.findings.length;
       const review = get().reviewTasks.find((t) => t.id === taskId);
       const name = (review ?? get().tasks.find((t) => t.id === taskId))?.name ?? "the task";

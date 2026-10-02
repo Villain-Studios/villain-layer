@@ -6,7 +6,7 @@ import { useStore, type ReviewNote } from "../store";
 import type {
   ChangedFile, CommitInfo, DiffScope, RepoBranchFacts, RepoCommits, ReviewComment, TaskView,
 } from "../lib/types";
-import { parseDiff, toTree, type Node } from "../lib/diff";
+import { lineOf, parseDiff, toTree, type DiffLine, type Node } from "../lib/diff";
 import { NoteCard, NoteEditor, ReviewerButton } from "./DiffNote";
 import { PostReview } from "./PostReview";
 import { ReviewFileBar, ReviewPlan } from "./ReviewPlan";
@@ -19,8 +19,13 @@ function reviewPrompt(comments: ReviewComment[]): string {
   let prompt = "Review feedback on your changes. Please address each point:\n\n";
   for (const c of comments) {
     const path = c.repo ? `${c.repo}/${c.path}` : c.path;
-    prompt += `- ${path}:${c.line} — ${c.body.trim()}\n`;
-    if (c.code?.trim()) prompt += `    (line reads: \`${c.code.trim()}\`)\n`;
+    const at = c.start_line ? `${c.start_line}-${c.line}` : `${c.line}`;
+    prompt += `- ${path}:${at}${c.side === "LEFT" ? " (removed)" : ""} — ${c.body.trim()}\n`;
+    if (c.code?.trim()) {
+      prompt += c.code.includes("\n")
+        ? `    (lines read:\n${c.code.split("\n").map((l) => `      ${l}`).join("\n")})\n`
+        : `    (line reads: \`${c.code.trim()}\`)\n`;
+    }
   }
   return prompt;
 }
@@ -68,7 +73,8 @@ export function DiffView({ task }: { task: TaskView }) {
   // findings still waiting on you to keep or drop.
   const queued = useMemo(() => notes.filter((n) => n.by === "you" || n.kept), [notes]);
   const undecided = notes.length - queued.length;
-  const [composing, setComposing] = useState<{ line: number; code: string } | null>(null);
+  /** The line, or range of lines, a note is being written on. */
+  const [composing, setComposing] = useState<{ side: "LEFT" | "RIGHT"; line: number; startLine?: number; code: string } | null>(null);
   const [committing, setCommitting] = useState(false);
   /** A review task's notes, about to be posted to its pull request (REV-11). */
   const [posting, setPosting] = useState(false);
@@ -266,8 +272,8 @@ export function DiffView({ task }: { task: TaskView }) {
   // A finding on a line this patch does not draw: outside its hunks, or
   // past the lines held back. Listed above the diff rather than lost.
   const offLine = useMemo(() => {
-    const drawn = new Set(lines.map((l) => l.newLine));
-    return fileNotes.filter((n) => !drawn.has(n.line));
+    const drawn = new Set(lines.map((l) => { const at = lineOf(l); return at && `${at.side}:${at.line}`; }));
+    return fileNotes.filter((n) => !drawn.has(`${n.side ?? "RIGHT"}:${n.line}`));
   }, [lines, fileNotes]);
   // A note asked for from elsewhere (a count, a finished run): its file
   // opened, then the note brought into view once that file's patch is drawn.
@@ -363,6 +369,8 @@ export function DiffView({ task }: { task: TaskView }) {
       repo: current.repo,
       path: current.path,
       line: composing.line,
+      side: composing.side,
+      startLine: composing.startLine,
       body: text.trim(),
       code: composing.code,
       by: "you",
@@ -370,6 +378,29 @@ export function DiffView({ task }: { task: TaskView }) {
     });
     setComposing(null);
   }
+
+  /**
+   * Start a note on a line, or, with shift held, stretch the one being
+   * written to cover every line from where it started to this one, on the
+   * same side, as GitHub does.
+   */
+  function pickLine(l: DiffLine, extend: boolean) {
+    const at = lineOf(l);
+    if (!at) return;
+    if (extend && composing && composing.side === at.side && composing.line !== at.line) {
+      const lo = Math.min(composing.startLine ?? composing.line, at.line);
+      const hi = Math.max(composing.line, at.line);
+      const code = lines
+        .filter((x) => { const y = lineOf(x); return y && y.side === at.side && y.line >= lo && y.line <= hi; })
+        .map((x) => x.text.slice(1))
+        .join("\n");
+      setComposing({ side: at.side, line: hi, startLine: lo, code });
+      return;
+    }
+    setComposing({ side: at.side, line: at.line, code: l.text.slice(1) });
+  }
+  const pickLineRef = useRef(pickLine);
+  pickLineRef.current = pickLine;
   // Read through a ref so the rows below can be memoised without holding an
   // old `current` or `composing`.
   const addDraftRef = useRef(addDraft);
@@ -381,6 +412,8 @@ export function DiffView({ task }: { task: TaskView }) {
       repo: checkoutId === d.checkoutId ? null : d.repo,
       path: d.path,
       line: d.line,
+      side: d.side ?? null,
+      start_line: d.startLine ?? null,
       body: d.body,
       code: d.code,
     }));
@@ -615,14 +648,13 @@ export function DiffView({ task }: { task: TaskView }) {
 
   // The rows, memoised: typing in a note or the commit message, a poll, or
   // anything else that redraws this view no longer rebuilds thousands of them.
-  const composingLine = composing?.line ?? null;
   const linesView = useMemo(
     () =>
       lines.map((l, i) => {
-        const anchored = l.newLine !== null
-          ? fileNotes.filter((d) => d.line === l.newLine)
-          : [];
-        const isComposing = composingLine === l.newLine && l.newLine !== null;
+        const at = lineOf(l);
+        const anchored = at ? fileNotes.filter((d) => (d.side ?? "RIGHT") === at.side && d.line === at.line) : [];
+        const isComposing = !!at && composing?.side === at.side && composing.line === at.line;
+        const inRange = !!at && composing?.side === at.side && at.line >= (composing.startLine ?? composing.line) && at.line <= composing.line;
         return (
           <div key={i}>
             <div
@@ -630,17 +662,16 @@ export function DiffView({ task }: { task: TaskView }) {
                 "diff-line " +
                 (l.kind === "add" ? "add" : l.kind === "del" ? "del" :
                   l.kind === "hunk" ? "hunk" : l.kind === "meta" ? "meta" : "") +
-                (anchored.length ? " commented" : "")
+                (anchored.length ? " commented" : "") +
+                (inRange ? " picked" : "")
               }
             >
               <span
-                className="ln"
-                onClick={() => {
-                  if (l.newLine === null) return;
-                  setComposing({ line: l.newLine, code: l.text.slice(1) });
-                }}
+                className={`ln${l.kind === "del" ? " old" : ""}`}
+                title={at ? "Click to comment; shift-click another line to comment on the range" : undefined}
+                onClick={(e) => pickLineRef.current(l, e.shiftKey)}
               >
-                {l.newLine ?? ""}
+                {l.newLine ?? l.oldLine ?? ""}
               </span>
               <span className="tx">{l.text || " "}</span>
             </div>
@@ -658,7 +689,7 @@ export function DiffView({ task }: { task: TaskView }) {
             {isComposing && (
               <NoteEditor
                 placeholder={task.review ? "What should the author know about this line?" : "What should the agent change here?"}
-                code={composing?.code ?? ""}
+                code={composing?.side === "LEFT" ? "" : composing?.code ?? ""}
                 onAdd={(text) => addDraftRef.current(text)}
                 onCancel={() => setComposing(null)}
               />
@@ -666,7 +697,7 @@ export function DiffView({ task }: { task: TaskView }) {
           </div>
         );
       }),
-    [lines, fileNotes, composingLine, task.id, keepNote, dropNotes, editNote],
+    [lines, fileNotes, composing, task.id, keepNote, dropNotes, editNote],
   );
 
   // A worktree git cannot read has no changes to list, which looked exactly

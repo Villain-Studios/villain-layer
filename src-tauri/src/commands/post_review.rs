@@ -18,7 +18,7 @@ use crate::integrations::github::{review_event, LineComment, Posted};
 
 use super::diff::ReviewComment;
 use super::github::github_client;
-use super::reviewer::{new_side_hunks, Hunks};
+use super::reviewer::{new_side_hunks, old_side_hunks, Hunks};
 use super::{off_runtime, AppState};
 
 #[derive(Debug, Serialize)]
@@ -75,7 +75,7 @@ pub async fn github_post_review(
         Posted::LinesRefused(_) => {
             // Lines the diff here has and GitHub's does not: its base moved,
             // say. The review still goes, with every note in its body.
-            let all: Vec<_> = notes.iter().map(|n| (n.path.clone(), n.line, n.body.clone())).collect();
+            let all: Vec<_> = notes.iter().map(|n| (n.place(&n.path), n.body.clone())).collect();
             let text = review_body(&body, &all);
             match client.post_review(&review.repo, review.number, &review.head_sha, event, &text, &[]).await? {
                 Posted::Review(url) => Ok(PostedReview { url, inline: 0, in_body: all.len(), moved_all: true }),
@@ -89,7 +89,7 @@ pub async fn github_post_review(
 /// GitHub's diff of the pull request has them. Refused when the worktree is
 /// not the commit the review is of: its line numbers would be another
 /// version's, and land on the wrong lines.
-fn review_lines(dir: &std::path::Path, base: &str, base_commit: Option<&str>, head: &str) -> Result<Hunks> {
+fn review_lines(dir: &std::path::Path, base: &str, base_commit: Option<&str>, head: &str) -> Result<(Hunks, Hunks)> {
     let status = git::status(dir)?;
     if status.head != head {
         return Err(Error::Other(
@@ -103,37 +103,47 @@ fn review_lines(dir: &std::path::Path, base: &str, base_commit: Option<&str>, he
         ));
     }
     let from = git::baseline(dir, base, base_commit);
-    Ok(new_side_hunks(&git::diff_patch(dir, &from, &[])?))
+    let patch = git::diff_patch(dir, &from, &[])?;
+    Ok((new_side_hunks(&patch), old_side_hunks(&patch)))
 }
 
-/// Notes on a line of the diff, as line comments; the rest as
-/// `(path, line, text)`, for the body.
-fn split_notes(notes: &[ReviewComment], hunks: &Hunks) -> (Vec<LineComment>, Vec<(String, u32, String)>) {
+/// Notes on lines of the diff, as line comments; the rest as `(place,
+/// text)`, for the body. A range is a comment only when it lies in one
+/// hunk, as GitHub requires.
+fn split_notes(notes: &[ReviewComment], (new, old): &(Hunks, Hunks)) -> (Vec<LineComment>, Vec<(String, String)>) {
     let mut inline = Vec::new();
     let mut off = Vec::new();
     for n in notes {
+        let start = n.start_line.filter(|s| *s < n.line).unwrap_or(n.line);
+        let hunks = if n.removed() { old } else { new };
         let anchored = hunks
             .get(&n.path)
-            .is_some_and(|ranges| ranges.iter().any(|(a, b)| (*a..*b).contains(&n.line)));
+            .is_some_and(|ranges| ranges.iter().any(|(a, b)| (*a..*b).contains(&start) && (*a..*b).contains(&n.line)));
         if anchored {
-            inline.push(LineComment { path: n.path.clone(), line: n.line, body: n.body.clone() });
+            inline.push(LineComment {
+                path: n.path.clone(),
+                line: n.line,
+                start_line: (start < n.line).then_some(start),
+                removed: n.removed(),
+                body: n.body.clone(),
+            });
         } else {
-            off.push((n.path.clone(), n.line, n.body.clone()));
+            off.push((n.place(&n.path), n.body.clone()));
         }
     }
     (inline, off)
 }
 
 /// The review's body: what you wrote, then the notes not on a diff line.
-fn review_body(summary: &str, off: &[(String, u32, String)]) -> String {
+fn review_body(summary: &str, off: &[(String, String)]) -> String {
     let mut text = summary.trim().to_string();
     if !off.is_empty() {
         if !text.is_empty() {
             text.push_str("\n\n");
         }
         text.push_str("On lines outside this diff:\n");
-        for (path, line, body) in off {
-            text.push_str(&format!("\n- `{path}:{line}`: {}", body.trim()));
+        for (place, body) in off {
+            text.push_str(&format!("\n- `{place}`: {}", body.trim()));
         }
     }
     text
@@ -144,19 +154,36 @@ mod tests {
     use super::*;
 
     fn note(path: &str, line: u32, body: &str) -> ReviewComment {
-        ReviewComment { path: path.into(), line, body: body.into(), code: None, repo: None }
+        ReviewComment { path: path.into(), line, body: body.into(), code: None, repo: None, side: None, start_line: None }
     }
 
     #[test]
     fn a_note_off_the_diff_goes_in_the_body_under_its_line() {
         let hunks: Hunks = [("src/a.ts".to_string(), vec![(1, 5), (40, 43)])].into_iter().collect();
         let notes = [note("src/a.ts", 2, "Off by one."), note("src/a.ts", 20, "Unrelated."), note("src/b.ts", 1, "Elsewhere.")];
-        let (inline, off) = split_notes(&notes, &hunks);
-        assert_eq!(inline, vec![LineComment { path: "src/a.ts".into(), line: 2, body: "Off by one.".into() }]);
+        let (inline, off) = split_notes(&notes, &(hunks, Hunks::new()));
+        assert_eq!(
+            inline,
+            vec![LineComment { path: "src/a.ts".into(), line: 2, start_line: None, removed: false, body: "Off by one.".into() }]
+        );
         assert_eq!(off.len(), 2);
         let body = review_body("Looks close.", &off);
         assert_eq!(body, "Looks close.\n\nOn lines outside this diff:\n\n- `src/a.ts:20`: Unrelated.\n- `src/b.ts:1`: Elsewhere.");
         assert_eq!(review_body("  ", &[]), "", "nothing written, nothing added");
+    }
+
+    #[test]
+    fn a_range_is_a_comment_only_inside_one_hunk_and_a_removed_line_reads_the_old_side() {
+        let new: Hunks = [("a.ts".to_string(), vec![(1, 5), (40, 43)])].into_iter().collect();
+        let old: Hunks = [("a.ts".to_string(), vec![(1, 4)])].into_iter().collect();
+        let range = |start, line| ReviewComment { start_line: Some(start), ..note("a.ts", line, "r") };
+        let removed = |line| ReviewComment { side: Some("LEFT".into()), ..note("a.ts", line, "gone") };
+        let (inline, off) = split_notes(&[range(2, 4), range(4, 41), removed(3), removed(9)], &(new, old));
+        assert_eq!(inline.len(), 2);
+        assert_eq!((inline[0].start_line, inline[0].line, inline[0].removed), (Some(2), 4, false));
+        assert_eq!((inline[1].line, inline[1].removed), (3, true));
+        let places: Vec<_> = off.iter().map(|(p, _)| p.as_str()).collect();
+        assert_eq!(places, vec!["a.ts:4-41", "a.ts:9 (removed)"], "across two hunks, and outside them");
     }
 
     #[test]
@@ -175,7 +202,7 @@ mod tests {
         git(&["commit", "-qam", "two"]);
         let head = git(&["rev-parse", "HEAD"]);
 
-        let hunks = review_lines(&dir, "main", Some(&point), &head).unwrap();
+        let (hunks, _) = review_lines(&dir, "main", Some(&point), &head).unwrap();
         assert_eq!(hunks["a.txt"], vec![(1, 3)]);
         assert!(review_lines(&dir, "main", Some(&point), &point).unwrap_err().to_string().contains("not at the commit"));
         std::fs::write(dir.join("a.txt"), "edited\n").unwrap();

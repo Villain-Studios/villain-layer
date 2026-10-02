@@ -294,18 +294,34 @@ fn within(path: &str, repo: &str) -> Option<String> {
 /// Each file's hunks in a patch, as ranges of new-file lines: the lines a
 /// comment can be left on. Deleted files have none.
 pub(crate) fn new_side_hunks(patch: &str) -> Hunks {
+    side_hunks(patch, false)
+}
+
+/// The same for the old side, where a removed line is commented on, keyed
+/// by the file's name as GitHub names it: its new one, or the old for a
+/// file that was deleted.
+pub(crate) fn old_side_hunks(patch: &str) -> Hunks {
+    side_hunks(patch, true)
+}
+
+fn side_hunks(patch: &str, old: bool) -> Hunks {
     let mut out = Hunks::new();
+    let mut gone: Option<String> = None;
     let mut file: Option<String> = None;
     for line in patch.lines() {
         if line.starts_with("diff ") {
             file = None;
+            gone = None;
+        } else if let Some(name) = line.strip_prefix("--- ") {
+            gone = name.strip_prefix("a/").map(str::to_string);
         } else if let Some(name) = line.strip_prefix("+++ ") {
-            file = name.strip_prefix("b/").map(str::to_string);
+            file = name.strip_prefix("b/").map(str::to_string).or_else(|| if old { gone.clone() } else { None });
         } else if let (Some(f), Some(header)) = (&file, line.strip_prefix("@@ ")) {
             // `@@ -a,b +c,d @@`: d lines from c; a missing d is one line.
-            let new = header.split_whitespace().find_map(|w| w.strip_prefix('+'));
-            if let Some(new) = new {
-                let mut parts = new.splitn(2, ',');
+            let mark = if old { '-' } else { '+' };
+            let range = header.split_whitespace().find_map(|w| w.strip_prefix(mark));
+            if let Some(range) = range {
+                let mut parts = range.splitn(2, ',');
                 let start = parts.next().and_then(|n| n.parse::<u32>().ok());
                 let len = parts.next().map_or(Some(1), |n| n.parse::<u32>().ok());
                 if let (Some(start), Some(len)) = (start, len) {
@@ -406,6 +422,9 @@ mod tests {
         let hunks = new_side_hunks(patch);
         assert_eq!(hunks["a.txt"], vec![(1, 5), (41, 42)]);
         assert!(!hunks.contains_key("gone.txt"), "a deleted file has no line to comment on");
+        let old = old_side_hunks(patch);
+        assert_eq!(old["a.txt"], vec![(1, 4), (40, 41)]);
+        assert_eq!(old["gone.txt"], vec![(1, 2)], "its removed lines are, on the old side");
     }
 
     #[test]

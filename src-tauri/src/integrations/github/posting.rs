@@ -7,12 +7,28 @@ use serde_json::{json, Value};
 use super::GitHub;
 use crate::error::{Error, Result};
 
-/// A comment on one line of the new version of a file.
+/// A comment on a line, or a range of lines, of one side of a file's diff.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LineComment {
     pub path: String,
     pub line: u32,
+    /// The range's first line, on the same side, when it is one.
+    pub start_line: Option<u32>,
+    /// The old version of the file: a removed line.
+    pub removed: bool,
     pub body: String,
+}
+
+impl LineComment {
+    fn json(&self) -> Value {
+        let side = if self.removed { "LEFT" } else { "RIGHT" };
+        let mut v = json!({ "path": self.path, "line": self.line, "side": side, "body": self.body });
+        if let Some(start) = self.start_line.filter(|s| *s < self.line) {
+            v["start_line"] = json!(start);
+            v["start_side"] = json!(side);
+        }
+        v
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -56,10 +72,7 @@ impl GitHub {
         comments: &[LineComment],
     ) -> Result<Posted> {
         let (owner, name) = repo_parts(repo)?;
-        let comments: Vec<Value> = comments
-            .iter()
-            .map(|c| json!({ "path": c.path, "line": c.line, "side": "RIGHT", "body": c.body }))
-            .collect();
+        let comments: Vec<Value> = comments.iter().map(LineComment::json).collect();
         let res = self
             .req(reqwest::Method::POST, &format!("/repos/{owner}/{name}/pulls/{number}/reviews"))
             .json(&json!({ "commit_id": commit_id, "event": event, "body": body, "comments": comments }))
@@ -89,6 +102,18 @@ mod tests {
         for bad in ["acme", "acme/web/pulls", "../web", "acme/..", "acme/we b", "/web", "acme/"] {
             assert!(repo_parts(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn a_range_and_a_removed_line_are_sent_as_github_names_them() {
+        let c = |line, start_line, removed| LineComment { path: "a.ts".into(), line, start_line, removed, body: "b".into() };
+        assert_eq!(c(4, None, false).json(), json!({ "path": "a.ts", "line": 4, "side": "RIGHT", "body": "b" }));
+        assert_eq!(
+            c(6, Some(2), false).json(),
+            json!({ "path": "a.ts", "line": 6, "side": "RIGHT", "start_line": 2, "start_side": "RIGHT", "body": "b" })
+        );
+        assert_eq!(c(9, None, true).json()["side"], "LEFT");
+        assert!(c(5, Some(5), false).json().get("start_line").is_none(), "a range of one line is a line");
     }
 
     #[test]

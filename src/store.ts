@@ -53,7 +53,11 @@ export interface ReviewNote {
   checkoutId: string;
   repo: string;
   path: string;
+  /** The last line it is on; a range's first is `startLine`. */
   line: number;
+  /** A removed line is on the old side ("LEFT"); everything else the new. */
+  side?: "LEFT" | "RIGHT";
+  startLine?: number;
   body: string;
   code: string;
   by: "you" | "reviewer";

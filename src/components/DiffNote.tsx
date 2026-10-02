@@ -111,6 +111,10 @@ export function NoteCard({
 }) {
   const finding = note.by === "reviewer";
   const [editing, setEditing] = useState(false);
+  // Said when it is not plain: a removed line, a range, or away from its line.
+  const span = note.side === "LEFT"
+    ? `removed L${note.line}`
+    : note.startLine ? `L${note.startLine}–${note.line}` : where ? `L${note.line}` : null;
   if (editing) {
     return (
       <div className="inline-comment" data-note={note.id}>
@@ -127,9 +131,9 @@ export function NoteCard({
   }
   return (
     <div className={`inline-comment${finding && !note.kept ? " finding" : ""}`} data-note={note.id}>
-      {(finding || where) && (
+      {(finding || span) && (
         <div className="note-head">
-          {where && <span className="chip">{where}</span>}
+          {span && <span className="chip">{span}</span>}
           {finding && note.severity && <span className={`chip ${SEVERITY[note.severity]}`}>{note.severity}</span>}
           {finding && <span className="muted">{note.kept ? "reviewer, kept" : "reviewer"}</span>}
         </div>

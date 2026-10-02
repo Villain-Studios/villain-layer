@@ -474,6 +474,9 @@ send feedback to an agent, and finish a merged task.
   to what it landed (UPD-6), so a repo with nothing since is skipped, not
   opened again. Counted from where the branch was cut, a repo merged while
   another was still in review got a second PR for the same work.
+  In the dialog, every repo that would get a new PR has a tick, all on to
+  start with; one ticked off is neither pushed nor opened. A repo whose PR
+  is already open has no tick: it is pushed and listed with the rest.
 - **PR-2** PRs this call opened MUST be linked on the Jira ticket as a
   comment, and posted to Slack if that is on. When the call opens a PR and
   the task has more than one open, every one of them MUST list the others

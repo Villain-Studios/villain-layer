@@ -257,8 +257,9 @@ export const api = {
     invoke<string[]>("checkout_branches", { checkoutId }),
   githubRetargetPr: (checkoutId: string) =>
     invoke<string>("github_retarget_pr", { checkoutId }),
-  githubOpenPrs: (taskId: string, title: string, body: string, draft: boolean) =>
-    invoke<RepoResult[]>("github_open_prs", { taskId, title, body, draft }),
+  /** `skip`: checkout ids left out of this call, neither pushed nor opened. */
+  githubOpenPrs: (taskId: string, title: string, body: string, draft: boolean, skip: string[]) =>
+    invoke<RepoResult[]>("github_open_prs", { taskId, title, body, draft, skip }),
   githubPrFeedback: (taskId: string) =>
     invoke<RepoFeedback[]>("github_pr_feedback", { taskId }),
   /** Typed into `paneId` when given; otherwise only returned, to start an agent with. */

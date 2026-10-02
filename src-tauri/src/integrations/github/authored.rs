@@ -8,7 +8,7 @@
 use serde::Serialize;
 use serde_json::{json, Value};
 
-use super::{graphql_url, GitHub};
+use super::GitHub;
 use crate::error::{Error, Result};
 
 /// How many of your pull requests are read: the most recently updated.
@@ -69,20 +69,7 @@ impl GitHub {
           }
         }";
         let v = self
-            .json(
-                self.client
-                    .post(graphql_url(&self.api_url))
-                    .header("Authorization", format!("Bearer {}", self.token))
-                    .header("User-Agent", "villain-layer")
-                    .json(&json!({
-                        "query": QUERY,
-                        "variables": {
-                            "q": authored_query(),
-                            "first": AUTHORED_LIMIT,
-                            "threads": THREAD_LIMIT,
-                        },
-                    })),
-            )
+            .graphql(QUERY, json!({ "q": authored_query(), "first": AUTHORED_LIMIT, "threads": THREAD_LIMIT }))
             .await?;
         parse_authored(&v)
     }
@@ -111,17 +98,22 @@ pub(crate) fn parse_authored(v: &Value) -> Result<(Vec<AuthoredPr>, bool)> {
     Ok((prs, total > nodes.len() as u64))
 }
 
-fn to_authored(v: &Value) -> Option<AuthoredPr> {
-    let number = v.get("number").and_then(|n| n.as_u64()).filter(|n| *n > 0)?;
-    let text = |p: &str| v.pointer(p).and_then(|x| x.as_str()).unwrap_or_default().to_string();
-    let list = |p: &str| v.pointer(p).and_then(|x| x.as_array()).cloned().unwrap_or_default();
-
-    let checks = match v.pointer("/commits/nodes/0/commit/statusCheckRollup/state").and_then(|s| s.as_str()) {
+/// A pull request's checks as GitHub rolls them up over its head commit
+/// (check runs and commit statuses): "passing", "failing", "pending", or
+/// "none" when nothing reports.
+pub(super) fn rollup(v: &Value) -> &'static str {
+    match v.pointer("/commits/nodes/0/commit/statusCheckRollup/state").and_then(|s| s.as_str()) {
         Some("SUCCESS") => "passing",
         Some("FAILURE" | "ERROR") => "failing",
         Some("PENDING" | "EXPECTED") => "pending",
         _ => "none",
-    };
+    }
+}
+
+fn to_authored(v: &Value) -> Option<AuthoredPr> {
+    let number = v.get("number").and_then(|n| n.as_u64()).filter(|n| *n > 0)?;
+    let text = |p: &str| v.pointer(p).and_then(|x| x.as_str()).unwrap_or_default().to_string();
+    let list = |p: &str| v.pointer(p).and_then(|x| x.as_array()).cloned().unwrap_or_default();
 
     let reviewers = |state: &str| -> Vec<String> {
         list("/latestOpinionatedReviews/nodes")
@@ -169,7 +161,7 @@ fn to_authored(v: &Value) -> Option<AuthoredPr> {
         updated_at: text("/updatedAt"),
         head: text("/headRefName"),
         base: text("/baseRefName"),
-        checks: checks.into(),
+        checks: rollup(v).into(),
         review: review.into(),
         approved_by,
         changes_by,

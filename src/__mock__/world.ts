@@ -23,6 +23,7 @@ import type {
   RepoHealth,
   RepoNote,
   ReviewQueue,
+  ReviewRequest,
   Settings,
   TaskPrs,
   TaskView,
@@ -256,6 +257,17 @@ function authored(
   };
 }
 
+function requested(
+  number: number, repo: string, title: string, author: string, updated: string, extra: Partial<ReviewRequest> = {},
+): ReviewRequest {
+  return {
+    repo: `acme/${repo}`, number, title, url: `https://github.com/acme/${repo}/pull/${number}`, author,
+    draft: false, created_at: ago(3 * 86_400), updated_at: updated, head: `ACME-${number}`, base: "main",
+    head_sha: `${number}`.padEnd(40, "c"), cross_repo: false, additions: 40, deletions: 12, changed_files: 3,
+    checks: "passing", my_review: "none", new_since_review: false, ...extra,
+  };
+}
+
 const prs: TaskPrs[] = [
   {
     task_id: "t-login",
@@ -369,7 +381,16 @@ function busy(): World {
     },
     prs,
     reviews: {
-      mine: [{ repo: "acme/web", number: 88, title: "Speed up the search box", url: "https://github.com/acme/web/pull/88", author: "bo", draft: false, updated_at: ago(5400) }],
+      mine: [
+        requested(88, "web", "Speed up the search box", "bo", ago(5400), { additions: 1240, deletions: 380, changed_files: 27, checks: "pending" }),
+        requested(61, "api", "Retry webhooks with backoff", "ana", ago(7200), {
+          my_review: "changes_requested", new_since_review: true, created_at: ago(9 * 86_400),
+        }),
+        requested(7, "docs", "Fix typos in the setup guide", "outsider", ago(20_000), {
+          cross_repo: true, head: "patch-1", additions: 3, deletions: 3, changed_files: 1, checks: "failing",
+        }),
+        requested(33, "web", "Drop the legacy theme", "bo", ago(50_000), { my_review: "approved" }),
+      ],
       mine_more: false,
       team: null,
       authored: {

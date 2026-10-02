@@ -146,7 +146,7 @@ export interface TaskPrs {
   ticket: TicketMove | null;
 }
 
-/** A pull request waiting on a person or a team. */
+/** A pull request waiting on a person or a team (REV-9). */
 export interface ReviewRequest {
   repo: string;
   number: number;
@@ -154,7 +154,21 @@ export interface ReviewRequest {
   url: string;
   author: string;
   draft: boolean;
+  created_at: string;
   updated_at: string;
+  head: string;
+  base: string;
+  head_sha: string;
+  /** From a fork: only `refs/pull/<n>/head` on the base repo has its commits. */
+  cross_repo: boolean;
+  additions: number;
+  deletions: number;
+  changed_files: number;
+  checks: "passing" | "failing" | "pending" | "none";
+  /** Your own latest review of it. */
+  my_review: "approved" | "changes_requested" | "commented" | "dismissed" | "none";
+  /** Its head moved past the commit your latest review was of. */
+  new_since_review: boolean;
 }
 
 export interface TeamReviews {

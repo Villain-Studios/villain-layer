@@ -4,7 +4,7 @@
 
 use serde_json::{json, Value};
 
-use super::{graphql_url, GitHub};
+use super::GitHub;
 use crate::error::{Error, Result};
 
 /// How many of your pull requests in a repository are read: the most
@@ -51,16 +51,7 @@ impl GitHub {
         let mut after: Option<String> = None;
         loop {
             let v = self
-                .json(
-                    self.client
-                        .post(graphql_url(&self.api_url))
-                        .header("Authorization", format!("Bearer {}", self.token))
-                        .header("User-Agent", "villain-layer")
-                        .json(&json!({
-                            "query": QUERY,
-                            "variables": { "q": q, "first": PAGE, "after": after },
-                        })),
-                )
+                .graphql(QUERY, json!({ "q": q, "first": PAGE, "after": after }))
                 .await?;
             // A page that failed is an error, not a shorter list: a branch
             // whose pull request went unread would be judged without it.

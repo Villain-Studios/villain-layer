@@ -6,10 +6,8 @@ import type { ReviewOf } from "../lib/types";
 import { Spinner } from "./ui";
 
 /**
- * A review task's place in its header (REV-10): whose pull request it is,
- * and taking the author's latest push. It stands where "Update from base"
- * stands for your own work, since a review follows its pull request, not
- * the base.
+ * Keeping a review on the author's latest push (REV-10), and the way to the
+ * pull request itself. A review follows its pull request, not the base.
  */
 export function ReviewHeader({ taskId, review }: { taskId: string; review: ReviewOf }) {
   const fail = useStore((s) => s.fail);
@@ -46,9 +44,6 @@ export function ReviewHeader({ taskId, review }: { taskId: string; review: Revie
 
   return (
     <>
-      <span className="chip task" title={`At ${review.head_sha.slice(0, 10)}`}>
-        reviewing {review.repo}#{review.number}{review.author && ` by ${review.author}`}
-      </span>
       {behind && <span className="chip warn">pushed to since</span>}
       <button
         className="btn btn-sm"

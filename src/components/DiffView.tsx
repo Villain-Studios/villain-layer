@@ -530,6 +530,15 @@ export function DiffView({ task }: { task: TaskView }) {
         ? `${unpushed} not pushed`
         : "all pushed";
 
+    if (task.review) {
+      return {
+        what: `${commits} commit${commits === 1 ? "" : "s"} in #${task.review.number}, since it left ${one?.base ?? "its base"}`,
+        detail: "What the pull request changes, as GitHub shows it: from where it left its base to the commit you are reviewing.",
+        label: "Pull request",
+        adds,
+        dels,
+      };
+    }
     return {
       what: `${commits} commit${commits === 1 ? "" : "s"} ${from} · ${pushed}`,
       detail: guessed.length
@@ -709,9 +718,12 @@ export function DiffView({ task }: { task: TaskView }) {
           <button className="btn" onClick={() => void load()}>Refresh</button>
         </div>
         <div className="review-tray">
-          <div className="review-tray-group" title="What the list is measuring">
-            {scopeTabs}
-          </div>
+          {/* A review has nothing of its own uncommitted to switch to. */}
+          {!task.review && (
+            <div className="review-tray-group" title="What the list is measuring">
+              {scopeTabs}
+            </div>
+          )}
           {commitPicker}
           <div className="spacer" />
           <ReviewerButton taskId={task.id} />
@@ -804,9 +816,12 @@ export function DiffView({ task }: { task: TaskView }) {
       </div>
 
       <div className="review-tray">
-        <div className="review-tray-group" title="What the list is measuring">
-          {scopeTabs}
-        </div>
+        {/* A review has nothing of its own uncommitted to switch to. */}
+        {!task.review && (
+          <div className="review-tray-group" title="What the list is measuring">
+            {scopeTabs}
+          </div>
+        )}
         {commitPicker}
         <span className="review-tray-hint">
           {undecided > 0 && `${undecided} finding${undecided === 1 ? "" : "s"} to keep or drop · `}
@@ -835,7 +850,9 @@ export function DiffView({ task }: { task: TaskView }) {
           )}
           <ReviewerButton taskId={task.id} />
           <button className="btn btn-sm" onClick={() => void load()}>Refresh</button>
-          <button className="btn btn-sm" onClick={() => setCommitting(true)}>Commit…</button>
+          {/* A commit in a review is one its pull request does not have, and
+              puts every comment's line on another version (REV-11). */}
+          {!task.review && <button className="btn btn-sm" onClick={() => setCommitting(true)}>Commit…</button>}
           {(!task.review || agentPanes.length > 0) && (
             <button
               className={`btn btn-sm${task.review ? "" : " btn-primary"}`}

@@ -729,19 +729,27 @@ used to show only the first, so seven PRs of yours read as none.
   so when there are more. Before this, every card was a title and an
   author: a one-line fix looked like a rewrite, and a PR you had approved
   before its author pushed again looked like one you had already done.
-- **REV-10** A PR in "To review" MUST be reviewable here: "Review" makes a
-  review task, a worktree of the app's copy (TASK-3) on the PR's head as
-  `refs/pull/<n>/head` gives it, under the app's own branch name
-  (`review/<repo>-<n>`), measured from where it left its base. A second
-  click opens the same task, and so does clicking the card. The PR's own
+- **REV-10** A PR in "To review" MUST be reviewable here, in the Reviews
+  view and nowhere else: "Review" opens its review page, with the steps
+  (read and comment on lines, optionally Review with Claude, Post review…)
+  above its files and diff, measured from where it left its base. A
+  review is never shown as a task: not in the sidebar, not under Work, not
+  in a ticket's "open its task". Shown as one, it sat among your work with
+  a Commit button, an Uncommitted tab and a "never pushed" that meant
+  nothing, and nothing on it said what to do. Underneath it is a checkout
+  of the app's copy (TASK-3) on the PR's head as `refs/pull/<n>/head`
+  gives it, under the app's own branch name (`review/<repo>-<n>`), so
+  Claude can read around the diff and Cursor can open it. The PR's own
   branch is never used: a fork's is not on origin, and one of the same
-  name there is someone else's code. A review task opens on its Diff tab's
-  Whole branch. It is never pushed and never opens a pull request (both
-  are refused, from the UI and from an agent), has no Pull requests tab
-  and no Update from base, and is left out of the PR sweep, so its ticket
+  name there is someone else's code. A second click continues the same
+  review. Reviews you have started are listed under "In progress", also
+  once the PR has left your queue (posting a review takes it out).
+  "Finish" removes the checkout and any notes not posted. A review is
+  never pushed and never opens a pull request (both are refused, from the
+  UI and from an agent), and is left out of the PR sweep, so its ticket
   never moves (TKT-8). "Take latest" moves it to the PR's head now,
   following a rewritten head too, and refuses while it holds edits to
-  tracked files, an update under way, or commits of its own. The header
+  tracked files, an update under way, or commits of its own; the page
   says when "To review" has seen a newer head than the one it is on.
   Its context file (PANE-13) tells an agent there which pull request and
   commit it is reviewing, and that it never pushes, opens pull requests or
@@ -761,8 +769,8 @@ used to show only the first, so seven PRs of yours read as none.
 Code: `commands/github.rs` (`review_queue`, `github_review_queue`),
 `integrations/github/authored.rs`, `integrations/github/requested.rs`,
 `commands/pr_task.rs`, `git/review.rs`, `commands/post_review.rs`,
-`integrations/github/posting.rs`, `ReviewsView.tsx`, `ReviewHeader.tsx`,
-`PostReview.tsx`.
+`integrations/github/posting.rs`, `ReviewsView.tsx`, `ReviewPage.tsx`,
+`ReviewHeader.tsx`, `PostReview.tsx`.
 
 ## 11. Notifications
 

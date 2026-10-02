@@ -78,7 +78,16 @@ interface State {
    * when the Repos view opens, and after anything there changes it.
    */
   repoHealth: Record<string, RepoHealth>;
+  /** Your work: every task that is not a review. */
   tasks: TaskView[];
+  /**
+   * Reviews of other people's pull requests (REV-10). Tasks underneath, for
+   * their checkout, but never shown as one: they live in the Reviews view.
+   */
+  reviewTasks: TaskView[];
+  /** The review open in the Reviews view, by its task id. */
+  openReview: string | null;
+  openReviewTask: (id: string | null) => void;
   panes: PaneInfo[];
   agents: AgentStatus[];
   /** PR rows per task id, refreshed by the background watch. */
@@ -309,6 +318,11 @@ function sameTasks(a: TaskView[], b: TaskView[]): boolean {
   return a.length === b.length && JSON.stringify(a) === JSON.stringify(b);
 }
 
+/** Work and reviews, apart: a review is not something you work on (REV-10). */
+function splitTasks(all: TaskView[]): { tasks: TaskView[]; reviewTasks: TaskView[] } {
+  return { tasks: all.filter((t) => !t.review), reviewTasks: all.filter((t) => t.review) };
+}
+
 /**
  * Consecutive quiet failures of the task/pane polls. One blip is noise; two
  * in a row usually means the backend is unreachable or a token is gone.
@@ -341,6 +355,9 @@ export const useStore = create<State>((set, get) => {
   projects: [],
   repoHealth: {},
   tasks: [],
+  reviewTasks: [],
+  openReview: null,
+  openReviewTask: (openReview) => set({ openReview, view: "reviews" }),
   panes: [],
   prs: {},
   reviewQueue: null,
@@ -413,9 +430,10 @@ export const useStore = create<State>((set, get) => {
       api.listPanes(),
       api.listAgents(),
       api.cursorIdeInstalled().catch(() => false),
-    ]).then(([projects, tasks, panes, agents, cursorIde]) => {
+    ]).then(([projects, all, panes, agents, cursorIde]) => {
+      const { tasks, reviewTasks } = splitTasks(all);
       set((s) => ({
-        projects, tasks, panes, agents, cursorIde,
+        projects, tasks, reviewTasks, panes, agents, cursorIde,
         selectedTask: stillThere(tasks, s.selectedTask),
       }));
       watchOk();
@@ -435,12 +453,14 @@ export const useStore = create<State>((set, get) => {
       try {
         // Focus the selected task so its worktrees stay fresh; everything else
         // reuses the backend status cache unless it has a running agent.
-        const tasks = await api.listTasks(get().selectedTask);
+        const { tasks, reviewTasks } = splitTasks(await api.listTasks(get().selectedTask));
         set((s) => {
-          if (sameTasks(s.tasks, tasks)) return s;
+          if (sameTasks(s.tasks, tasks) && sameTasks(s.reviewTasks, reviewTasks)) return s;
           return {
             tasks,
+            reviewTasks,
             selectedTask: stillThere(tasks, s.selectedTask),
+            openReview: reviewTasks.some((t) => t.id === s.openReview) ? s.openReview : null,
             // PR rows for a task that has been deleted have nothing to hang off any
             // more, and the watch would keep comparing against them for good.
             prs: Object.fromEntries(
@@ -534,9 +554,10 @@ export const useStore = create<State>((set, get) => {
       }));
       put({ last: run });
       const n = run.findings.length;
-      const name = get().tasks.find((t) => t.id === taskId)?.name ?? "the task";
+      const review = get().reviewTasks.find((t) => t.id === taskId);
+      const name = (review ?? get().tasks.find((t) => t.id === taskId))?.name ?? "the task";
       get().toast(n ? "info" : "success", n ? `The reviewer left ${n} note${n === 1 ? "" : "s"} on ${name}` : `The reviewer found nothing in ${name}`, {
-        target: `task:${taskId}`,
+        target: review ? "reviews" : `task:${taskId}`,
       });
     } catch (e) {
       put({ error: errMessage(e) });

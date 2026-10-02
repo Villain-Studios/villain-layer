@@ -6,6 +6,7 @@ import { useStore, type ReviewNote } from "../store";
 import type { ReviewRequest, TaskView } from "../lib/types";
 import { DiffView } from "./DiffView";
 import { ReviewHeader } from "./ReviewHeader";
+import { SubmitReview } from "./PostReview";
 import { Confirm } from "./ui";
 
 const NO_NOTES: ReviewNote[] = [];
@@ -29,8 +30,7 @@ function useQueued(task: TaskView): ReviewRequest | null {
 /**
  * One pull request under review (REV-10), in the Reviews view and nowhere
  * else: a review is not your work, and shown as a task it sat among your
- * tasks with a Commit button and a "never pushed" that meant nothing. The
- * three steps are on the page, since nothing else says what to do here.
+ * tasks with a Commit button and a "never pushed" that meant nothing.
  */
 export function ReviewPage({ task }: { task: TaskView }) {
   const review = task.review!;
@@ -41,7 +41,6 @@ export function ReviewPage({ task }: { task: TaskView }) {
   const refreshTasks = useStore((s) => s.refreshTasks);
   const dropNotes = useStore((s) => s.dropNotes);
   const notes = useStore((s) => s.notes[task.id] ?? NO_NOTES);
-  const running = useStore((s) => s.reviewer[task.id]?.running ?? false);
   const pr = useQueued(task);
   const [finishing, setFinishing] = useState(false);
   // Claude's plan, summary and findings, asked for once when a review is
@@ -52,8 +51,7 @@ export function ReviewPage({ task }: { task: TaskView }) {
     if (!started) void runReviewer(task.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [task.id]);
-  const ready = notes.filter((n) => n.by === "you" || n.kept).length;
-  const undecided = notes.length - ready;
+  const unposted = notes.length;
 
   async function finish() {
     try {
@@ -91,28 +89,10 @@ export function ReviewPage({ task }: { task: TaskView }) {
           <button className="btn btn-sm" title="Done with this review: remove its checkout" onClick={() => setFinishing(true)}>
             Finish
           </button>
+          <SubmitReview taskId={task.id} review={review} />
         </div>
       </div>
 
-      <ol className="review-steps">
-        <li>Read the changes. Click a line number to leave a comment.</li>
-        <li className={running ? "active" : ""}>
-          Optionally, <b>Review with Claude</b> for a first pass: keep or drop what it finds.
-          {undecided > 0 && (
-            <button
-              className="chip warn"
-              title="Go to the next finding"
-              onClick={() => useStore.getState().showNextFinding(task.id)}
-            >
-              {undecided} to decide →
-            </button>
-          )}
-        </li>
-        <li className={ready > 0 ? "active" : ""}>
-          <b>Post review…</b> sends your comments to GitHub as one review, after showing you all of it.
-          {ready > 0 && <span className="chip">{ready} ready</span>}
-        </li>
-      </ol>
 
       <div className="content">
         <DiffView task={task} />
@@ -122,8 +102,8 @@ export function ReviewPage({ task }: { task: TaskView }) {
         <Confirm
           title="Finish this review?"
           body={
-            ready + undecided > 0
-              ? `Its checkout goes, and with it ${ready + undecided} note${ready + undecided === 1 ? "" : "s"} not posted.`
+            unposted > 0
+              ? `Its checkout goes, and with it ${unposted} note${unposted === 1 ? "" : "s"} not posted.`
               : "Its checkout goes. What you posted stays on GitHub."
           }
           confirmLabel="Finish"

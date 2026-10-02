@@ -8,7 +8,6 @@ import type {
 } from "../lib/types";
 import { lineOf, parseDiff, toTree, type DiffLine, type Node } from "../lib/diff";
 import { NoteCard, NoteEditor, ReviewerButton } from "./DiffNote";
-import { PostReview } from "./PostReview";
 import { ReviewFileBar, ReviewPlan } from "./ReviewPlan";
 import { ChevronIcon } from "./icons";
 import { Field, Modal, Spinner } from "./ui";
@@ -76,8 +75,6 @@ export function DiffView({ task }: { task: TaskView }) {
   /** The line, or range of lines, a note is being written on. */
   const [composing, setComposing] = useState<{ side: "LEFT" | "RIGHT"; line: number; startLine?: number; code: string } | null>(null);
   const [committing, setCommitting] = useState(false);
-  /** A review task's notes, about to be posted to its pull request (REV-11). */
-  const [posting, setPosting] = useState(false);
   const [commitBusy, setCommitBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [target, setTarget] = useState<string>("");
@@ -870,9 +867,9 @@ export function DiffView({ task }: { task: TaskView }) {
             </>
           )}
           {queued.length === 0
-            ? "Click a line number to leave a note"
+            ? "Click a line number to comment; shift-click another to cover the lines between"
             : task.review
-              ? `${queued.length} note${queued.length === 1 ? "" : "s"} for your review`
+              ? `${queued.length} comment${queued.length === 1 ? "" : "s"} for your review: Submit review sends ${queued.length === 1 ? "it" : "them"}`
             : agentPanes.length === 0
               ? `${queued.length} note${queued.length === 1 ? "" : "s"} queued · no agent running — Send will start one`
               : `${queued.length} note${queued.length === 1 ? "" : "s"} queued`}
@@ -915,16 +912,6 @@ export function DiffView({ task }: { task: TaskView }) {
               }
             >
               {agentPanes.length === 0 && queued.length > 0 ? "Start agent & send" : "Send to agent"}
-              {queued.length > 0 && <span className="badge">{queued.length}</span>}
-            </button>
-          )}
-          {task.review && (
-            <button
-              className="btn btn-sm btn-primary"
-              title={`Post your notes to ${task.review.repo}#${task.review.number} as one review, after a look at all of it`}
-              onClick={() => setPosting(true)}
-            >
-              Post review…
               {queued.length > 0 && <span className="badge">{queued.length}</span>}
             </button>
           )}
@@ -984,10 +971,6 @@ export function DiffView({ task }: { task: TaskView }) {
             </select>
           </Field>
         </Modal>
-      )}
-
-      {posting && task.review && (
-        <PostReview taskId={task.id} review={task.review} notes={queued} onClose={() => setPosting(false)} />
       )}
 
       {committing && (

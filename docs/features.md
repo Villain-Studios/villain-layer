@@ -733,9 +733,9 @@ used to show only the first, so seven PRs of yours read as none.
   author: a one-line fix looked like a rewrite, and a PR you had approved
   before its author pushed again looked like one you had already done.
 - **REV-10** A PR in "To review" MUST be reviewable here, in the Reviews
-  view and nowhere else: "Review" opens its review page, with the steps
-  (read and comment on lines, optionally Review with Claude, Post review…)
-  above its files and diff, measured from where it left its base. A
+  view and nowhere else: "Review" opens its review page, its plan
+  (REV-12) beside its diff, measured from where it left its base, and
+  Submit review in its header. A
   review is never shown as a task: not in the sidebar, not under Work, not
   in a ticket's "open its task". Shown as one, it sat among your work with
   a Commit button, an Uncommitted tab and a "never pushed" that meant
@@ -760,8 +760,10 @@ used to show only the first, so seven PRs of yours read as none.
 - **REV-11** A review task's notes MUST be postable to its PR as one
   GitHub review: a verdict (comment, approve, request changes), a summary,
   and each note a comment on its line, pinned to the commit the review was
-  taken at. "Post review…" shows all of it before anything is sent, and
-  posts once, with one click. A note on a line outside the PR's diff goes
+  taken at. Submit review sits in the review's header, as on GitHub,
+  counting the comments waiting; its dropdown shows all of it before
+  anything is sent, says how many findings are still undecided and left
+  out, and posts once, with one click. A note on a line outside the PR's diff goes
   into the body under its `file:line`; if GitHub still refuses a line, the
   review is posted with every note in its body, and says so. It is
   refused while the worktree is not at that commit or holds edits to

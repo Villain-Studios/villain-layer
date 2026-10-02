@@ -32,6 +32,8 @@ import type {
   ReviewComment,
   ReviewQueue,
   ReviewerRun,
+  ReviewVerdict,
+  PostedReview,
   Settings,
   SlackConfig,
   Started,
@@ -98,6 +100,9 @@ export const api = {
   reviewTakeLatest: (taskId: string) => invoke<Task>("review_take_latest", { taskId }),
   /** A fresh model's review of the task's whole branch (DIFF-6). Takes minutes, not seconds. */
   reviewBranch: (taskId: string) => invoke<ReviewerRun>("review_branch", { taskId }),
+  /** A review task's notes as one review of its pull request, after the user confirmed exactly this (REV-11). */
+  githubPostReview: (taskId: string, verdict: ReviewVerdict, body: string, notes: ReviewComment[]) =>
+    invoke<PostedReview>("github_post_review", { taskId, verdict, body, notes }),
   deleteTask: (id: string, force = false) =>
     invoke<RepoResult[]>("delete_task", { id, force }),
   /**

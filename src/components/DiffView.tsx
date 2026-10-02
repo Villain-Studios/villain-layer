@@ -8,6 +8,7 @@ import type {
 } from "../lib/types";
 import { parseDiff, toTree, type Node } from "../lib/diff";
 import { NoteCard, ReviewerButton } from "./DiffNote";
+import { PostReview } from "./PostReview";
 import { ChevronIcon } from "./icons";
 import { Field, Modal, Spinner } from "./ui";
 import { read, write } from "../lib/persist";
@@ -37,7 +38,9 @@ const LINE_BUDGET = 3000;
  * In the diff's state, every keystroke re-rendered the whole diff — three
  * thousand rows — to change one textarea.
  */
-function NoteEditor({ onAdd, onCancel }: { onAdd: (text: string) => void; onCancel: () => void }) {
+function NoteEditor({
+  onAdd, onCancel, placeholder,
+}: { onAdd: (text: string) => void; onCancel: () => void; placeholder: string }) {
   const [text, setText] = useState("");
   return (
     <div className="inline-comment">
@@ -45,7 +48,7 @@ function NoteEditor({ onAdd, onCancel }: { onAdd: (text: string) => void; onCanc
         rows={3}
         autoFocus
         value={text}
-        placeholder="What should the agent change here?"
+        placeholder={placeholder}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) onAdd(text);
@@ -101,6 +104,8 @@ export function DiffView({ task }: { task: TaskView }) {
   const undecided = notes.length - queued.length;
   const [composing, setComposing] = useState<{ line: number; code: string } | null>(null);
   const [committing, setCommitting] = useState(false);
+  /** A review task's notes, about to be posted to its pull request (REV-11). */
+  const [posting, setPosting] = useState(false);
   const [commitBusy, setCommitBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [target, setTarget] = useState<string>("");
@@ -651,6 +656,7 @@ export function DiffView({ task }: { task: TaskView }) {
 
             {isComposing && (
               <NoteEditor
+                placeholder={task.review ? "What should the author know about this line?" : "What should the agent change here?"}
                 onAdd={(text) => addDraftRef.current(text)}
                 onCancel={() => setComposing(null)}
               />
@@ -806,6 +812,8 @@ export function DiffView({ task }: { task: TaskView }) {
           {undecided > 0 && `${undecided} finding${undecided === 1 ? "" : "s"} to keep or drop · `}
           {queued.length === 0
             ? "Click a line number to leave a note"
+            : task.review
+              ? `${queued.length} note${queued.length === 1 ? "" : "s"} for your review`
             : agentPanes.length === 0
               ? `${queued.length} note${queued.length === 1 ? "" : "s"} queued · no agent running — Send will start one`
               : `${queued.length} note${queued.length === 1 ? "" : "s"} queued`}
@@ -828,25 +836,37 @@ export function DiffView({ task }: { task: TaskView }) {
           <ReviewerButton taskId={task.id} />
           <button className="btn btn-sm" onClick={() => void load()}>Refresh</button>
           <button className="btn btn-sm" onClick={() => setCommitting(true)}>Commit…</button>
-          <button
-            className="btn btn-sm btn-primary"
-            disabled={queued.length === 0}
-            onClick={() => void send()}
-            title={
-              queued.length === 0
-                ? "Add notes on line numbers first"
-                : agentPanes.length === 0
-                  ? installed.length === 0
-                    ? "Install an agent CLI first"
-                    : "No agent running — pick one to start with these notes"
-                  : agentPanes.length > 1
-                    ? `Send queued notes to ${targetName}`
-                    : "Send queued notes to the agent"
-            }
-          >
-            {agentPanes.length === 0 && queued.length > 0 ? "Start agent & send" : "Send to agent"}
-            {queued.length > 0 && <span className="badge">{queued.length}</span>}
-          </button>
+          {(!task.review || agentPanes.length > 0) && (
+            <button
+              className={`btn btn-sm${task.review ? "" : " btn-primary"}`}
+              disabled={queued.length === 0}
+              onClick={() => void send()}
+              title={
+                queued.length === 0
+                  ? "Add notes on line numbers first"
+                  : agentPanes.length === 0
+                    ? installed.length === 0
+                      ? "Install an agent CLI first"
+                      : "No agent running — pick one to start with these notes"
+                    : agentPanes.length > 1
+                      ? `Send queued notes to ${targetName}`
+                      : "Send queued notes to the agent"
+              }
+            >
+              {agentPanes.length === 0 && queued.length > 0 ? "Start agent & send" : "Send to agent"}
+              {queued.length > 0 && <span className="badge">{queued.length}</span>}
+            </button>
+          )}
+          {task.review && (
+            <button
+              className="btn btn-sm btn-primary"
+              title={`Post your notes to ${task.review.repo}#${task.review.number} as one review, after a look at all of it`}
+              onClick={() => setPosting(true)}
+            >
+              Post review…
+              {queued.length > 0 && <span className="badge">{queued.length}</span>}
+            </button>
+          )}
         </div>
       </div>
 
@@ -903,6 +923,10 @@ export function DiffView({ task }: { task: TaskView }) {
             </select>
           </Field>
         </Modal>
+      )}
+
+      {posting && task.review && (
+        <PostReview taskId={task.id} review={task.review} notes={queued} onClose={() => setPosting(false)} />
       )}
 
       {committing && (

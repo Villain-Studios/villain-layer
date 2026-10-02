@@ -168,7 +168,13 @@ const answer: Record<string, Answer> = {
       at(3, "nit", "The comment says what the line does; say why counting from zero is right here.", "// Counted from zero: the first try is not a retry."),
       at(40, "risk", "The backoff is never capped: with retries raised in config, the last wait is minutes long.", "await sleep(2 ** attempt * 100);", false),
     ];
+    const plan = [
+      { checkout_id: c?.id ?? "", path: "src/auth.ts", group: "start", why: "where the retry count changes" },
+      { checkout_id: c?.id ?? "", path: "src/auth.test.ts", group: "tests", why: "covers the new count" },
+    ];
     return new Promise((done) => setTimeout(() => done({
+      summary: "Counts retries from zero and logs each attempt. The risk is in auth.ts: the loop now makes one request more than configured.",
+      plan,
       findings, heads: (task?.checkouts ?? []).map((x) => ({ checkout_id: x.id, head: "f".repeat(40) })), model: "sonnet", dropped: 1,
     }), 2500));
   },

@@ -175,6 +175,12 @@ interface State {
   focusNote: (taskId: string, id: number | null) => void;
   /** Bring the first finding still to keep or drop into view. */
   showNextFinding: (taskId: string) => void;
+  /**
+   * Files of a review marked viewed, by task id, at the commit they were
+   * viewed at: a later push to the pull request starts the count again.
+   */
+  viewed: Record<string, { head: string; files: string[] }>;
+  setViewed: (taskId: string, head: string, fileKey: string, on: boolean) => void;
   /** The reviewer pass, by task id (DIFF-6). */
   reviewer: Record<string, ReviewerState>;
   runReviewer: (taskId: string) => Promise<void>;
@@ -538,6 +544,14 @@ export const useStore = create<State>((set, get) => {
     const next = (get().notes[taskId] ?? []).find((n) => n.by === "reviewer" && !n.kept);
     if (next) get().focusNote(taskId, next.id);
   },
+
+  viewed: {},
+  setViewed: (taskId, head, fileKey, on) =>
+    set((s) => {
+      const had = s.viewed[taskId]?.head === head ? s.viewed[taskId].files : [];
+      const files = on ? [...had.filter((f) => f !== fileKey), fileKey] : had.filter((f) => f !== fileKey);
+      return { viewed: { ...s.viewed, [taskId]: { head, files } } };
+    }),
 
   reviewer: {},
   runReviewer: async (taskId) => {

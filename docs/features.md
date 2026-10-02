@@ -768,6 +768,16 @@ used to show only the first, so seven PRs of yours read as none.
   tracked files, since its line numbers would then be another version's.
   Posted notes leave the Diff tab. Reviewing here used to end in copying
   each note into GitHub by hand.
+- **REV-12** A review MUST start from a plan: opening one the first time
+  runs Claude (DIFF-6), which also answers with a summary of the change
+  and where its risk is, and an order to read the files in, each with
+  why: start here, tests, then everything it left out, then low risk
+  (translations, generated files, styles, renames), folded. The plan
+  stands where the folder tree stands for your own work, with a Viewed
+  tick per file and how many of how many are viewed; ticking the open
+  file, there or in its header, opens the next one not viewed. Viewed
+  counts at the commit the review is on, so a later push starts it over.
+  In folder order, 36 files gave no hint of which three mattered.
 
 Code: `commands/github.rs` (`review_queue`, `github_review_queue`),
 `integrations/github/authored.rs`, `integrations/github/requested.rs`,

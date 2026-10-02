@@ -9,6 +9,7 @@ import type {
 import { parseDiff, toTree, type Node } from "../lib/diff";
 import { NoteCard, ReviewerButton } from "./DiffNote";
 import { PostReview } from "./PostReview";
+import { ReviewFileBar, ReviewPlan } from "./ReviewPlan";
 import { ChevronIcon } from "./icons";
 import { Field, Modal, Spinner } from "./ui";
 import { read, write } from "../lib/persist";
@@ -763,7 +764,16 @@ export function DiffView({ task }: { task: TaskView }) {
       {unlinkedBanner}
       <div className="diff">
         <div className="diff-files" style={{ width }}>
-          {groups.map((g) => (
+          {task.review ? (
+            <ReviewPlan
+              taskId={task.id}
+              head={task.review.head_sha}
+              files={files}
+              selected={selected}
+              onSelect={setSelected}
+              notesPerFile={notesPerFile}
+            />
+          ) : groups.map((g) => (
             <div key={g.checkout.id}>
               {multi && (
                 <div className="diff-group">
@@ -812,6 +822,9 @@ export function DiffView({ task }: { task: TaskView }) {
                 Show all {parsed.length.toLocaleString()}
               </button>
             </div>
+          )}
+          {task.review && current && (
+            <ReviewFileBar taskId={task.id} head={task.review.head_sha} file={current} files={files} onSelect={setSelected} />
           )}
           {multi && current && (
             <div className="diff-repo-banner">

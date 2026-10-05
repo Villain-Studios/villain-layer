@@ -100,6 +100,23 @@ impl Jira {
 
     async fn json(&self, rb: reqwest::RequestBuilder) -> Result<Value> {
         let res = rb.send().await?;
+        // A token Jira no longer accepts (expired, revoked) is not refused:
+        // the request is served as an anonymous visitor's. Searches came back
+        // empty with a 200 ("No issues matched your JQL"), a ticket that
+        // exists was a 404, and only /myself said 401. This header is the
+        // one sign that the credentials were seen and rejected.
+        if res
+            .headers()
+            .get("x-seraph-loginreason")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.contains("FAILED") || v.contains("DENIED"))
+        {
+            return Err(Error::Other(
+                "Jira no longer accepts the saved API token (it may have expired or been revoked). \
+                 Create a new one and enter it in Settings → Jira."
+                    .into(),
+            ));
+        }
         let status = res.status();
         let body = res.text().await?;
         if !status.is_success() {
@@ -940,5 +957,48 @@ mod browse_tests {
             browse_jql(None, None, Whose::Anyone, true, &[]),
             "ORDER BY updated DESC",
         );
+    }
+
+    /// What happens when Jira is asked with credentials it rejects.
+    mod auth {
+        use super::super::*;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        /// A site that answers every request once with `head` and `body`.
+        async fn site(head: &'static str, body: &'static str) -> String {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            tokio::spawn(async move {
+                while let Ok((mut sock, _)) = listener.accept().await {
+                    let mut buf = [0u8; 4096];
+                    let _ = sock.read(&mut buf).await;
+                    let reply = format!(
+                        "HTTP/1.1 200 OK\r\n{head}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = sock.write_all(reply.as_bytes()).await;
+                }
+            });
+            format!("http://{addr}")
+        }
+
+        fn client(base_url: String) -> Jira {
+            let cfg = JiraConfig { base_url, email: "dev@acme.test".into(), ..Default::default() };
+            Jira::new(&cfg, "expired").unwrap()
+        }
+
+        #[tokio::test]
+        async fn a_rejected_token_is_an_error_not_an_empty_queue() {
+            let url = site("X-Seraph-LoginReason: AUTHENTICATED_FAILED\r\n", r#"{"issues":[],"isLast":true}"#).await;
+            let err = client(url).search("assignee = currentUser()", 50).await.err().map(|e| e.to_string());
+            assert!(err.as_deref().is_some_and(|e| e.contains("API token")), "{err:?}");
+        }
+
+        #[tokio::test]
+        async fn an_accepted_token_with_nothing_to_find_is_an_empty_queue() {
+            let url = site("X-Seraph-LoginReason: OK\r\n", r#"{"issues":[],"isLast":true}"#).await;
+            let page = client(url).search("assignee = currentUser()", 50).await.unwrap();
+            assert!(page.issues.is_empty());
+        }
     }
 }

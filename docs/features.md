@@ -953,6 +953,10 @@ Known gaps:
   and for one saved before this rule, except to this machine
   (`localhost`, `127.0.0.1`, `::1`). Slack's addresses are fixed and
   always https.
+- **SET-4** A Jira token the site no longer accepts (expired, revoked)
+  MUST fail every Jira call with an error that says to enter a new token.
+  Jira serves such a request as an anonymous visitor's, so without this
+  an empty search, or a 404 for a ticket that exists, looks like an answer.
 
 Code: `commands/settings.rs`, `config.rs` (`UiPrefs`), `Settings.tsx`,
 `integrations/mod.rs` (`require_https`).

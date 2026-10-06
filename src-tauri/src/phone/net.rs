@@ -74,12 +74,16 @@ pub struct Address {
 /// This Mac's addresses on either way in, Tailscale's first.
 pub fn addresses() -> Vec<Address> {
     let mut found = Vec::new();
-    let mut list: *mut libc::ifaddrs = std::ptr::null_mut();
-    // SAFETY: getifaddrs fills `list` with a linked list it owns, freed
+    // Unset until getifaddrs fills it: a null placeholder read like a
+    // pointer that might be dereferenced unchecked, to CodeQL as to a reader.
+    let mut out = std::mem::MaybeUninit::<*mut libc::ifaddrs>::uninit();
+    // SAFETY: getifaddrs fills `out` with a linked list it owns, freed
     // below with freeifaddrs; nothing is kept past that.
-    if unsafe { libc::getifaddrs(&mut list) } != 0 {
+    if unsafe { libc::getifaddrs(out.as_mut_ptr()) } != 0 {
         return found;
     }
+    // SAFETY: it returned 0, so it wrote the list's head (null when empty).
+    let list = unsafe { out.assume_init() };
     let mut at = list;
     while !at.is_null() {
         // SAFETY: `at` is a node of the list getifaddrs returned.
@@ -145,5 +149,14 @@ mod tests {
         assert!(home.admits(ip("::ffff:192.168.8.23")));
         assert!(!home.admits(ip("::ffff:8.8.8.8")));
         assert!(!home.admits(ip("fd00::1")), "IPv6 is not a way in");
+    }
+
+    #[test]
+    fn this_macs_addresses_are_only_ones_a_way_in_admits() {
+        let both = Reach { tailscale: true, home: true };
+        for a in addresses() {
+            assert!(both.admits(ip(&a.ip)), "{a:?}");
+            assert!(!a.interface.is_empty(), "{a:?}");
+        }
     }
 }

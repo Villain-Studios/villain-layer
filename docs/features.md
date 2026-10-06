@@ -49,7 +49,10 @@ up** removes what tasks left behind.
   re-cloning, moving, deleting, pruning, gc, branch deletion. The copy is
   hard-linked, so it costs little disk and survives the clone being
   deleted. It fetches from the clone's `origin` and carries its repo-local
-  git settings.
+  git settings. A copy made while the clone had no `origin` fetches from
+  the clone, and MUST move to the clone's `origin` once it has one (at
+  launch, at Sync, when a task needs it), or task branches are pushed into
+  the user's clone. Such a repo is not read as a GitHub repository.
 - **REPO-5** Each repo MUST show whether its clone is still where it was
   registered and still the same repository, where it fetches from, whether
   the app's copy exists and when a Sync last reached origin (not when a

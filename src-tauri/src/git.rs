@@ -18,7 +18,7 @@ pub use remote::origin_slug;
 pub use review::{follow_pull, take_pull};
 pub use store::{
     adopt_worktree, belongs_to, changed_between, copy_local_config, create_store, default_tip,
-    is_own_clone, is_store_of, owner, reclaim_clone, relink_worktree, take_branch_from_clone, take_branch_from_origin,
+    follow_clone_origin, is_own_clone, is_store_of, owner, reclaim_clone, relink_worktree, take_branch_from_clone, take_branch_from_origin,
 };
 pub use upkeep::{
     branch_tips, delete_branch_at, delete_origin_branch, fast_forward, fetch_store, holds, is_bare,
@@ -1485,6 +1485,15 @@ mod tests {
 
         run(&repo, &["remote", "set-url", "origin", "https://ghe.example.com/acme/web.git"]).unwrap();
         assert_eq!(origin_slug(&repo).unwrap(), ("acme".into(), "web".into()));
+        std::fs::remove_dir_all(repo.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn an_origin_on_disk_is_not_read_as_a_github_repository() {
+        let repo = fixture();
+        run(&repo, &["remote", "add", "origin", "/Users/me/work/platform/tool"]).unwrap();
+        let err = origin_slug(&repo).unwrap_err().to_string();
+        assert!(err.contains("folder on this Mac"), "got: {err}");
         std::fs::remove_dir_all(repo.parent().unwrap()).ok();
     }
     /// A clone of a bare remote, and a worktree of it on `feature`, so the

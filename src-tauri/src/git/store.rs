@@ -66,6 +66,25 @@ pub fn is_store_of(store: &Path, source: &Path) -> bool {
             || Path::new(&fetches) == source)
 }
 
+/// Point `store` at the clone's origin when it still fetches from the clone
+/// itself and the clone has an origin now. True when it changed.
+///
+/// A repo started on this Mac and added before it was pushed anywhere got a
+/// copy fetching from its folder. Its GitHub remote, added later, never
+/// reached the copy: task branches were pushed into the user's clone, and
+/// the task's pull requests asked GitHub for a repository named after the
+/// clone's parent folder.
+pub fn follow_clone_origin(store: &Path, clone: &Path) -> Result<bool> {
+    let fetches_clone = super::origin_url(store).is_some_and(|url| Path::new(&url) == clone);
+    match super::origin_url(clone) {
+        Some(url) if fetches_clone => {
+            run(store, &["config", "remote.origin.url", &url])?;
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
+}
+
 /// The user's settings for this repository, carried into the copy: a work
 /// email, commit signing, an ssh command, a hooks path. Worktrees of the
 /// clone used to get them for free, and a commit signed as the wrong person
@@ -744,6 +763,35 @@ mod tests {
         run(&clone, &["commit", "-qam", "not pushed"]).unwrap();
         assert_eq!(default_tip(&clone, "main"), Some(pushed));
         assert_eq!(default_tip(&clone, "-main"), None);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_copy_made_before_the_clone_had_an_origin_follows_the_one_it_gets() {
+        let root = sandbox();
+        let clone = root.join("tool");
+        std::fs::create_dir_all(&clone).unwrap();
+        run(&clone, &["init", "-q", "-b", "main"]).unwrap();
+        run(&clone, &["config", "user.email", "me@work.example"]).unwrap();
+        run(&clone, &["config", "user.name", "Me"]).unwrap();
+        std::fs::write(clone.join("a.txt"), "one\n").unwrap();
+        run(&clone, &["add", "-A"]).unwrap();
+        run(&clone, &["commit", "-qm", "init"]).unwrap();
+        let store = root.join("store/tool.git");
+        create_store(&clone, &store).unwrap();
+        assert!(!follow_clone_origin(&store, &clone).unwrap(), "no origin yet: it keeps the folder");
+
+        let remote = root.join("remote.git");
+        std::fs::create_dir_all(&remote).unwrap();
+        run(&remote, &["init", "-q", "-b", "main", "--bare"]).unwrap();
+        run(&clone, &["remote", "add", "origin", remote.to_str().unwrap()]).unwrap();
+        assert!(follow_clone_origin(&store, &clone).unwrap());
+        let url = run(&store, &["config", "--get", "remote.origin.url"]).unwrap();
+        assert_eq!(url.trim(), remote.to_str().unwrap(), "pushes go to the remote, not the clone");
+        assert!(is_store_of(&store, &clone));
+
+        run(&clone, &["remote", "set-url", "origin", "https://ghe.example.com/acme/tool.git"]).unwrap();
+        assert!(!follow_clone_origin(&store, &clone).unwrap(), "only a copy fetching from the clone is moved");
         std::fs::remove_dir_all(&root).ok();
     }
 }

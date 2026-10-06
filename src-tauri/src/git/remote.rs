@@ -15,6 +15,15 @@ use crate::error::{Error, Result};
 pub fn origin_slug(dir: &Path) -> Result<(String, String)> {
     let url = run(dir, &["remote", "get-url", "origin"])?.trim().to_string();
 
+    // A copy of a clone that had no origin yet fetches from the clone's
+    // folder, and `/Users/me/work/platform/tool` read as `platform/tool`
+    // sent GitHub a repository that does not exist: a 404 under the task's
+    // pull requests, for a repo that was never on GitHub at all.
+    let scp = !url.contains("://") && url.split_once(':').is_some_and(|(host, _)| !host.contains('/'));
+    if !(url.contains("://") || scp) {
+        return Err(Error::Git(format!("origin is a folder on this Mac ({url}), not GitHub")));
+    }
+
     // Normalise scp-style `host:path` into `host/path` so one split works for
     // everything. A `//` right after the colon means it was a real scheme.
     let normalised = match url.split_once("://") {

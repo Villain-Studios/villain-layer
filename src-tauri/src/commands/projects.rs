@@ -295,10 +295,16 @@ static MAKING: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 pub(crate) fn ensure_store(state: &AppState, project_id: &str) -> Result<PathBuf> {
     let _one = MAKING.lock();
     let project = state.config.project(project_id)?;
-    if let Some(store) = project.store.as_deref().filter(|s| Path::new(s).is_dir()) {
-        return Ok(PathBuf::from(store));
-    }
     let source = PathBuf::from(&project.path);
+    if let Some(store) = project.store.as_deref().filter(|s| Path::new(s).is_dir()) {
+        let store = PathBuf::from(store);
+        if source.is_dir() {
+            if let Err(e) = git::follow_clone_origin(&store, &source) {
+                eprintln!("villain-layer: {} still fetches from {}: {e}", store.display(), project.path);
+            }
+        }
+        return Ok(store);
+    }
     if !source.is_dir() {
         return Err(Error::NotFound(format!(
             "{} is gone, and the app has no copy of it to work from",

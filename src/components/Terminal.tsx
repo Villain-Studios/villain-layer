@@ -6,26 +6,7 @@ import { api } from "../lib/api";
 import { onPtyOutput } from "../lib/ptyOutput";
 import { useStore } from "../store";
 import type { PaneInfo } from "../lib/types";
-
-const THEME = {
-  background: "#0c0c11",
-  foreground: "#dcdce6",
-  cursor: "#a78bfa",
-  cursorAccent: "#0c0c11",
-  selectionBackground: "#332f55",
-  black: "#1c1c27", red: "#f87171", green: "#4ade80", yellow: "#fbbf24",
-  blue: "#60a5fa", magenta: "#a78bfa", cyan: "#22d3ee", white: "#dcdce6",
-  brightBlack: "#55555f", brightRed: "#fca5a5", brightGreen: "#86efac",
-  brightYellow: "#fcd34d", brightBlue: "#93c5fd", brightMagenta: "#c4b5fd",
-  brightCyan: "#67e8f9", brightWhite: "#f4f4f8",
-};
-
-function decode(b64: string): Uint8Array {
-  const bin = atob(b64);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
-}
+import { decode, TERMINAL_FONT, TERMINAL_THEME } from "../lib/terminal";
 
 /**
  * How many terminals may hold a WebGL context at once.
@@ -111,10 +92,10 @@ class PaneTerminal {
   constructor(private readonly id: string) {
     this.el.className = "term-host";
     this.term = new Terminal({
-      fontFamily: '"SF Mono", "JetBrains Mono", Menlo, monospace',
+      fontFamily: TERMINAL_FONT,
       fontSize: fontSize(),
       lineHeight: 1.25,
-      theme: THEME,
+      theme: TERMINAL_THEME,
       cursorBlink: true,
       allowProposedApi: true,
       // Backend scrollback is the source of truth (~256KB). Keeping a huge

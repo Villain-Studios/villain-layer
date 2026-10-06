@@ -372,6 +372,8 @@ export interface UiPrefs {
   agents_read_panes: boolean;
   /** The model the reviewer pass runs on (DIFF-6). */
   reviewer_model: "sonnet" | "opus" | "haiku";
+  /** Keep the Mac from idle sleep while an agent is working (STATE-7). */
+  keep_awake: boolean;
 }
 
 export interface Settings {

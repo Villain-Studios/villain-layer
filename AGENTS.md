@@ -230,7 +230,7 @@ build does the same.
 | `src-tauri/src/agents.rs` | the agent CLI catalogue and how each reports its state |
 | `src-tauri/src/mcp.rs` | the app's MCP server for agents, and `/hook` for their status reports |
 | `src-tauri/src/git.rs`, `git/` | the only place that runs git; `store.rs` is the app's own copy of each repo, `upkeep.rs` its Sync and Clean up |
-| `src-tauri/src/attention.rs` | agents that need you: dock count, banners |
+| `src-tauri/src/attention.rs` | agents that need you: dock count, banners; and `awake.rs`, keeping the Mac awake while one works |
 | `src-tauri/src/news.rs` | new review requests and tickets, for banners |
 | `src-tauri/src/messages.rs` | the message center's log, kept in `messages.json` |
 | `src-tauri/src/notes.rs` | repo notes, kept in `notes.json`; `commands/notes.rs` measures them against git |

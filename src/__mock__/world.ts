@@ -66,6 +66,7 @@ const ui: UiPrefs = {
   system_notifications: true,
   notify_waiting_agents: true,
   agents_read_panes: false, reviewer_model: "sonnet",
+  keep_awake: false,
 };
 
 const disconnected: Settings = {

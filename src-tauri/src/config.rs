@@ -218,6 +218,11 @@ pub struct UiPrefs {
     /// and Opus costs several times as much for each run.
     #[serde(default = "sonnet")]
     pub reviewer_model: String,
+    /// Keep the Mac from idle sleep while an agent is working (STATE-7).
+    /// Off by default: on battery, an agent left working overnight would
+    /// keep the machine up until it ran flat.
+    #[serde(default)]
+    pub keep_awake: bool,
 }
 
 fn sonnet() -> String {
@@ -239,6 +244,7 @@ impl Default for UiPrefs {
             notify_waiting_agents: true,
             agents_read_panes: false,
             reviewer_model: sonnet(),
+            keep_awake: false,
         }
     }
 }

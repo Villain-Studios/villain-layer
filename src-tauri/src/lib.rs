@@ -1,5 +1,6 @@
 mod agents;
 mod attention;
+mod awake;
 mod commands;
 mod config;
 mod error;

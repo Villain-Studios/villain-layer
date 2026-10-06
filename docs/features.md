@@ -1123,8 +1123,9 @@ the home network). How to set either up is in `docs/phone.md`.
   awake while any agent runs, not only while one works: one asking for
   permission is exactly the one you would answer from the phone. Closing
   the lid still sleeps the Mac.
-- **PHONE-9** The top bar MUST show a phone while a paired phone has the
-  app open, naming it.
+- **PHONE-9** The top bar MUST show a phone once a phone is paired: green,
+  naming it, while a paired phone has the app open; grey otherwise, saying
+  whether phone access is off. A click opens Settings → Phone.
 
 Code: `phone/` (`net.rs` ways in, `pair.rs`, `routes.rs`, `view.rs`,
 `input.rs`), `pty/feed.rs`, `commands/phone.rs`, `awake.rs`,

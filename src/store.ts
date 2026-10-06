@@ -114,6 +114,8 @@ interface State {
   tab: Tab;
   sidebarHidden: boolean;
   settingsOpen: boolean;
+  /** The Settings tab to open on, when something asked for one ("phone"). */
+  settingsSection: string | null;
   /** Ticket key to scroll to and highlight in the Tickets view, then clear. */
   focusIssueKey: string | null;
   /** Pane to select once its task or chat is on screen, then clear (NOTE-4). */
@@ -135,7 +137,7 @@ interface State {
   setView: (v: View) => void;
   setTab: (t: Tab) => void;
   toggleSidebar: () => void;
-  toggleSettings: (open?: boolean) => void;
+  toggleSettings: (open?: boolean, section?: string) => void;
   /** Jump to Tickets and highlight this key — for a task that already has one. */
   showIssue: (key: string) => void;
   clearFocusIssue: () => void;
@@ -396,6 +398,7 @@ export const useStore = create<State>((set, get) => {
   tab: readOneOf("tab", TABS, "terminals"),
   sidebarHidden: read("sidebarHidden", false),
   settingsOpen: false,
+  settingsSection: null,
   focusIssueKey: null,
   focusPane: null,
   focusReview: null,
@@ -409,7 +412,8 @@ export const useStore = create<State>((set, get) => {
   setView: (view) => set({ view }),
   setTab: (tab) => set({ tab }),
   toggleSidebar: () => set((s) => ({ sidebarHidden: !s.sidebarHidden })),
-  toggleSettings: (open) => set((s) => ({ settingsOpen: open ?? !s.settingsOpen })),
+  toggleSettings: (open, section) =>
+    set((s) => ({ settingsOpen: open ?? !s.settingsOpen, settingsSection: section ?? null })),
   showIssue: (key) => set({ view: "tickets", focusIssueKey: key }),
   clearFocusIssue: () => set({ focusIssueKey: null }),
   showPane: (focusPane) => set({ focusPane }),

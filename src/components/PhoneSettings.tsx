@@ -183,17 +183,26 @@ function Pairing({ code, seconds, onExpired }: { code: string; seconds: number; 
   );
 }
 
-/** In the top bar while a paired phone has the app open. */
+/**
+ * In the top bar once a phone is paired (PHONE-9): green while one has the
+ * app open, grey otherwise. A click opens Settings → Phone.
+ */
 export function PhoneBadge() {
   const [status] = usePhoneStatus();
   const toggleSettings = useStore((s) => s.toggleSettings);
-  const connected = status?.devices.filter((d) => d.connected) ?? [];
-  if (connected.length === 0) return null;
+  if (!status || status.devices.length === 0) return null;
+  const connected = status.devices.filter((d) => d.connected);
+  const names = (ds: { name: string }[]) => ds.map((d) => d.name).join(", ");
+  const title = connected.length
+    ? `${names(connected)} ${connected.length === 1 ? "has" : "have"} the app open`
+    : !status.tailscale && !status.home
+      ? `Phone access is off. Paired: ${names(status.devices)}`
+      : `No phone has the app open. Paired: ${names(status.devices)}`;
   return (
     <button
-      className="icon-btn phone-on"
-      title={`${connected.map((d) => d.name).join(", ")} ${connected.length === 1 ? "has" : "have"} the app open`}
-      onClick={() => toggleSettings(true)}
+      className={`icon-btn phone${connected.length ? " on" : ""}`}
+      title={title}
+      onClick={() => toggleSettings(true, "phone")}
     >
       <PhoneIcon />
     </button>

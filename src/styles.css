@@ -1692,7 +1692,7 @@ textarea { resize: vertical; font-family: var(--mono); }
 .icon-btn.awake.holding { color: var(--accent); }
 
 /* Phone access (PHONE-*): a phone connected, and Settings → Phone. */
-.icon-btn.phone-on { color: var(--green); }
+.icon-btn.phone.on { color: var(--green); }
 .phone-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; font-size: 13px; }
 .phone-list code, .phone-code { user-select: text; font-family: var(--mono); }
 .phone-pairing { display: flex; flex-direction: column; gap: 4px; }

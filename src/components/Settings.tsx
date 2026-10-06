@@ -42,7 +42,9 @@ export function Settings() {
   const toast = useStore((s) => s.toast);
   const fail = useStore((s) => s.fail);
 
-  const [section, setSection] = useState<Section>("appearance");
+  const [section, setSection] = useState<Section>(
+    () => (useStore.getState().settingsSection as Section | null) ?? "appearance",
+  );
   const [busy, setBusy] = useState(false);
   const [showManifest, setShowManifest] = useState(false);
 

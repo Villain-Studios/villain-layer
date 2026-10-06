@@ -162,10 +162,11 @@ pub fn spawn(app: AppHandle) -> std::io::Result<()> {
             loop {
                 std::thread::sleep(TICK);
                 let state = app.state::<AppState>();
-                let ui = state.config.read().ui;
-                let on = ui.notify_waiting_agents;
+                let cfg = state.config.read();
+                let on = cfg.ui.notify_waiting_agents;
                 let panes = state.ptys.attention();
-                awake.hold(awake::wanted(ui.keep_awake, &panes));
+                let phone = cfg.phone.tailscale || cfg.phone.home;
+                awake.hold(awake::wanted(cfg.ui.keep_awake, phone, &panes));
                 let (count, news) = watch.pass(&panes, Instant::now());
                 // Kept whatever the switch and wherever you are looking
                 // (MSG-2): the switch is about interrupting you.

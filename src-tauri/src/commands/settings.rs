@@ -26,6 +26,8 @@ pub struct Settings {
     pub jira_connected: bool,
     pub github_connected: bool,
     pub slack_connected: bool,
+    /// A phone's way in is open, which widens Keep awake (PHONE-8).
+    pub phone_open: bool,
 }
 
 #[tauri::command]
@@ -38,6 +40,7 @@ pub fn get_settings(state: State<AppState>) -> Settings {
         jira_connected: c.jira.is_some(),
         github_connected: c.github.is_some(),
         slack_connected: c.slack.is_some(),
+        phone_open: c.phone.tailscale || c.phone.home,
         worktree_root: state.config.worktree_root().to_string_lossy().to_string(),
         worktree_root_is_default: c.worktree_root.is_none(),
         jira: c.jira,

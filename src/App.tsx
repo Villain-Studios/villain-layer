@@ -16,6 +16,7 @@ import { ReviewsView } from "./components/ReviewsView";
 import { Settings } from "./components/Settings";
 import { UpdateFromBase } from "./components/UpdateFromBase";
 import { CupIcon, GearIcon } from "./components/icons";
+import { PhoneBadge } from "./components/PhoneSettings";
 import { SidebarToggle } from "./components/ui";
 import { MessageCenter } from "./components/MessageCenter";
 import { Watchers } from "./Watchers";
@@ -101,6 +102,7 @@ function TopBar() {
             couldn&apos;t refresh
           </span>
         )}
+        <PhoneBadge />
         <KeepAwake />
         <MessageCenter />
         <button className="icon-btn" title="Settings" onClick={() => toggleSettings(true)}>
@@ -112,14 +114,16 @@ function TopBar() {
 }
 
 /**
- * Keep the Mac awake while an agent works (STATE-7). The switch is all this
- * does: `attention.rs` holds the Mac awake, so it holds while the window is
- * away, when this webview's timers may not run at all.
+ * Keep the Mac awake while an agent works (STATE-7), or while any agent runs
+ * when a phone's way in is open (PHONE-8). The switch is all this does:
+ * `attention.rs` holds the Mac awake, so it holds while the window is away,
+ * when this webview's timers may not run at all.
  */
 function KeepAwake() {
   const on = useStore((s) => s.settings?.ui.keep_awake ?? false);
+  const phone = useStore((s) => s.settings?.phone_open ?? false);
   const working = useStore(
-    (s) => s.panes.filter((p) => p.kind === "agent" && p.running && p.activity === "working").length,
+    (s) => s.panes.filter((p) => p.kind === "agent" && p.running && (phone || p.activity === "working")).length,
   );
   const refreshSettings = useStore((s) => s.refreshSettings);
   const fail = useStore((s) => s.fail);
@@ -139,8 +143,12 @@ function KeepAwake() {
   const title = !on
     ? "Keep the Mac awake while an agent is working"
     : working
-      ? `Keeping the Mac awake: ${working} agent${working === 1 ? " is" : "s are"} working. Click to let it sleep.`
-      : "The Mac stays awake whenever an agent is working. None is now, so it may sleep. Click to turn off.";
+      ? phone
+        ? `Keeping the Mac awake for the phone: ${working} agent${working === 1 ? " is" : "s are"} running. Click to let it sleep.`
+        : `Keeping the Mac awake: ${working} agent${working === 1 ? " is" : "s are"} working. Click to let it sleep.`
+      : phone
+        ? "The Mac stays awake whenever an agent is running, for the phone. None is now, so it may sleep. Click to turn off."
+        : "The Mac stays awake whenever an agent is working. None is now, so it may sleep. Click to turn off.";
   return (
     <button
       className={`icon-btn awake${on ? " on" : ""}${on && working ? " holding" : ""}`}

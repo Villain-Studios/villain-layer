@@ -26,7 +26,7 @@
  */
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
-import type { Catchup, Cleaned, FlowStatus, Message, PaneInfo, Project, RepoUpdate, Synced, TaskView } from "../lib/types";
+import type { Catchup, Cleaned, FlowStatus, Message, PaneInfo, PhoneStatus, Project, RepoUpdate, Synced, TaskView } from "../lib/types";
 import { ago, SCENARIOS } from "./world";
 
 type Args = Record<string, unknown>;
@@ -68,6 +68,26 @@ function newPane(args: Args, kind: PaneInfo["kind"], task: string): PaneInfo {
   world.panes.push(p);
   world.output[p.id] = kind === "agent" ? `${p.title} starting…\r\n` : "you@mac % ";
   return p;
+}
+
+/** Settings → Phone. Off, with one phone paired before. */
+const phone: PhoneStatus = {
+  tailscale: false,
+  home: false,
+  typing: false,
+  port: 7421,
+  listening: false,
+  error: null,
+  addresses: [],
+  devices: [{ id: "ph-1", name: "iPhone", paired_at: ago(3 * 86_400), connected: false }],
+  pairing: null,
+};
+
+function phoneAddresses(): PhoneStatus["addresses"] {
+  return [
+    ...(phone.tailscale ? [{ way: "tailscale" as const, ip: "100.101.102.103", interface: "utun4" }] : []),
+    ...(phone.home ? [{ way: "home" as const, ip: "192.168.8.23", interface: "en0" }] : []),
+  ];
 }
 
 const answer: Record<string, Answer> = {
@@ -357,6 +377,27 @@ const answer: Record<string, Answer> = {
     });
     world.cleanup = world.cleanup.filter((i) => !done.some((d) => d.ok && d.id === i.id));
     return done;
+  },
+
+  phone_status: () => structuredClone(phone),
+  set_phone_access: (a) => {
+    phone.tailscale = a.tailscale as boolean;
+    phone.home = a.home as boolean;
+    phone.typing = a.typing as boolean;
+    phone.listening = phone.tailscale || phone.home;
+    phone.addresses = phoneAddresses();
+    if (!phone.listening) phone.pairing = null;
+    world.settings.phone_open = phone.listening;
+    return structuredClone(phone);
+  },
+  phone_pair: () => {
+    if (!phone.listening) throw "Turn on Tailscale or the home network first, so the phone can reach the app.";
+    phone.pairing = { code: "482913", seconds_left: 120 };
+    return structuredClone(phone.pairing);
+  },
+  phone_forget: (a) => {
+    phone.devices = phone.devices.filter((d) => d.id !== a.id);
+    return null;
   },
 
   // Plugins the UI reaches through @tauri-apps packages.

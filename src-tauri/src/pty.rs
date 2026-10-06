@@ -18,6 +18,8 @@ use tauri::{AppHandle, Emitter, Runtime};
 use crate::error::{Error, Result};
 use crate::shellenv;
 
+pub mod feed;
+
 /// Roughly one screenful of history per pane, replayed when a terminal is
 /// first drawn or has fallen too far behind to catch up.
 const SCROLLBACK_LIMIT: usize = 256 * 1024;
@@ -495,6 +497,9 @@ struct Pane {
     /// what it missed. This also covers the window being in the background:
     /// the webview detaches everything then.
     watched: AtomicBool,
+    /// Rung whenever the pane prints or exits, for a reader that is not the
+    /// window: a phone (`feed.rs`). Kept apart from `watched` and `sent`.
+    printed: tokio::sync::watch::Sender<()>,
 }
 
 /// What a terminal needs to be current: the output after the point it asked
@@ -863,6 +868,7 @@ impl PtyManager {
             // Nothing is on screen until the webview attaches, and attaching
             // collects whatever was printed before it did.
             watched: AtomicBool::new(false),
+            printed: tokio::sync::watch::Sender::new(()),
         });
 
         self.panes.lock().insert(id.clone(), pane.clone());
@@ -910,6 +916,7 @@ impl PtyManager {
                                     .flatten();
                                 (found, title)
                             };
+                            pane.printed.send_modify(|_| {});
                             {
                                 let mut meta = pane.meta.lock();
                                 let now = Utc::now();
@@ -995,6 +1002,7 @@ impl PtyManager {
                     meta.info.running = false;
                     meta.info.exit_code = code;
                 }
+                pane.printed.send_modify(|_| {});
                 let _ = app.emit("pty:exit", ExitEvent { pane_id: &id, code });
             });
         }

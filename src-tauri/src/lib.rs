@@ -10,6 +10,7 @@ mod mcp;
 mod messages;
 mod notes;
 mod news;
+mod phone;
 mod previous;
 mod pty;
 mod secrets;
@@ -157,6 +158,8 @@ pub fn run() {
 
             attention::spawn(handle.clone())?;
             news::spawn(handle.clone());
+            // Phones, if a way in was left on (PHONE-1). Nothing when not.
+            tauri::async_runtime::spawn(phone::apply(handle.clone()));
 
             // Put back the panes that were open last time. Off the startup
             // path too: each agent spawn waits on the login shell's PATH.
@@ -286,6 +289,10 @@ pub fn run() {
             commands::disconnect,
             commands::cursor_ide_installed,
             commands::open_in_cursor,
+            commands::phone_status,
+            commands::set_phone_access,
+            commands::phone_pair,
+            commands::phone_forget,
         ])
         .build(tauri::generate_context!())
         // guard: allow panic — startup, before any agent exists; without a window there is nothing to run.

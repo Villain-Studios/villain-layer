@@ -104,6 +104,27 @@ What to check for a UI change:
 - no new errors in the console;
 - a narrow window (the app's minimum is 900×600).
 
+### The phone's page
+
+The page a paired phone opens (§17 in `features.md`) has a harness of its
+own, against a fake Mac: `/phone-mock.html` on the same Vite. Use the
+browser's phone size (375×812).
+
+| Parameter | Values | Default |
+|---|---|---|
+| `paired` | `0`: the pairing page (the code is `482913`) | paired |
+| `typing` | `0`: typing switched off on the Mac | on |
+| `#pane=` | `p-ask` (an agent asking), `p-work`, `p-shell` | the overview |
+
+`__phone.calls` lists every request with its body; `__phone.print(pane,
+text)` prints to an open pane; edit `__phone.world` and `__phone.change()`
+to push a change; `__phone.forget()` is the Mac forgetting the phone.
+
+The server itself is covered end to end by the test at the bottom of
+`phone/routes.rs`, over real HTTP and a real terminal. On the real app,
+the Mac's own address works from its own browser while Home network is on:
+open `http://<the Mac's 192.168… address>:7421` in the dev build.
+
 ## The real app
 
 Some things only the app can show: terminals, agents reporting their

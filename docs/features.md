@@ -360,6 +360,7 @@ shows as a banner above the terminals.
   display still sleeps, and closing the lid still sleeps the Mac. It is held
   by `caffeinate -i -w <the app's pid>`, so it ends with the app, crash or
   not. The cup is outlined while on, and coloured while it is holding.
+  With a phone's way in open, any running agent holds it (PHONE-8).
 
 Code: `pty.rs` (`PaneMeta::state`), `mcp.rs` (`/hook`), `agents.rs`
 (`hook_activity`), `store.ts`, `attention.rs`, `awake.rs`.
@@ -942,7 +943,10 @@ Known gaps:
 | Let agents read terminal output | **off** | MCP `pane_output`, `handoff_prompt` |
 | Move the ticket when work starts | on | TKT-1 |
 | Reviewer | Sonnet | the model Review runs on (DIFF-6) |
-| Keep awake (the cup in the top bar) | off | STATE-7 |
+| Keep awake (the cup in the top bar) | off | STATE-7, PHONE-8 |
+| Phone: Tailscale | off | PHONE-1, PHONE-2 |
+| Phone: Home network and router VPN | off | PHONE-1, PHONE-2 |
+| Phone: Let phones type into agents | off | PHONE-7 |
 | Tickets follow the work (Jira) | not chosen | TKT-8, per Jira project |
 | Trust the folders this app creates | on | PANE-10 |
 | Terminal text | 13px | 9–24px |
@@ -977,7 +981,7 @@ Known gaps:
 | Where | What |
 |---|---|
 | `~/Library/Application Support/eu.codevillain.villain-layer/` | `config.json`: repos, tasks, settings, saved panes. `messages.json`: the message center (MSG-4). `notes.json`: repo notes (MEM-7). At agent launch also `.mcp.json` (0600), `claude-hooks.json`, `copilot-plugin/`, `opencode-plugin.js` |
-| Keychain, service `eu.codevillain.villain-layer` | one item holding every token |
+| Keychain, service `eu.codevillain.villain-layer` | one item holding every token, paired phones' included (PHONE-3) |
 | `~/.villain-worktrees/` (settable) | task folders, `_chat/` rooms, and `.repos/`: the app's own copy of each repo (REPO-4) |
 | a task folder | the worktrees, `AGENTS.md` and `CLAUDE.md` (task context), `TICKET.md` (PANE-13), `.mcp.json`, and `.gemini/settings.json`, `PR_DESCRIPTION.md`, `PR_FEEDBACK.md`, and hand-offs too long to type (`CONFLICTS.md`, `REVIEW_COMMENTS.md`, `PR_DRAFT_REQUEST.md`, `FIRST_PROMPT.md`, PANE-11) as they come up |
 | `~/.claude.json` | trust entries for the app's own folders only (PANE-10) |
@@ -1068,6 +1072,72 @@ the Repos view has a Notes list, to read, edit, check and delete them.
   clone of it, finds them. A repo's id is new each time it is added.
 
 Code: `notes.rs`, `commands/task_context.rs`, `mcp.rs`, `ReposView.tsx`.
+
+## 17. Phone
+
+The tasks and their agents, from a phone, while everything keeps running
+on the Mac. The app serves a page of its own to a phone that has paired
+with it: every task and its agents, the ones that need you first, and an
+agent's terminal, live, with a line of text and a few keys to answer it.
+Settings → Phone switches on the ways in: **Tailscale** (from anywhere,
+over a tailnet) and **Home network and router VPN** (the same Wi-Fi, or a
+router's own VPN such as WireGuard on a GL.iNet, which puts the phone on
+the home network). How to set either up is in `docs/phone.md`.
+
+- **PHONE-1** The app MUST answer on the network only while a way in is
+  on, both off by default. It is a server of its own on a fixed port (7420,
+  the dev build 7421, so the address saved on a phone keeps working); the
+  MCP server stays on loopback. A port in use by something else is said,
+  not left silent.
+- **PHONE-2** A caller MUST come from a way that is on: Tailscale's
+  addresses (100.64.0.0/10) for Tailscale, the private ranges (10/8,
+  172.16/12, 192.168/16) for the home network. The internet, loopback and
+  IPv6 are never let in. The server listens on every IPv4 interface and
+  judges the caller's address, because the Mac's own addresses come and go
+  with the network it is on and with Tailscale starting.
+- **PHONE-3** A phone MUST pair before it sees anything but the pairing
+  page: Settings shows a six-digit code that lasts two minutes, takes five
+  tries, and pairs one phone. Each phone gets a token of its own (256 bits),
+  kept in the keychain and sent as a bearer header, never in a URL.
+  Forgetting a phone in Settings shuts it out at once and ends its open
+  streams.
+- **PHONE-4** The phone's page MUST come from the app's own build
+  (`phone.html`), so it is always the version the app speaks. A dev build
+  serves it from `dist/`, built by `bun run build`.
+- **PHONE-5** The overview MUST show every task with its panes and their
+  states, the ones that need you first by the dock count's rule (STATE-4),
+  and change when they do, pushed, not polled. Panes are called as in the
+  window (PANE-12).
+- **PHONE-6** A phone MUST follow a pane's output from its own position
+  and never change the window's feed (`watched`, `sent`). It draws at the
+  size the window gave the terminal and never resizes it, which would
+  scramble the Mac's view. Opening a pane on the phone is looking at it:
+  done becomes idle (STATE-3).
+- **PHONE-7** A phone MUST type only with "Let phones type into agents"
+  on, and only into a running agent, never a shell. It sends a line, made
+  one line and stripped of control characters, at most 512 bytes (PANE-11),
+  and Enter; or one key of the key bar: Enter, Esc, Up, Down, Tab,
+  Shift-Tab, Ctrl-C, 1, 2, 3. Esc and Ctrl-C end a turn as at the Mac
+  (STATE-2).
+- **PHONE-8** With Keep awake on and a way in open, the Mac MUST stay
+  awake while any agent runs, not only while one works: one asking for
+  permission is exactly the one you would answer from the phone. Closing
+  the lid still sleeps the Mac.
+- **PHONE-9** The top bar MUST show a phone while a paired phone has the
+  app open, naming it.
+
+Code: `phone/` (`net.rs` ways in, `pair.rs`, `routes.rs`, `view.rs`,
+`input.rs`), `pty/feed.rs`, `commands/phone.rs`, `awake.rs`,
+`PhoneSettings.tsx`, `phone.html` and `src/phone/`.
+
+Known gaps:
+- Plain HTTP. Tailscale and a router's WireGuard encrypt the way from the
+  phone; on the home Wi-Fi itself, traffic between the phone and the Mac
+  is readable by anything else on that network. No notifications reach the
+  phone either: those need HTTPS. Slack's (§11) still do.
+- The key bar sends the arrows' normal-mode codes. The agent CLIs read
+  them; a program that only takes the application-mode ones would not.
+- A phone cannot start, stop or hand off an agent.
 
 ---
 

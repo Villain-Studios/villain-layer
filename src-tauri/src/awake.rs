@@ -14,9 +14,13 @@ use crate::pty::{Activity, PaneInfo, PaneKind};
 ///
 /// Only agents: a shell's state is not known, and one left open would keep
 /// the Mac up for good. A chat at work counts as much as a task.
-pub(crate) fn wanted(on: bool, panes: &[(PaneInfo, bool)]) -> bool {
+///
+/// With a phone's way in open, any agent still running counts (PHONE-8): one
+/// asking for permission is exactly the one you would answer from the phone,
+/// and a Mac asleep is not there to answer.
+pub(crate) fn wanted(on: bool, phone: bool, panes: &[(PaneInfo, bool)]) -> bool {
     on && panes.iter().any(|(info, _)| {
-        info.kind == PaneKind::Agent && info.running && info.activity == Activity::Working
+        info.kind == PaneKind::Agent && info.running && (phone || info.activity == Activity::Working)
     })
 }
 
@@ -94,17 +98,29 @@ mod tests {
     #[test]
     fn only_a_working_agent_keeps_the_mac_awake() {
         let working = pane(PaneKind::Agent, "t1", Activity::Working);
-        assert!(wanted(true, std::slice::from_ref(&working)));
-        assert!(!wanted(false, std::slice::from_ref(&working)), "not unless switched on");
-        assert!(!wanted(true, &[]));
+        assert!(wanted(true, false, std::slice::from_ref(&working)));
+        assert!(!wanted(false, false, std::slice::from_ref(&working)), "not unless switched on");
+        assert!(!wanted(true, false, &[]));
         for quiet in [Activity::Asking, Activity::Done, Activity::Idle] {
-            assert!(!wanted(true, &[pane(PaneKind::Agent, "t1", quiet)]), "{quiet:?}");
+            assert!(!wanted(true, false, &[pane(PaneKind::Agent, "t1", quiet)]), "{quiet:?}");
         }
-        assert!(!wanted(true, &[pane(PaneKind::Shell, "t1", Activity::Working)]));
+        assert!(!wanted(true, false, &[pane(PaneKind::Shell, "t1", Activity::Working)]));
         let mut exited = working.clone();
         exited.0.running = false;
-        assert!(!wanted(true, &[exited]));
-        assert!(wanted(true, &[pane(PaneKind::Agent, CHAT_TASK_ID, Activity::Working)]));
+        assert!(!wanted(true, false, &[exited]));
+        assert!(wanted(true, false, &[pane(PaneKind::Agent, CHAT_TASK_ID, Activity::Working)]));
+    }
+
+    #[test]
+    fn with_a_phone_way_in_open_any_running_agent_keeps_the_mac_awake() {
+        for quiet in [Activity::Asking, Activity::Done, Activity::Idle] {
+            assert!(wanted(true, true, &[pane(PaneKind::Agent, "t1", quiet)]), "{quiet:?}");
+        }
+        assert!(!wanted(false, true, &[pane(PaneKind::Agent, "t1", Activity::Asking)]), "still only with the cup on");
+        assert!(!wanted(true, true, &[pane(PaneKind::Shell, "t1", Activity::Idle)]), "a shell never does");
+        let mut exited = pane(PaneKind::Agent, "t1", Activity::Idle);
+        exited.0.running = false;
+        assert!(!wanted(true, true, &[exited]));
     }
 
     #[cfg(target_os = "macos")]

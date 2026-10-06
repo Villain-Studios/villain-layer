@@ -57,6 +57,16 @@ export function CupIcon({ size = 20 }: { size?: number }) {
   );
 }
 
+/** A phone, for phone access (PHONE-*). */
+export function PhoneIcon({ size = 20 }: { size?: number }) {
+  return (
+    <Svg size={size}>
+      <rect x="6.5" y="2.5" width="11" height="19" rx="2.5" />
+      <path d="M11 18.5h2" />
+    </Svg>
+  );
+}
+
 /** Points right; `.chev.open` turns it down. */
 export function ChevronIcon({ size = 12 }: { size?: number }) {
   return (

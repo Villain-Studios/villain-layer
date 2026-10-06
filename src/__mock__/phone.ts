@@ -20,7 +20,7 @@ const ago = (s: number) => new Date(Date.now() - s * 1000).toISOString();
 
 const groups: Group[] = [
   {
-    id: "t-login", name: "Fix the login race", key: "ACME-123",
+    id: "t-login", name: "ACME-123 Fix the login race", key: "ACME-123",
     panes: [
       { id: "p-ask", name: "Retry the token refresh · api", kind: "agent", agent: "claude", activity: "asking", since: ago(90), notice: null, running: true, waiting: "is asking for your permission" },
       { id: "p-shell", name: "Shell · web", kind: "shell", agent: null, activity: "idle", since: ago(4000), notice: null, running: true, waiting: null },

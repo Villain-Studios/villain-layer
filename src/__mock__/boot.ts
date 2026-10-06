@@ -75,6 +75,9 @@ const answer: Record<string, Answer> = {
   // A copy, as the real IPC's JSON always is: handing back the object a
   // setter just changed looked like no change to the store, and nothing redrew.
   get_settings: () => structuredClone(world.settings),
+  set_ui_prefs: (a) => {
+    world.settings.ui = a.ui as typeof world.settings.ui;
+  },
   take_notices: () => [],
   list_messages: () => structuredClone(world.messages),
   add_message: (a) => {

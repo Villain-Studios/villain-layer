@@ -353,9 +353,16 @@ shows as a banner above the terminals.
   as it happens, not at the next poll.
 - **STATE-6** A usage-limit notice MUST NOT fire on prose that merely
   mentions limits. It clears when the agent next reports working.
+- **STATE-7** With **Keep awake** on (the cup in the top bar), the Mac
+  MUST NOT idle-sleep while at least one agent, in a task or a chat, is
+  working, and MUST be free to sleep again within one attention pass (5 s)
+  of the last one stopping. Asking, done, idle and shells do not count. The
+  display still sleeps, and closing the lid still sleeps the Mac. It is held
+  by `caffeinate -i -w <the app's pid>`, so it ends with the app, crash or
+  not. The cup is outlined while on, and coloured while it is holding.
 
 Code: `pty.rs` (`PaneMeta::state`), `mcp.rs` (`/hook`), `agents.rs`
-(`hook_activity`), `store.ts`, `attention.rs`.
+(`hook_activity`), `store.ts`, `attention.rs`, `awake.rs`.
 
 ## 5. Chat
 
@@ -935,6 +942,7 @@ Known gaps:
 | Let agents read terminal output | **off** | MCP `pane_output`, `handoff_prompt` |
 | Move the ticket when work starts | on | TKT-1 |
 | Reviewer | Sonnet | the model Review runs on (DIFF-6) |
+| Keep awake (the cup in the top bar) | off | STATE-7 |
 | Tickets follow the work (Jira) | not chosen | TKT-8, per Jira project |
 | Trust the folders this app creates | on | PANE-10 |
 | Terminal text | 13px | 9–24px |

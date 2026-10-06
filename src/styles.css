@@ -1687,6 +1687,10 @@ textarea { resize: vertical; font-family: var(--mono); }
   color: var(--text);
 }
 
+/* Keep awake: on is the accent's outline; holding the Mac up, its colour. */
+.icon-btn.awake.on { border-color: var(--accent-dim); }
+.icon-btn.awake.holding { color: var(--accent); }
+
 /* An agent that has run out of budget says so where you are looking. */
 .limit-banner {
   display: flex;

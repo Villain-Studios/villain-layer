@@ -20,7 +20,7 @@ to change. What the app *does* is in [`features.md`](features.md).
  │   ├─ agents.rs    agent CLI catalogue, per-CLI launch wiring                   │
  │   ├─ integrations/ Jira, GitHub, Slack HTTP clients     secrets.rs → keychain  │
  │ mcp.rs     MCP server on 127.0.0.1 for agents; /hook/<pane> for their states   │
- │ attention.rs, news.rs   background watchers: dock count, banners               │
+ │ attention.rs, news.rs   background watchers: dock count, banners, keep awake   │
  └───────────────┬───────────────────────────────────────────────┬──────────────┘
                  │ PTY                                             │ HTTPS
         agent CLIs, shells ── MCP over HTTP ──▶ mcp.rs       Jira · GitHub · Slack

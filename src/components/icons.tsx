@@ -46,6 +46,17 @@ export function BellIcon({ size = 20 }: { size?: number }) {
   );
 }
 
+/** A cup, for keeping the Mac awake. */
+export function CupIcon({ size = 20 }: { size?: number }) {
+  return (
+    <Svg size={size}>
+      <path d="M4 9h13v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5z" />
+      <path d="M17 11h1.5a2.5 2.5 0 0 1 0 5H17" />
+      <path d="M8 3.5v2.5M12 3.5v2.5" />
+    </Svg>
+  );
+}
+
 /** Points right; `.chev.open` turns it down. */
 export function ChevronIcon({ size = 12 }: { size?: number }) {
   return (

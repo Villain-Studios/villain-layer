@@ -1,5 +1,6 @@
 //! Agents waiting on you: the count on the dock icon, and a banner when one
-//! starts waiting while the window is in the background.
+//! starts waiting while the window is in the background. The same pass keeps
+//! the Mac awake while one is working (`awake.rs`).
 //!
 //! Here rather than in the webview: its polls stop while the window is away,
 //! and macOS may suspend a hidden webview's timers altogether — so the one
@@ -14,6 +15,7 @@ use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Manager};
 
+use crate::awake::{self, Awake};
 use crate::commands::{banner, AppState, CHAT_TASK_ID};
 use crate::messages::{self, Kind, Level, New};
 use crate::pty::{Activity, PaneInfo, PaneKind};
@@ -156,11 +158,15 @@ pub fn spawn(app: AppHandle) -> std::io::Result<()> {
         .spawn(move || {
             let mut watch = Watch::default();
             let mut badge: Option<usize> = None;
+            let mut awake = Awake::default();
             loop {
                 std::thread::sleep(TICK);
                 let state = app.state::<AppState>();
-                let on = state.config.read().ui.notify_waiting_agents;
-                let (count, news) = watch.pass(&state.ptys.attention(), Instant::now());
+                let ui = state.config.read().ui;
+                let on = ui.notify_waiting_agents;
+                let panes = state.ptys.attention();
+                awake.hold(awake::wanted(ui.keep_awake, &panes));
+                let (count, news) = watch.pass(&panes, Instant::now());
                 // Kept whatever the switch and wherever you are looking
                 // (MSG-2): the switch is about interrupting you.
                 messages::record_all(&app, record(&news, |id| task_name(&state, id)));

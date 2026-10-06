@@ -15,7 +15,7 @@ import { ReposView } from "./components/ReposView";
 import { ReviewsView } from "./components/ReviewsView";
 import { Settings } from "./components/Settings";
 import { UpdateFromBase } from "./components/UpdateFromBase";
-import { GearIcon } from "./components/icons";
+import { CupIcon, GearIcon } from "./components/icons";
 import { SidebarToggle } from "./components/ui";
 import { MessageCenter } from "./components/MessageCenter";
 import { Watchers } from "./Watchers";
@@ -101,12 +101,55 @@ function TopBar() {
             couldn&apos;t refresh
           </span>
         )}
+        <KeepAwake />
         <MessageCenter />
         <button className="icon-btn" title="Settings" onClick={() => toggleSettings(true)}>
           <GearIcon />
         </button>
       </div>
     </div>
+  );
+}
+
+/**
+ * Keep the Mac awake while an agent works (STATE-7). The switch is all this
+ * does: `attention.rs` holds the Mac awake, so it holds while the window is
+ * away, when this webview's timers may not run at all.
+ */
+function KeepAwake() {
+  const on = useStore((s) => s.settings?.ui.keep_awake ?? false);
+  const working = useStore(
+    (s) => s.panes.filter((p) => p.kind === "agent" && p.running && p.activity === "working").length,
+  );
+  const refreshSettings = useStore((s) => s.refreshSettings);
+  const fail = useStore((s) => s.fail);
+
+  async function toggle() {
+    // The prefs as saved now, so this cannot put back an older value.
+    const ui = useStore.getState().settings?.ui;
+    if (!ui) return;
+    try {
+      await api.setUiPrefs({ ...ui, keep_awake: !ui.keep_awake });
+      await refreshSettings();
+    } catch (e) {
+      fail(e);
+    }
+  }
+
+  const title = !on
+    ? "Keep the Mac awake while an agent is working"
+    : working
+      ? `Keeping the Mac awake: ${working} agent${working === 1 ? " is" : "s are"} working. Click to let it sleep.`
+      : "The Mac stays awake whenever an agent is working. None is now, so it may sleep. Click to turn off.";
+  return (
+    <button
+      className={`icon-btn awake${on ? " on" : ""}${on && working ? " holding" : ""}`}
+      title={title}
+      aria-pressed={on}
+      onClick={() => void toggle()}
+    >
+      <CupIcon />
+    </button>
   );
 }
 

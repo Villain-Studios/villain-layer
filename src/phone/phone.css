@@ -89,7 +89,25 @@ input:focus { outline: none; border-color: var(--accent-dim); }
 .summary { padding: 14px 16px 4px; color: var(--dim); font-size: 14px; }
 .group { margin: 10px 12px; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
 .group h2 { font-size: 14px; font-weight: 600; margin: 0; padding: 10px 12px; display: flex; gap: 8px; align-items: baseline; }
-.group-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.group.waiting { border-color: rgba(251, 191, 36, 0.45); }
+.group-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 0;
+  padding: 12px;
+}
+.chev { color: var(--dim); font-size: 20px; line-height: 1; width: 12px; flex: none; transition: transform 0.15s; }
+.chev.open { transform: rotate(90deg); }
+.group-title { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.group-name { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.group-sum { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--dim); }
+.group-sum .needs { color: var(--amber); margin-left: 3px; }
+.group-sum .dot + span { margin-left: 3px; }
 .key { font-family: var(--mono); font-size: 12px; color: var(--accent); flex: none; }
 .pane-row {
   display: flex;
@@ -115,6 +133,20 @@ input:focus { outline: none; border-color: var(--accent-dim); }
 
 .term-wrap { flex: 1; min-height: 0; overflow: auto; padding: 4px; background: var(--bg); }
 .term-wrap.zoomed { overflow: scroll; }
+/* Rendered, not shown: the text view reads its rows. */
+.term-wrap.hidden { position: absolute; visibility: hidden; pointer-events: none; height: 0; flex: none; padding: 0; }
+.term-text {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 14px;
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
 .term { width: max-content; }
 .term .xterm-viewport { overflow-y: hidden; }
 

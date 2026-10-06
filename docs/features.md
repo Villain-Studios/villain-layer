@@ -1107,12 +1107,18 @@ the home network). How to set either up is in `docs/phone.md`.
 - **PHONE-5** The overview MUST show every task with its panes and their
   states, the ones that need you first by the dock count's rule (STATE-4),
   and change when they do, pushed, not polled. Panes are called as in the
-  window (PANE-12).
+  window (PANE-12). A task starts closed, showing a dot per pane and how
+  many need you or are working; the phone remembers which ones were
+  opened. The ticket key is shown once, not again in a name that starts
+  with it.
 - **PHONE-6** A phone MUST follow a pane's output from its own position
-  and never change the window's feed (`watched`, `sent`). It draws at the
-  size the window gave the terminal and never resizes it, which would
-  scramble the Mac's view. Opening a pane on the phone is looking at it:
-  done becomes idle (STATE-3).
+  and never change the window's feed (`watched`, `sent`). It runs the
+  output through a terminal at the size the window gave it and never
+  resizes it, which would scramble the Mac's view. It shows that terminal's
+  rows as text wrapped to the phone, without box frames and alignment
+  padding (`readable.ts`): an agent's 100-odd columns fitted to a phone
+  were six pixels a letter. "Screen" shows the terminal itself. Opening a
+  pane on the phone is looking at it: done becomes idle (STATE-3).
 - **PHONE-7** A phone MUST type only with "Let phones type into agents"
   on, and only into a running agent, never a shell. It sends a line, made
   one line and stripped of control characters, at most 512 bytes (PANE-11),

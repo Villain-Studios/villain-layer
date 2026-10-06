@@ -3,6 +3,7 @@ import { Terminal } from "@xterm/xterm";
 import { decode, TERMINAL_FONT, TERMINAL_THEME } from "../lib/terminal";
 import { follow, phoneApi } from "./client";
 import { stateOf } from "./Overview";
+import { readable, type Row } from "./readable";
 import type { OutputLine, PhonePane } from "./types";
 
 /** The key bar (PHONE-7): what an agent's questions and menus take. */
@@ -21,12 +22,27 @@ const KEYS: [string, string][] = [
 
 /** A monospace cell is about this much of the font size wide. */
 const CELL = 0.6;
+/** The most text lines kept on screen: the end of the conversation. */
+const TEXT_LINES = 600;
+
+type Mode = "text" | "screen";
+const MODE = "villain.phone.mode";
+
+function savedMode(): Mode {
+  try {
+    return localStorage.getItem(MODE) === "screen" ? "screen" : "text";
+  } catch {
+    return "text";
+  }
+}
 
 /**
- * One pane, drawn at the size the window gave it and never resized from
- * here: the phone changing the terminal's size would scramble the Mac's
- * view of it (PHONE-6). It is scaled to the phone's width instead; "Zoom"
- * draws it larger, to be scrolled sideways.
+ * One pane (PHONE-6). Its output goes through a real terminal at the size
+ * the window gave it, never resized from here: the phone changing the
+ * terminal's size would scramble the Mac's view of it. By default that
+ * terminal's rows are shown as text, wrapped to the phone (`readable.ts`);
+ * "Screen" shows the terminal itself, scaled to fit, and "Zoom" larger, to
+ * be scrolled sideways.
  */
 export function PaneView({
   id, pane, typing, onBack,
@@ -40,6 +56,9 @@ export function PaneView({
   const term = useRef<Terminal | null>(null);
   const [size, setSize] = useState<[number, number]>([30, 100]);
   const [zoom, setZoom] = useState(false);
+  const [mode, setMode] = useState<Mode>(savedMode);
+  const [lines, setLines] = useState<string[]>([]);
+  const textBox = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(() => window.innerWidth);
   const [exited, setExited] = useState<number | null | undefined>(undefined);
   const [live, setLive] = useState(false);
@@ -66,6 +85,21 @@ export function PaneView({
     if (host.current) t.open(host.current);
     term.current = t;
     let have: number | null = null;
+    // The text is read back from the terminal at most once a frame.
+    let reading = 0;
+    const read = () => {
+      if (reading) return;
+      reading = requestAnimationFrame(() => {
+        reading = 0;
+        const b = t.buffer.active;
+        const rows: Row[] = [];
+        for (let i = 0; i < b.length; i++) {
+          const l = b.getLine(i);
+          if (l) rows.push({ text: l.translateToString(true), wrapped: l.isWrapped });
+        }
+        setLines(readable(rows).slice(-TEXT_LINES));
+      });
+    };
     const stop = follow(
       () => `/api/panes/${encodeURIComponent(id)}/output${have === null ? "" : `?from=${have}`}`,
       (raw) => {
@@ -76,7 +110,7 @@ export function PaneView({
           setSize([rows, cols]);
         } else if ("data" in line) {
           if (line.reset) t.reset();
-          t.write(decode(line.data));
+          t.write(decode(line.data), read);
           have = line.end;
         } else if ("exit" in line) {
           setExited(line.exit);
@@ -90,6 +124,7 @@ export function PaneView({
     );
     return () => {
       stop();
+      cancelAnimationFrame(reading);
       t.dispose();
       term.current = null;
     };
@@ -101,6 +136,22 @@ export function PaneView({
   useEffect(() => {
     if (term.current) term.current.options.fontSize = font;
   }, [font]);
+
+  // Follow the end, unless you have scrolled up to read something.
+  const pinned = useRef(true);
+  useEffect(() => {
+    const el = textBox.current;
+    if (el && pinned.current) el.scrollTop = el.scrollHeight;
+  }, [lines, mode]);
+
+  function choose(m: Mode) {
+    setMode(m);
+    try {
+      localStorage.setItem(MODE, m);
+    } catch {
+      // Remembered until the page closes, then.
+    }
+  }
 
   const st = pane ? stateOf(pane) : null;
   const canType = typing && pane?.kind === "agent" && pane.running && exited === undefined && !gone;
@@ -116,12 +167,30 @@ export function PaneView({
             </div>
           )}
         </div>
-        <button className={`chip-btn${zoom ? " on" : ""}`} onClick={() => setZoom((z) => !z)}>
-          Zoom
+        <button className="chip-btn" onClick={() => choose(mode === "text" ? "screen" : "text")}>
+          {mode === "text" ? "Screen" : "Text"}
         </button>
+        {mode === "screen" && (
+          <button className={`chip-btn${zoom ? " on" : ""}`} onClick={() => setZoom((z) => !z)}>
+            Zoom
+          </button>
+        )}
         <span className={`dot ${live ? "live" : "gone"}`} title={live ? "Connected" : "Not connected"} />
       </header>
-      <div className={`term-wrap${zoom ? " zoomed" : ""}`}>
+      {mode === "text" && (
+        <div
+          ref={textBox}
+          className="term-text"
+          onScroll={(e) => {
+            const el = e.currentTarget;
+            pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+          }}
+        >
+          {lines.length ? lines.join("\n") : <span className="muted">Nothing printed yet.</span>}
+        </div>
+      )}
+      {/* Always there: it is what turns the output into rows, shown or not. */}
+      <div className={`term-wrap${zoom ? " zoomed" : ""}${mode === "text" ? " hidden" : ""}`}>
         <div ref={host} className="term" />
       </div>
       {exited !== undefined && <div className="note">Exited{exited !== null ? ` with ${exited}` : ""}.</div>}

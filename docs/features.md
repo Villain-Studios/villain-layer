@@ -437,6 +437,9 @@ new one. Commit commits every repo with changes, with one message.
   error, never a clean review. Notes are held per task while the app
   runs: kept by the tab, they were lost by switching to another, and a
   run takes a minute or more.
+- **DIFF-7** The file list MUST fold: each folder, and, in a task with
+  more than one changed repo, each repo under its name. A fold belongs to
+  its repo, so folding `src` in one repo leaves another repo's `src` open.
 
 Code: `commands/diff.rs`, `commands/reviewer.rs`, `git.rs`, `DiffView.tsx`,
 `DiffNote.tsx`.

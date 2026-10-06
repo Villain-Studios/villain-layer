@@ -955,7 +955,13 @@ textarea { resize: vertical; font-family: var(--mono); }
 .repo-tag.active { color: var(--accent); border-color: var(--accent-dim); }
 
 .diff-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   padding: 8px 6px 3px;
+  cursor: pointer;
+  user-select: none;
+  border-radius: var(--radius);
   font-size: 11.5px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -963,6 +969,7 @@ textarea { resize: vertical; font-family: var(--mono); }
   font-family: var(--sans);
   font-weight: 600;
 }
+.diff-group:hover { background: var(--panel-2); }
 .diff-summary {
   flex: none;
   display: flex;

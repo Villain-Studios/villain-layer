@@ -316,25 +316,28 @@ export function DiffView({ task }: { task: TaskView }) {
       .filter((g) => g.files.length > 0);
   }, [files, task.checkouts]);
 
-  /// A tree row per node: folders fold away, files select.
-  function renderNodes(nodes: Node[], depth: number) {
+  /// A tree row per node: folders fold away, files select. Folds are kept
+  /// per repo: keyed by path alone, folding `src` in one repo folded it in
+  /// every repo of the task.
+  function renderNodes(nodes: Node[], depth: number, repo: string) {
     return nodes.map((node) => {
       // Depth indent only — the chevron column is reserved on every row so a
       // file under a folder lines up with the folder's name, not its triangle.
       const pad = { paddingLeft: 4 + depth * 14 };
       if (!node.file) {
-        const closed = shut[node.path] ?? false;
+        const key = `${repo}:${node.path}`;
+        const closed = shut[key] ?? false;
         return (
           <div key={`d:${node.path}`}>
             <div
               className="diff-dir"
               style={pad}
-              onClick={() => setShut((c) => ({ ...c, [node.path]: !closed }))}
+              onClick={() => setShut((c) => ({ ...c, [key]: !closed }))}
             >
               <span className={`chev${closed ? "" : " open"}`}><ChevronIcon /></span>
               <span className="p">{node.name}</span>
             </div>
-            {!closed && renderNodes(node.children, depth + 1)}
+            {!closed && renderNodes(node.children, depth + 1, repo)}
           </div>
         );
       }
@@ -768,17 +771,25 @@ export function DiffView({ task }: { task: TaskView }) {
               onSelect={setSelected}
               notesPerFile={notesPerFile}
             />
-          ) : groups.map((g) => (
-            <div key={g.checkout.id}>
-              {multi && (
-                <div className="diff-group">
-                  {g.checkout.project_name}
-                  <span style={{ color: "var(--dimmer)" }}> · {g.files.length}</span>
-                </div>
-              )}
-              {renderNodes(toTree(g.files), 0)}
-            </div>
-          ))}
+          ) : groups.map((g) => {
+            // A repo's own fold is keyed apart from its folders' (`repo:path`).
+            const closed = multi && (shut[g.checkout.id] ?? false);
+            return (
+              <div key={g.checkout.id}>
+                {multi && (
+                  <div
+                    className="diff-group"
+                    onClick={() => setShut((c) => ({ ...c, [g.checkout.id]: !closed }))}
+                  >
+                    <span className={`chev${closed ? "" : " open"}`}><ChevronIcon /></span>
+                    {g.checkout.project_name}
+                    <span style={{ color: "var(--dimmer)" }}>· {g.files.length}</span>
+                  </div>
+                )}
+                {!closed && renderNodes(toTree(g.files), 0, g.checkout.id)}
+              </div>
+            );
+          })}
         </div>
 
         <div

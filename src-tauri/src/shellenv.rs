@@ -30,12 +30,28 @@ fn inherited_by_accident(key: &str) -> bool {
         || key.starts_with("VILLAIN_")
 }
 
+/// What a Claude Code session sets for the processes it starts. The app
+/// carries them when it was opened from one (`open`, `bun run dev:app`), and
+/// every Claude in its panes then took itself for that session's subagent:
+/// `CLAUDE_CODE_CHILD_SESSION` turned transcript saving off, so `--continue`
+/// had nothing to come back to. Dropped from the app's own environment only,
+/// before the login shell is asked, so one the user exports there survives.
+fn from_a_claude_session(key: &str) -> bool {
+    matches!(key, "CLAUDECODE" | "CLAUDE_PID" | "CLAUDE_EFFORT")
+        || key.starts_with("CLAUDE_CODE_")
+        || key.starts_with("CLAUDE_AGENT_SDK_")
+        || key.starts_with("CLAUDE_PREVIEW_")
+}
+
 /// What an interactive login shell prints for `env -0` after [`MARK`], or
 /// None if it did not answer in time.
-fn ask_login_shell() -> Option<Vec<u8>> {
+fn ask_login_shell(own: &HashMap<String, String>) -> Option<Vec<u8>> {
     use std::io::Read;
     let mut child = Command::new(login_shell())
         .args(["-ilc", &format!("printf '\\0{MARK}\\0'; env -0")])
+        // The shell would otherwise hand back whatever the app inherited.
+        .env_clear()
+        .envs(own)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
@@ -91,8 +107,10 @@ fn parse_env(out: &[u8]) -> Vec<(String, String)> {
 /// The environment of an interactive login shell, falling back to our own.
 pub fn user_env() -> &'static HashMap<String, String> {
     ENV.get_or_init(|| {
-        let mut env: HashMap<String, String> = std::env::vars().collect();
-        if let Some(out) = ask_login_shell() {
+        let mut env: HashMap<String, String> = std::env::vars()
+            .filter(|(k, _)| !from_a_claude_session(k))
+            .collect();
+        if let Some(out) = ask_login_shell(&env) {
             env.extend(parse_env(&out));
         }
         env.retain(|k, _| !inherited_by_accident(k));
@@ -159,6 +177,15 @@ mod tests {
     }
 
     #[test]
+    fn a_pane_is_not_mistaken_for_the_child_of_the_claude_that_opened_the_app() {
+        assert!(from_a_claude_session("CLAUDE_CODE_CHILD_SESSION"));
+        assert!(from_a_claude_session("CLAUDECODE"));
+        assert!(from_a_claude_session("CLAUDE_CODE_SESSION_ID"));
+        assert!(!from_a_claude_session("CLAUDE_CONFIG_DIR"), "the user's own, set in their shell");
+        assert!(!from_a_claude_session("ANTHROPIC_API_KEY"));
+    }
+
+    #[test]
     fn a_pane_env_looks_like_a_real_terminal() {
         let env = user_env();
         assert_eq!(env.get("TERM").map(String::as_str), Some("xterm-256color"));
@@ -167,5 +194,7 @@ mod tests {
         // FORCE_COLOR=0 is the usual poison from a non-TTY scrape; any other
         // value the user set on purpose is fine, but zero must not survive.
         assert_ne!(env.get("FORCE_COLOR").map(String::as_str), Some("0"));
+        // Telling only when the tests run under Claude Code, which is often.
+        assert!(!env.contains_key("CLAUDE_CODE_CHILD_SESSION"));
     }
 }

@@ -252,7 +252,9 @@ ones that need you first.
   error, never a silent fallback to `$HOME`, where `--continue` resumes the
   wrong conversation.
 - **PANE-4** A pane's environment MUST be the user's login shell's
-  (PATH, etc.), minus this app's own `VILLAIN_*` values. It adds
+  (PATH, etc.), minus this app's own `VILLAIN_*` values and the
+  `CLAUDE_CODE_*` markers of a Claude Code session the app was opened
+  from (with them, Claude saves no transcript). It adds
   `VILLAIN_PANE` and the hook URL and token for the pane.
 - **PANE-5** Stopping MUST be graceful then certain. An agent gets SIGTERM
   (a shell SIGHUP), up to 5 seconds (2 when a whole task is being

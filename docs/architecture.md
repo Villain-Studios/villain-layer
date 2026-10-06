@@ -20,6 +20,7 @@ to change. What the app *does* is in [`features.md`](features.md).
  │   ├─ agents.rs    agent CLI catalogue, per-CLI launch wiring                   │
  │   ├─ integrations/ Jira, GitHub, Slack HTTP clients     secrets.rs → keychain  │
  │ mcp.rs     MCP server on 127.0.0.1 for agents; /hook/<pane> for their states   │
+ │ phone/     a paired phone's server, on the network only while a way in is on  │
  │ attention.rs, news.rs   background watchers: dock count, banners, keep awake   │
  └───────────────┬───────────────────────────────────────────────┬──────────────┘
                  │ PTY                                             │ HTTPS
@@ -124,6 +125,7 @@ for, and the reverse, and that each is in this table.
 | `app:notices` | none | a notice was queued after startup (`commands::notify`) | `Watchers.tsx` → `takeNotices`, as toasts |
 | `messages:changed` | none | the message center's log changed: recorded, read or cleared (`messages.rs`) | `Watchers.tsx` → `refreshMessages` |
 | `notes:changed` | none | an agent remembered, checked or forgot a repo note (`notes.rs`, MEM-5) | `ReposView.tsx`, while open → `listRepoNotes` |
+| `phone:changed` | none | phone access changed: a way in switched, a phone paired, forgotten, connected or gone (`phone/`) | `PhoneSettings.tsx` → `phoneStatus`, for Settings and the top bar's phone |
 
 What still polls, and why, is marked at each `setInterval` with
 `// guard: allow poll — <reason>`. Everything polls only while the window is
@@ -277,6 +279,37 @@ push.
 - **Slack** accepts either a bot token or a webhook. Posts are gated by
   `slack_allows` in the backend and clipped to Slack's 3000-character
   section limit.
+
+## The phone server
+
+`phone/` is a second axum server, apart from the MCP server so the agents'
+way to Jira, GitHub and Slack never leaves loopback (PHONE-1). It runs while
+Settings → Phone has a way in on, on a fixed port, and checks in this
+order: the caller's address against the ways that are on (`net.rs`, a
+middleware on every route), then a paired phone's bearer token (the
+`Device` extractor) on everything but the page and pairing.
+
+- **The page** is `phone.html` and `src/phone/`, a small React app of its
+  own built beside the window's (`vite.config.ts`). It talks `fetch`, never
+  `invoke`. The server reads it through Tauri's asset resolver: embedded in
+  a release, from `dist/` in a dev build.
+- **Streams** are newline-delimited JSON on a plain response, read with
+  `fetch`: `EventSource` cannot send the token as a header. Each has a
+  heartbeat every 20 s, so a phone that went away is found out on the next
+  write, and the phone takes 45 s of silence as a dead connection.
+- **The overview** is pushed: the server listens inside Rust for
+  `pty:activity`, `pty:exit` and `pty:notice` and rings a `watch` channel
+  that every `/api/changes` stream waits on; the phone then asks for the
+  overview again.
+- **A pane's output** comes from `pty/feed.rs`: a `watch` the reader thread
+  rings on every read and on exit, and reads by byte position from the same
+  scrollback the window's catch-up uses. It never touches `watched` or
+  `sent`, which say what the window has been given.
+- **State** is one `static` (`phone()`): the ways in, the tokens read from
+  the keychain once, a pairing code, and the streams open per phone (the
+  top bar's phone). `apply` starts, stops or adjusts the server, one at a
+  time; stopping signals the streams to end so the graceful shutdown does
+  not wait on them forever.
 
 ## The frontend
 

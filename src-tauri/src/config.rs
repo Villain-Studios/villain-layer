@@ -16,7 +16,9 @@ use tauri::{AppHandle, Manager};
 use crate::error::{Error, Result};
 
 mod integrations;
+mod phone;
 pub use integrations::{FlowStatus, GithubConfig, JiraConfig, SlackConfig};
+pub use phone::{PhoneConfig, PhoneDevice};
 
 pub const SCHEMA_VERSION: u32 = 2;
 
@@ -282,6 +284,8 @@ pub struct AppConfig {
     pub github: Option<GithubConfig>,
     #[serde(default)]
     pub slack: Option<SlackConfig>,
+    #[serde(default)]
+    pub phone: PhoneConfig,
 }
 
 impl AppConfig {

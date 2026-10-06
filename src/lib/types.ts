@@ -387,6 +387,28 @@ export interface Settings {
   jira_connected: boolean;
   github_connected: boolean;
   slack_connected: boolean;
+  /** A phone's way in is open, which widens Keep awake (PHONE-8). */
+  phone_open: boolean;
+}
+
+/** Settings → Phone (PHONE-*), as `phone::status` reports it. */
+export interface PhoneStatus {
+  tailscale: boolean;
+  home: boolean;
+  typing: boolean;
+  port: number;
+  /** The server is up: a way in is on and the port was free. */
+  listening: boolean;
+  error: string | null;
+  /** This Mac's addresses on the ways that are on, Tailscale's first. */
+  addresses: { way: "tailscale" | "home"; ip: string; interface: string }[];
+  devices: { id: string; name: string; paired_at: string; connected: boolean }[];
+  pairing: PhonePairing | null;
+}
+
+export interface PhonePairing {
+  code: string;
+  seconds_left: number;
 }
 
 /**

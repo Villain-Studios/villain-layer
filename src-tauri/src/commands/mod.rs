@@ -60,7 +60,7 @@ pub struct AppNotice {
 /// `spawn_blocking`, not the async runtime: this work is subprocesses and
 /// file I/O, and putting it on tokio's worker threads would starve the MCP
 /// server and the Jira/GitHub clients that share them.
-pub(crate) async fn blocking<T, F>(app: tauri::AppHandle, f: F) -> crate::error::Result<T>
+pub(crate) async fn blocking<R: tauri::Runtime, T, F>(app: tauri::AppHandle<R>, f: F) -> crate::error::Result<T>
 where
     F: FnOnce(&AppState) -> crate::error::Result<T> + Send + 'static,
     T: Send + 'static,
@@ -128,6 +128,7 @@ mod outgoing;
 mod landed;
 mod task_context;
 mod notes;
+mod phone;
 
 pub use projects::*;
 pub use repos::*;
@@ -148,6 +149,7 @@ pub use open_prs::*;
 pub use outgoing::*;
 pub(crate) use landed::{advance, landed};
 pub use notes::*;
+pub use phone::*;
 
 #[cfg(test)]
 mod tests {

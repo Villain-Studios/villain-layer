@@ -49,6 +49,8 @@ import type {
   MessageKind,
   MessageLevel,
   Target,
+  PhoneStatus,
+  PhonePairing,
 } from "./types";
 
 export const api = {
@@ -304,6 +306,13 @@ export const api = {
   disconnect: (which: "jira" | "github" | "slack") => invoke<void>("disconnect", { which }),
   cursorIdeInstalled: () => invoke<boolean>("cursor_ide_installed"),
   openInCursor: (path: string) => invoke<void>("open_in_cursor", { path }),
+
+  // phone (PHONE-*)
+  phoneStatus: () => invoke<PhoneStatus>("phone_status"),
+  setPhoneAccess: (tailscale: boolean, home: boolean, typing: boolean) =>
+    invoke<PhoneStatus>("set_phone_access", { tailscale, home, typing }),
+  phonePair: () => invoke<PhonePairing>("phone_pair"),
+  phoneForget: (id: string) => invoke<void>("phone_forget", { id }),
 };
 
 export function errMessage(e: unknown): string {

@@ -1691,6 +1691,15 @@ textarea { resize: vertical; font-family: var(--mono); }
 .icon-btn.awake.on { border-color: var(--accent-dim); }
 .icon-btn.awake.holding { color: var(--accent); }
 
+/* Phone access (PHONE-*): a phone connected, and Settings → Phone. */
+.icon-btn.phone-on { color: var(--green); }
+.phone-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; font-size: 13px; }
+.phone-list code, .phone-code { user-select: text; font-family: var(--mono); }
+.phone-pairing { display: flex; flex-direction: column; gap: 4px; }
+.phone-code { font-size: 28px; letter-spacing: 0.12em; color: var(--accent); }
+.phone-error { color: var(--red); font-size: 13px; margin-bottom: 12px; }
+.phone-hint { color: var(--dim); font-size: 12px; }
+
 /* An agent that has run out of budget says so where you are looking. */
 .limit-banner {
   display: flex;

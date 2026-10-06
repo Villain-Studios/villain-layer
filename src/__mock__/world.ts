@@ -79,6 +79,7 @@ const disconnected: Settings = {
   jira_connected: false,
   github_connected: false,
   slack_connected: false,
+  phone_open: false,
 };
 
 const agents: AgentStatus[] = [

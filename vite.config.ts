@@ -29,4 +29,12 @@ export default defineConfig(() => ({
       ignored: ["**/src-tauri/**"],
     },
   },
+
+  // The window's page, and the one the app serves to a paired phone
+  // (src-tauri/src/phone). mock.html and phone-mock.html stay dev-only.
+  build: {
+    rollupOptions: {
+      input: { main: "index.html", phone: "phone.html" },
+    },
+  },
 }));

@@ -116,10 +116,9 @@ impl Browser {
         frames: Channel<InvokeResponseBody>,
     ) -> Result<()> {
         let page = self.page(app, task).await?;
-        let resize = {
+        {
             let mut inner = self.inner.lock();
             let tab = inner.active_mut(task).ok_or_else(|| Error::Other("the tab closed".into()))?;
-            let resize = tab.viewport != viewport;
             tab.viewport = viewport;
             let session = tab.session.clone();
             if let Some(old) = inner.watch.take().filter(|w| w.session != session) {
@@ -138,15 +137,16 @@ impl Browser {
                 still_due: None,
                 recent: Default::default(),
             });
-            resize
-        };
-        if resize {
-            page.call(
-                "Emulation.setDeviceMetricsOverride",
-                json!({ "width": viewport.width, "height": viewport.height, "deviceScaleFactor": viewport.scale, "mobile": false }),
-            )
-            .await?;
         }
+        // Every time, not only when the panel's size changed: a tab shown
+        // again after another one in front of it closed kept its layout but
+        // was drawn at Chrome's window size, and the panel stretched it, text
+        // squeezed narrow and tall.
+        page.call(
+            "Emulation.setDeviceMetricsOverride",
+            json!({ "width": viewport.width, "height": viewport.height, "deviceScaleFactor": viewport.scale, "mobile": false }),
+        )
+        .await?;
         page.call("Page.startScreencast", screencast(viewport, false)).await?;
         Ok(())
     }
@@ -397,6 +397,52 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// Against a real Chrome: a tab shown again after the one in front of it
+    /// closed is drawn at the panel's size. It kept the panel's layout but
+    /// was drawn at Chrome's window size, and the panel stretched it: text
+    /// squeezed narrow and tall.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_tab_shown_again_after_another_closes_is_drawn_at_the_panel_s_size() {
+        let Some((app, root, _)) = app_with_task() else { return };
+        let state = app.state::<AppState>();
+        let base = serve(HOME).await;
+        let (tx, frames) = std::sync::mpsc::channel::<Vec<u8>>();
+        let channel = || {
+            let tx = tx.clone();
+            Channel::new(move |body| {
+                if let InvokeResponseBody::Raw(b) = body {
+                    let _ = tx.send(b);
+                }
+                Ok(())
+            })
+        };
+        let panel = Viewport { width: 900, height: 910, scale: 2.0 };
+        state.browser.watch(app.handle(), "t1", panel, channel()).await.unwrap();
+        let page = state.browser.page(app.handle(), "t1").await.unwrap();
+        page.navigate(&format!("{base}/")).await.unwrap();
+        page.settle(&state.browser).await;
+
+        // An agent opens a tab and closes it; the panel watches whatever is
+        // active each time, as it does when the active tab changes.
+        let other = state.browser.new_tab(app.handle(), "t1", Some(&format!("{base}/two"))).await.unwrap();
+        other.settle(&state.browser).await;
+        state.browser.watch(app.handle(), "t1", panel, channel()).await.unwrap();
+        let id = state.browser.tabs("t1").iter().find(|t| t.active).unwrap().id.clone();
+        state.browser.close_tab(app.handle(), "t1", &id).await.unwrap();
+        state.browser.watch(app.handle(), "t1", panel, channel()).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(800)).await;
+
+        let mut newest = None;
+        while let Ok(f) = frames.try_recv() {
+            newest = jpeg_size(&f);
+        }
+        assert_eq!(newest, Some((1800, 1820)), "drawn at the panel's size, sharp");
+
+        state.browser.shutdown(Duration::from_secs(3));
+        state.ptys.shutdown(Duration::from_secs(1));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// A measurement rather than a test, like `echo_latency`: how long a
     /// scroll takes to reach the app as a frame, the frame rate and size
     /// while scrolling, and the frames once it stops, on a long page at a
@@ -489,14 +535,19 @@ mod tests {
         page.navigate(&format!("{base}/")).await.unwrap();
         page.settle(&state.browser).await;
 
-        // The newest frame: one drawn before the tab took the panel's size
-        // can still arrive first.
-        let mut jpeg = frames.recv_timeout(Duration::from_secs(10)).expect("a frame");
-        while let Ok(newer) = frames.recv_timeout(Duration::from_millis(500)) {
-            jpeg = newer;
+        // Frames while the page loads are fast ones, at a pixel per CSS
+        // pixel; the settled page comes sharp, however loaded the machine.
+        let mut seen = Vec::new();
+        let until = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < until {
+            let Ok(jpeg) = frames.recv_timeout(Duration::from_millis(200)) else { continue };
+            assert_eq!(&jpeg[..2], &[0xFF, 0xD8], "a JPEG");
+            seen.push(jpeg_size(&jpeg));
+            if seen.last() == Some(&Some((1280, 960))) {
+                break;
+            }
         }
-        assert_eq!(&jpeg[..2], &[0xFF, 0xD8], "a JPEG");
-        assert_eq!(jpeg_size(&jpeg), Some((1280, 960)), "as sharp as the panel: a device pixel each");
+        assert_eq!(seen.last(), Some(&Some((1280, 960))), "as sharp as the panel, a device pixel each: {seen:?}");
         let size = page.eval("[innerWidth, innerHeight, devicePixelRatio]").await.unwrap();
         assert_eq!(size, json!([640, 480, 2]), "laid out at the panel's size");
 

@@ -422,8 +422,7 @@ new one. Commit commits every repo with changes, with one message.
   (`api/src/auth.ts:42`), so it is never ambiguous which repo is meant.
 - **DIFF-6** Review MUST run a fresh one-shot model over the task's whole
   branch in every repo: its commits, the diff as PR-4 gathers it, the
-  saved ticket (as data, not instructions), and, for a review task, whose
-  pull request it is. It runs through Claude Code on the model chosen in
+  saved ticket (as data, not instructions). It runs through Claude Code on the model chosen in
   Settings (Sonnet by default), may read the repositories, and may not
   write, run or fetch anything. Its findings come back as notes on lines,
   each a bug, a risk or a nit, and each a suggestion until kept: only
@@ -440,6 +439,16 @@ new one. Commit commits every repo with changes, with one message.
 - **DIFF-7** The file list MUST fold: each folder, and, in a task with
   more than one changed repo, each repo under its name. A fold belongs to
   its repo, so folding `src` in one repo leaves another repo's `src` open.
+- **DIFF-8** A note MUST be able to say what the agent needs: any note,
+  the reviewer's findings included, can be edited, and a finding edited is
+  yours and kept. "Suggest a change" adds a suggestion block holding the
+  line's code, selected, so typing replaces it with what it should read. A
+  suggestion block is shown as a suggested change wherever notes and GitHub
+  comments are drawn. A removed line can be commented on, numbered in the
+  old version of the file; shift-clicking a second line number on the same
+  side stretches the note being written over every line between. Both go
+  to an agent as `file:12-16` or `file:3 (removed)`, with the lines they
+  read.
 
 Code: `commands/diff.rs`, `commands/reviewer.rs`, `git.rs`, `DiffView.tsx`,
 `DiffNote.tsx`.
@@ -748,73 +757,18 @@ used to show only the first, so seven PRs of yours read as none.
   so when there are more. Before this, every card was a title and an
   author: a one-line fix looked like a rewrite, and a PR you had approved
   before its author pushed again looked like one you had already done.
-- **REV-10** A PR in "To review" MUST be reviewable here, in the Reviews
-  view and nowhere else: "Review" opens its review page, its plan
-  (REV-12) beside its diff, measured from where it left its base, and
-  Submit review in its header. A
-  review is never shown as a task: not in the sidebar, not under Work, not
-  in a ticket's "open its task". Shown as one, it sat among your work with
-  a Commit button, an Uncommitted tab and a "never pushed" that meant
-  nothing, and nothing on it said what to do. Underneath it is a checkout
-  of the app's copy (TASK-3) on the PR's head as `refs/pull/<n>/head`
-  gives it, under the app's own branch name (`review/<repo>-<n>`), so
-  Claude can read around the diff and Cursor can open it. The PR's own
-  branch is never used: a fork's is not on origin, and one of the same
-  name there is someone else's code. A second click continues the same
-  review. Reviews you have started are listed under "In progress", also
-  once the PR has left your queue (posting a review takes it out).
-  "Finish" removes the checkout and any notes not posted. A review is
-  never pushed and never opens a pull request (both are refused, from the
-  UI and from an agent), and is left out of the PR sweep, so its ticket
-  never moves (TKT-8). "Take latest" moves it to the PR's head now,
-  following a rewritten head too, and refuses while it holds edits to
-  tracked files, an update under way, or commits of its own; the page
-  says when "To review" has seen a newer head than the one it is on.
-  Its context file (PANE-13) tells an agent there which pull request and
-  commit it is reviewing, and that it never pushes, opens pull requests or
-  comments on GitHub: agents run git themselves.
-- **REV-11** A review task's notes MUST be postable to its PR as one
-  GitHub review: a verdict (comment, approve, request changes), a summary,
-  and each note a comment on its line, pinned to the commit the review was
-  taken at. Submit review sits in the review's header, as on GitHub,
-  counting the comments waiting; its dropdown shows all of it before
-  anything is sent, says how many findings are still undecided and left
-  out, and posts once, with one click. A note on a line outside the PR's diff goes
-  into the body under its `file:line`; if GitHub still refuses a line, the
-  review is posted with every note in its body, and says so. It is
-  refused while the worktree is not at that commit or holds edits to
-  tracked files, since its line numbers would then be another version's.
-  Posted notes leave the Diff tab. Reviewing here used to end in copying
-  each note into GitHub by hand.
-- **REV-12** A review MUST start from a plan: opening one the first time
-  runs Claude (DIFF-6), which also answers with a summary of the change
-  and where its risk is, and an order to read the files in, each with
-  why: start here, tests, then everything it left out, then low risk
-  (translations, generated files, styles, renames), folded. The plan
-  stands where the folder tree stands for your own work, with a Viewed
-  tick per file and how many of how many are viewed; ticking the open
-  file, there or in its header, opens the next one not viewed. Viewed
-  counts at the commit the review is on, so a later push starts it over.
-  In folder order, 36 files gave no hint of which three mattered.
-- **REV-13** A comment MUST be able to say what GitHub's can: any note,
-  Claude's findings included, can be edited, and a finding edited is
-  yours and kept. "Suggest a change" adds a GitHub suggestion block
-  holding the line's code, selected, so typing replaces it with what it
-  should read; posted, the author applies it from GitHub in one click.
-  A suggestion block is shown as a suggested change wherever notes and
-  GitHub comments are drawn.
-  A removed line can be commented on, numbered in the old version of the
-  file; shift-clicking a second line number on the same side stretches
-  the note being written over every line between. Both go to GitHub as
-  it takes them (`side`, `start_line`), a range only when it lies within
-  one hunk, else into the body under `file:12-16`; and to an agent as
-  `file:12-16` or `file:3 (removed)`, with the lines they read.
+- **REV-10** A PR in "To review" MUST open on GitHub, where it is
+  reviewed. Reviewing it here (a checkout of its own, Claude's reading
+  plan and findings beside its diff, and the review posted from the app)
+  shipped in 0.5.0 and was taken out: the page was the Diff tab for your
+  own work with a review laid over it, and it did not read as a review. A
+  review checkout left from 0.5.0 lists as an ordinary task, named
+  `Review: <title>`, to be deleted. It is still never pushed nor opened as
+  a pull request, and its ticket never moves.
 
 Code: `commands/github.rs` (`review_queue`, `github_review_queue`),
 `integrations/github/authored.rs`, `integrations/github/requested.rs`,
-`commands/pr_task.rs`, `git/review.rs`, `commands/post_review.rs`,
-`integrations/github/posting.rs`, `ReviewsView.tsx`, `ReviewPage.tsx`,
-`ReviewHeader.tsx`, `PostReview.tsx`.
+`commands/pr_task.rs`, `ReviewsView.tsx`.
 
 ## 11. Notifications
 

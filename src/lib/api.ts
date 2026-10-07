@@ -32,8 +32,6 @@ import type {
   ReviewComment,
   ReviewQueue,
   ReviewerRun,
-  ReviewVerdict,
-  PostedReview,
   RepoOutgoing,
   Settings,
   SlackConfig,
@@ -100,16 +98,8 @@ export const api = {
   /** The task for one of your pull requests, made on its branch if there is none (REV-7). */
   taskForPr: (repo: string, head: string, base: string, title: string) =>
     invoke<Task>("task_for_pr", { repo, head, base, title }),
-  /** The task reviewing someone else's pull request, made on its head if there is none (REV-10). */
-  taskForReview: (pr: { repo: string; number: number; title: string; url: string; author: string; head: string; base: string }) =>
-    invoke<Task>("task_for_review", { pr }),
-  /** Move a review task to its pull request's head now (REV-10). */
-  reviewTakeLatest: (taskId: string) => invoke<Task>("review_take_latest", { taskId }),
   /** A fresh model's review of the task's whole branch (DIFF-6). Takes minutes, not seconds. */
   reviewBranch: (taskId: string) => invoke<ReviewerRun>("review_branch", { taskId }),
-  /** A review task's notes as one review of its pull request, after the user confirmed exactly this (REV-11). */
-  githubPostReview: (taskId: string, verdict: ReviewVerdict, body: string, notes: ReviewComment[]) =>
-    invoke<PostedReview>("github_post_review", { taskId, verdict, body, notes }),
   /** Per repo, the commits a push would send and the leftovers they add (PR-11). */
   taskOutgoing: (taskId: string) => invoke<RepoOutgoing[]>("task_outgoing", { taskId }),
   deleteTask: (id: string, force = false) =>

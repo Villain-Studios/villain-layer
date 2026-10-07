@@ -78,11 +78,14 @@ export interface Task {
   ticket_stage?: "review" | "merged" | null;
   /** The room folder of the chat whose agent created this task (CHAT-3). */
   chat?: string | null;
-  /** Someone else's pull request this task reviews (REV-10). */
+  /**
+   * Someone else's pull request, checked out to review it by 0.5.0. Nothing
+   * makes one now; one left from then is never pushed.
+   */
   review?: ReviewOf | null;
 }
 
-/** The pull request a review task is of. */
+/** The pull request a review task left from 0.5.0 is of. */
 export interface ReviewOf {
   /** `owner/name`. */
   repo: string;
@@ -515,7 +518,7 @@ export interface Finding {
   severity: "bug" | "risk" | "nit";
   body: string;
   code: string;
-  /** On a line of the diff's hunks: drawn there, and anchorable on GitHub. */
+  /** On a line of the diff's hunks, where it is drawn. */
   in_diff: boolean;
 }
 
@@ -524,38 +527,13 @@ export interface ReviewedHead {
   head: string;
 }
 
-/** A changed file's place in the order to read a change in (DIFF-6). */
-export interface PlanFile {
-  checkout_id: string;
-  path: string;
-  group: "start" | "tests" | "routine";
-  why: string;
-}
-
 export interface ReviewerRun {
-  /** What the change does and where its risk is. */
-  summary: string;
-  /** The order to read it in; a changed file left out is read after. */
-  plan: PlanFile[];
   findings: Finding[];
   /** Each repo's HEAD the review was of. */
   heads: ReviewedHead[];
   model: string;
   /** Findings that named nothing in this task, and were dropped. */
   dropped: number;
-}
-
-/** How a review posted to GitHub ends (REV-11). */
-export type ReviewVerdict = "comment" | "approve" | "request_changes";
-
-export interface PostedReview {
-  url: string;
-  /** Posted as line comments. */
-  inline: number;
-  /** Posted in the body, under their `file:line`. */
-  in_body: number;
-  /** GitHub refused the line comments, so every note went in the body. */
-  moved_all: boolean;
 }
 
 /** Something in a push's added lines that is usually there by accident (PR-11). */

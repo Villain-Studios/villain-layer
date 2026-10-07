@@ -8,7 +8,6 @@ import type {
 } from "../lib/types";
 import { lineOf, parseDiff, toTree, type DiffLine, type Node } from "../lib/diff";
 import { NoteCard, NoteEditor, ReviewerButton } from "./DiffNote";
-import { ReviewFileBar, ReviewPlan } from "./ReviewPlan";
 import { ChevronIcon } from "./icons";
 import { Field, Modal, Spinner } from "./ui";
 import { read, write } from "../lib/persist";
@@ -89,9 +88,7 @@ export function DiffView({ task }: { task: TaskView }) {
   // holding and what git status agrees with. The whole branch is a different
   // and equally real question, and only worth asking when the branch was cut
   // for this work — which is not true of every worktree.
-  // A review opens on what the pull request changed (REV-10): it has nothing
-  // uncommitted, and the scope you last chose for your own work stays yours.
-  const [scope, setScope] = useState<DiffScope>(() => (task.review ? "branch" : read("diffScope", "uncommitted")));
+  const [scope, setScope] = useState<DiffScope>(() => read("diffScope", "uncommitted"));
   // A single commit on the branch, when set. Cleared on Uncommitted — that
   // view is about the working tree, not history.
   const [pin, setPin] = useState<{ checkoutId: string; sha: string } | null>(null);
@@ -554,15 +551,6 @@ export function DiffView({ task }: { task: TaskView }) {
         ? `${unpushed} not pushed`
         : "all pushed";
 
-    if (task.review) {
-      return {
-        what: `${commits} commit${commits === 1 ? "" : "s"} in #${task.review.number}, since it left ${one?.base ?? "its base"}`,
-        detail: "What the pull request changes, as GitHub shows it: from where it left its base to the commit you are reviewing.",
-        label: "Pull request",
-        adds,
-        dels,
-      };
-    }
     return {
       what: `${commits} commit${commits === 1 ? "" : "s"} ${from} · ${pushed}`,
       detail: guessed.length
@@ -688,7 +676,7 @@ export function DiffView({ task }: { task: TaskView }) {
 
             {isComposing && (
               <NoteEditor
-                placeholder={task.review ? "What should the author know about this line?" : "What should the agent change here?"}
+                placeholder="What should the agent change here?"
                 code={composing?.side === "LEFT" ? "" : composing?.code ?? ""}
                 onAdd={(text) => addDraftRef.current(text)}
                 onCancel={() => setComposing(null)}
@@ -742,12 +730,9 @@ export function DiffView({ task }: { task: TaskView }) {
           <button className="btn" onClick={() => void load()}>Refresh</button>
         </div>
         <div className="review-tray">
-          {/* A review has nothing of its own uncommitted to switch to. */}
-          {!task.review && (
-            <div className="review-tray-group" title="What the list is measuring">
-              {scopeTabs}
-            </div>
-          )}
+          <div className="review-tray-group" title="What the list is measuring">
+            {scopeTabs}
+          </div>
           {commitPicker}
           <div className="spacer" />
           <ReviewerButton taskId={task.id} />
@@ -762,16 +747,7 @@ export function DiffView({ task }: { task: TaskView }) {
       {unlinkedBanner}
       <div className="diff">
         <div className="diff-files" style={{ width }}>
-          {task.review ? (
-            <ReviewPlan
-              taskId={task.id}
-              head={task.review.head_sha}
-              files={files}
-              selected={selected}
-              onSelect={setSelected}
-              notesPerFile={notesPerFile}
-            />
-          ) : groups.map((g) => {
+          {groups.map((g) => {
             // A repo's own fold is keyed apart from its folders' (`repo:path`).
             const closed = multi && (shut[g.checkout.id] ?? false);
             return (
@@ -829,9 +805,6 @@ export function DiffView({ task }: { task: TaskView }) {
               </button>
             </div>
           )}
-          {task.review && current && (
-            <ReviewFileBar taskId={task.id} head={task.review.head_sha} file={current} files={files} onSelect={setSelected} />
-          )}
           {multi && current && (
             <div className="diff-repo-banner">
               {current.repo} / {current.path}
@@ -861,12 +834,9 @@ export function DiffView({ task }: { task: TaskView }) {
       </div>
 
       <div className="review-tray">
-        {/* A review has nothing of its own uncommitted to switch to. */}
-        {!task.review && (
-          <div className="review-tray-group" title="What the list is measuring">
-            {scopeTabs}
-          </div>
-        )}
+        <div className="review-tray-group" title="What the list is measuring">
+          {scopeTabs}
+        </div>
         {commitPicker}
         <span className="review-tray-hint">
           {undecided > 0 && (
@@ -879,8 +849,6 @@ export function DiffView({ task }: { task: TaskView }) {
           )}
           {queued.length === 0
             ? "Click a line number to comment; shift-click another to cover the lines between"
-            : task.review
-              ? `${queued.length} comment${queued.length === 1 ? "" : "s"} for your review: Submit review sends ${queued.length === 1 ? "it" : "them"}`
             : agentPanes.length === 0
               ? `${queued.length} note${queued.length === 1 ? "" : "s"} queued · no agent running — Send will start one`
               : `${queued.length} note${queued.length === 1 ? "" : "s"} queued`}
@@ -902,30 +870,26 @@ export function DiffView({ task }: { task: TaskView }) {
           )}
           <ReviewerButton taskId={task.id} />
           <button className="btn btn-sm" onClick={() => void load()}>Refresh</button>
-          {/* A commit in a review is one its pull request does not have, and
-              puts every comment's line on another version (REV-11). */}
-          {!task.review && <button className="btn btn-sm" onClick={() => setCommitting(true)}>Commit…</button>}
-          {(!task.review || agentPanes.length > 0) && (
-            <button
-              className={`btn btn-sm${task.review ? "" : " btn-primary"}`}
-              disabled={queued.length === 0}
-              onClick={() => void send()}
-              title={
-                queued.length === 0
-                  ? "Add notes on line numbers first"
-                  : agentPanes.length === 0
-                    ? installed.length === 0
-                      ? "Install an agent CLI first"
-                      : "No agent running — pick one to start with these notes"
-                    : agentPanes.length > 1
-                      ? `Send queued notes to ${targetName}`
-                      : "Send queued notes to the agent"
-              }
-            >
-              {agentPanes.length === 0 && queued.length > 0 ? "Start agent & send" : "Send to agent"}
-              {queued.length > 0 && <span className="badge">{queued.length}</span>}
-            </button>
-          )}
+          <button className="btn btn-sm" onClick={() => setCommitting(true)}>Commit…</button>
+          <button
+            className="btn btn-sm btn-primary"
+            disabled={queued.length === 0}
+            onClick={() => void send()}
+            title={
+              queued.length === 0
+                ? "Add notes on line numbers first"
+                : agentPanes.length === 0
+                  ? installed.length === 0
+                    ? "Install an agent CLI first"
+                    : "No agent running — pick one to start with these notes"
+                  : agentPanes.length > 1
+                    ? `Send queued notes to ${targetName}`
+                    : "Send queued notes to the agent"
+            }
+          >
+            {agentPanes.length === 0 && queued.length > 0 ? "Start agent & send" : "Send to agent"}
+            {queued.length > 0 && <span className="badge">{queued.length}</span>}
+          </button>
         </div>
       </div>
 

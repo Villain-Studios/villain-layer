@@ -776,6 +776,14 @@ fn slug(path: &str) -> String {
         .collect()
 }
 
+/// Where `agent_id` keeps its transcripts for `cwd`, if it keeps them by folder.
+pub(crate) fn session_dir(agent_id: &str, cwd: &str) -> Option<std::path::PathBuf> {
+    #[allow(deprecated)]
+    let home = std::env::home_dir()?;
+    let SessionStore::SlugUnderHome { dir, .. } = find(agent_id)?.session_store?;
+    Some(home.join(dir).join(slug(cwd)))
+}
+
 /// Which agents have something to resume in this directory.
 ///
 /// Read from each CLI's own transcript store rather than remembered by the

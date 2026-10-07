@@ -124,6 +124,7 @@ for, and the reverse, and that each is in this table.
 | `issue:draft` | `{ request_id, text }` | a chunk of an improved ticket description | `tickets/OptimizeDescription.tsx` |
 | `system-notify-click` | a `Target` (`target.rs`) | a banner was clicked | `Watchers.tsx` → `goTo`, which opens what it is about (NOTE-4) |
 | `app:notices` | none | a notice was queued after startup (`commands::notify`) | `Watchers.tsx` → `takeNotices`, as toasts |
+| `panes:waiting` | none | the panes a launch did not put back changed: marked at launch, reopened, forgotten (PANE-7) | `Watchers.tsx` → `refreshWaiting` |
 | `messages:changed` | none | the message center's log changed: recorded, read or cleared (`messages.rs`) | `Watchers.tsx` → `refreshMessages` |
 | `notes:changed` | none | an agent remembered, checked or forgot a repo note (`notes.rs`, MEM-5) | `ReposView.tsx`, while open → `listRepoNotes` |
 | `browser:changed` | task id, or `""` for every task | a task's tab changed: made, navigated, retitled, loading, an agent acted, closed; or the browser went away (`browser/`) | `BrowserPanel.tsx` (`useBrowserView`) → `browser_view` |

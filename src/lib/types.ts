@@ -134,6 +134,21 @@ export interface TaskView extends Task {
 
 export type PaneKind = "agent" | "shell";
 
+/**
+ * A pane a launch did not put back (PANE-7): over the 12 that come back at
+ * once. Kept for the user to reopen or forget; never reopened by itself.
+ */
+export interface WaitingPane {
+  /** Its saved id: what Reopen and Forget name. */
+  id: string;
+  task_id: string;
+  kind: "agent" | "shell";
+  agent_id: string | null;
+  cwd: string | null;
+  /** What its CLI last called the conversation, where it says. */
+  title: string | null;
+}
+
 export interface PaneInfo {
   id: string;
   task_id: string;

@@ -8,6 +8,7 @@ import type { PaneInfo, Resumable, TaskView } from "../lib/types";
 import { BrowserPanel, useBrowserView } from "./BrowserPanel";
 import { ChatLink } from "./ChatLink";
 import { PaneNotice } from "./PaneNotice";
+import { WaitingTaskPanes } from "./WaitingPanes";
 import { TerminalPane } from "./Terminal";
 import { CloseIcon, GlobeIcon, PlusIcon, SwapIcon } from "./icons";
 import { ContextMenu, Field, Modal, Spinner } from "./ui";
@@ -429,6 +430,7 @@ export function Terminals({ task }: { task: TaskView }) {
       )}
 
       <ChatLink task={task} />
+      <WaitingTaskPanes taskId={task.id} />
 
       <PaneNotice pane={panes.find((x) => x.id === active && x.notice)} onHandoff={startHandoff} />
 

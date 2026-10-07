@@ -195,6 +195,10 @@ pub struct SavedPane {
     /// tried at every launch for good, ahead of panes that really were open.
     #[serde(default)]
     pub failed: u8,
+    /// Over the limit at a launch, so not put back (PANE-7): kept and listed
+    /// for the user to reopen or forget, and never reopened by a launch.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub waiting: bool,
 }
 
 /// Presentation preferences. Terminal text scales separately from the chrome,

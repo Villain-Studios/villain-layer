@@ -268,9 +268,16 @@ ones that need you first.
   finished.
 - **PANE-7** The open panes MUST come back when the app reopens, when
   "Put terminals back" is on. Agents resume their conversation where the
-  CLI can. At most 12 come back (`RESTORE_LIMIT`), and the user is told if
-  some were not. Two agents in one folder never both resume the same
-  conversation. A pane that fails to come back three launches in a row is
+  CLI can. At most 12 come back at launch (`RESTORE_LIMIT`), agents before
+  shells, since a shell has no conversation to lose. A pane over the limit
+  MUST NOT be forgotten: it waits, listed with Reopen and Forget (a chat
+  in the Chat view, a task's pane in its Terminals tab) until the user
+  picks one, and the user is told how many wait. A waiting pane is never
+  reopened by a later launch on its own. Restoring used to put back the
+  first 12 in the order they were opened and forget the rest, so the
+  newest were the ones lost: a chat with a day's work in it went, at a
+  restart with 12 agents and 2 shells open. Two agents in one folder never
+  both resume the same conversation. A pane that fails to come back three launches in a row is
   forgotten. Only a conversation the CLI would continue counts: Claude
   Code's one-shot runs (`claude -p`, the app's own PR description drafts)
   do not. Counted, a draft in the task folder had an agent restarted there,

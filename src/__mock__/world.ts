@@ -28,6 +28,7 @@ import type {
   TaskPrs,
   TaskView,
   UiPrefs,
+  WaitingPane,
 } from "../lib/types";
 
 export interface World {
@@ -36,6 +37,8 @@ export interface World {
   cleanup: CleanupItem[];
   tasks: TaskView[];
   panes: PaneInfo[];
+  /** Panes the last launch did not put back (PANE-7). */
+  waiting: WaitingPane[];
   agents: AgentStatus[];
   settings: Settings;
   prs: TaskPrs[];
@@ -373,6 +376,12 @@ function busy(): World {
     cleanup,
     tasks,
     panes,
+    // Over the 12 a launch puts back: a chat with a day's work in it, and a
+    // shell of the login task's.
+    waiting: [
+      { id: "saved-chat", task_id: "chat", kind: "agent", agent_id: "claude", cwd: "/Users/you/.villain-worktrees/_chat/18c735bb", title: "Backend architecture and domain structure review" },
+      { id: "saved-shell", task_id: "t-login", kind: "shell", agent_id: null, cwd: "/Users/you/.villain-worktrees/ACME-123", title: null },
+    ],
     agents,
     settings: {
       ...disconnected,
@@ -492,7 +501,7 @@ function messages(): Message[] {
 /** First launch: nothing added, nothing connected. */
 function empty(): World {
   return {
-    projects: [], health: [], cleanup: [], tasks: [], panes: [], agents, settings: disconnected, prs: [],
+    projects: [], health: [], cleanup: [], tasks: [], panes: [], waiting: [], agents, settings: disconnected, prs: [],
     reviews: { mine: [], mine_more: false, team: null, authored: { prs: [], more: false, error: null } },
     issues: [], issueTypes: [], transitions: [], requiredFields: [], changed: [], feedback: [], output: {},
     messages: [],

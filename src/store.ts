@@ -18,6 +18,7 @@ import type {
   Target,
   TaskView,
   TicketMove,
+  WaitingPane,
 } from "./lib/types";
 
 export const TABS = ["terminals", "diff", "pr"] as const;
@@ -84,6 +85,8 @@ interface State {
   repoHealth: Record<string, RepoHealth>;
   tasks: TaskView[];
   panes: PaneInfo[];
+  /** Panes the last launch did not put back (PANE-7). */
+  waiting: WaitingPane[];
   agents: AgentStatus[];
   /** PR rows per task id, refreshed by the background watch. */
   prs: Record<string, CheckoutPr[]>;
@@ -154,6 +157,7 @@ interface State {
    */
   refreshTasks: (opts?: { poll?: boolean }) => Promise<void>;
   refreshPanes: (opts?: { poll?: boolean }) => Promise<void>;
+  refreshWaiting: () => Promise<void>;
   refreshPrs: () => Promise<void>;
   /** `quiet` is a timer tick: no toast, and no spinner if a queue is already shown. */
   refreshReviewQueue: (opts?: { quiet?: boolean }) => Promise<void>;
@@ -355,6 +359,7 @@ export const useStore = create<State>((set, get) => {
   repoHealth: {},
   tasks: [],
   panes: [],
+  waiting: [],
   prs: {},
   reviewQueue: null,
   messages: [],
@@ -480,6 +485,11 @@ export const useStore = create<State>((set, get) => {
         throw e;
       }
     }),
+
+  refreshWaiting: async () => {
+    const waiting = await api.waitingPanes();
+    set((s) => (JSON.stringify(s.waiting) === JSON.stringify(waiting) ? s : { waiting }));
+  },
 
   /**
    * Ask GitHub what has happened to every task's pull requests.

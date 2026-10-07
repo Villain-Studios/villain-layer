@@ -186,14 +186,34 @@ export function BrowserPanel({ taskId, visible, onClose }: { taskId: string; vis
   useEffect(() => {
     const el = canvasRef.current;
     if (!el) return;
+    // A trackpad reports far more wheel events than frames are drawn:
+    // summed, and sent once per animation frame.
+    let pending: BrowserInput | null = null;
+    let frame = 0;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       if (drivingRef.current) return;
       const page = sizeRef.current;
-      if (page) send(wheel(e, pagePoint(e, el.getBoundingClientRect(), page)));
+      if (!page) return;
+      const next = wheel(e, pagePoint(e, el.getBoundingClientRect(), page));
+      if (pending?.kind === "wheel" && next.kind === "wheel") {
+        pending = { ...next, dx: pending.dx + next.dx, dy: pending.dy + next.dy };
+      } else {
+        pending = next;
+      }
+      if (!frame) {
+        frame = requestAnimationFrame(() => {
+          frame = 0;
+          if (pending) send(pending);
+          pending = null;
+        });
+      }
     };
     el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+      cancelAnimationFrame(frame);
+    };
   }, [showing, taskId]); // eslint-disable-line react-hooks/exhaustive-deps -- `send` reads only taskId
 
   function send(input: BrowserInput) {

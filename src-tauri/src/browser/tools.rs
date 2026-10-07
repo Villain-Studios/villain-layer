@@ -256,9 +256,29 @@ async fn allowed_page(page: &Page, state: &AppState) -> Result<(String, String)>
 /// What an action did, then the page as it is now: the one shown, which is
 /// a window the page opened if the action opened one (BRW-14).
 async fn report<R: Runtime>(app: &AppHandle<R>, state: &AppState, task: &str, did: &str) -> Result<Vec<Value>> {
+    // The tab can close while it is read: a sign-in window closes itself
+    // moments after the click that opened it. The action happened; what it
+    // led to is the tab active now.
+    for _ in 0..3 {
+        match report_once(app, state, task, did).await {
+            Err(e) if tab_gone(&e) => tokio::time::sleep(Duration::from_millis(100)).await,
+            done => return done,
+        }
+    }
+    report_once(app, state, task, did).await
+}
+
+/// Chrome's word for a tab that closed under a call.
+fn tab_gone(e: &Error) -> bool {
+    let text = e.to_string();
+    text.contains("Session with given id not found") || text.contains("No target with given id")
+}
+
+async fn report_once<R: Runtime>(app: &AppHandle<R>, state: &AppState, task: &str, did: &str) -> Result<Vec<Value>> {
     let page = &state.browser.page(app, task).await?;
     let (url, title) = match allowed_page(page, state).await {
         Ok(at) => at,
+        Err(e) if tab_gone(&e) => return Err(e),
         // The action itself happened; where it led is what agents may not read.
         Err(e) => return Ok(text(format!("{did}\n\nThe tab is now somewhere you cannot read: {e}"))),
     };

@@ -7,9 +7,9 @@ use base64::Engine;
 use serde::Serialize;
 use serde_json::{json, Value};
 use tauri::ipc::{Channel, InvokeResponseBody};
-use tauri::{AppHandle, Runtime};
+use tauri::{AppHandle, Manager, Runtime};
 
-use super::cdp::Event;
+use super::cdp::{Cdp, Event};
 use super::{changed, input, Browser, Viewport};
 use crate::error::{Error, Result};
 
@@ -17,7 +17,10 @@ use crate::error::{Error, Result};
 /// (BRW-9). A video plays in the page at Chrome's rate, and each frame is
 /// a JPEG crossing into the webview. At 15 a second, scrolling and typing
 /// in the panel felt like lag; Chrome itself kept up with 60.
-const FRAME_GAP: Duration = Duration::from_millis(33);
+const FRAME_GAP: Duration = Duration::from_millis(16);
+
+/// How long the page is still before a sharp picture of it is sent.
+const STILL_AFTER: Duration = Duration::from_millis(150);
 
 /// What an agent last did in a tab, for the panel to show (BRW-10).
 #[derive(Clone, Debug, Serialize)]
@@ -57,6 +60,16 @@ pub(super) struct Watch {
     frames: Channel<InvokeResponseBody>,
     /// When the next frame may go.
     next: Instant,
+    /// The panel's size, which frames are drawn at.
+    viewport: Viewport,
+    /// Frames are drawn sharp: the page is still.
+    sharp: bool,
+    /// The next frame is the one Chrome sends for a change of `sharp`, not
+    /// for a change in the page.
+    switching: bool,
+    /// When the page will have been still long enough to be drawn sharp, if
+    /// that is waited for.
+    still_due: Option<Instant>,
 }
 
 impl Browser {
@@ -104,7 +117,16 @@ impl Browser {
                     r.cdp.send("Page.stopScreencast", json!({}), Some(&old.session));
                 }
             }
-            inner.watch = Some(Watch { task: task.to_string(), session, frames, next: Instant::now() });
+            inner.watch = Some(Watch {
+                task: task.to_string(),
+                session,
+                frames,
+                next: Instant::now(),
+                viewport,
+                sharp: false,
+                switching: false,
+                still_due: None,
+            });
             resize
         };
         if resize {
@@ -114,12 +136,7 @@ impl Browser {
             )
             .await?;
         }
-        let device = |css: u32| (css as f64 * viewport.scale).round() as u32;
-        page.call(
-            "Page.startScreencast",
-            json!({ "format": "jpeg", "quality": 85, "maxWidth": device(viewport.width), "maxHeight": device(viewport.height), "everyNthFrame": 1 }),
-        )
-        .await?;
+        page.call("Page.startScreencast", screencast(viewport, false)).await?;
         Ok(())
     }
 
@@ -135,12 +152,24 @@ impl Browser {
     /// The user's own input, from the panel. Not awaited: a mouse move is
     /// one of many, and the next must not wait on this one's answer.
     pub fn input(&self, task: &str, event: &input::BrowserInput) -> Result<()> {
-        let inner = self.inner.lock();
-        let (Some(r), Some(tab)) = (inner.running.as_ref(), inner.active(task)) else {
+        let mut inner = self.inner.lock();
+        let (Some(cdp), Some(session)) =
+            (inner.running.as_ref().map(|r| r.cdp.clone()), inner.active(task).map(|t| t.session.clone()))
+        else {
             return Err(Error::Other("this task's tab is not open".into()));
         };
+        // What the user does is about to change the page: fast frames from
+        // now, not a sharp one first. Not for a bare mouse move, which
+        // mostly changes nothing, and would blur a still page each time.
+        let acts = !matches!(event, input::BrowserInput::Mouse { r#type, .. } if r#type == "mouseMoved");
+        if let Some(w) = inner.watch.as_mut().filter(|w| acts && w.sharp && w.session == session) {
+            w.sharp = false;
+            w.switching = true;
+            restart(&cdp, &session, w.viewport, false);
+        }
+        drop(inner);
         if let Some((method, params)) = input::to_cdp(event) {
-            r.cdp.send(method, params, Some(&tab.session));
+            cdp.send(method, params, Some(&session));
         }
         Ok(())
     }
@@ -160,13 +189,33 @@ impl Browser {
 
 }
 
+/// The screencast's settings: one pixel per CSS pixel while the page moves,
+/// the screen's own sharpness once it is still.
+///
+/// Sharp all the time, a scroll took 40ms to reach the app where it now
+/// takes about 15, at three times the bytes a frame: that was the lag in
+/// scrolling and typing. A still page is what is read, and is drawn sharp.
+fn screencast(v: Viewport, sharp: bool) -> Value {
+    let scale = if sharp { v.scale } else { 1.0 };
+    let device = |css: u32| (css as f64 * scale).round() as u32;
+    json!({
+        "format": "jpeg",
+        "quality": if sharp { 85 } else { 70 },
+        "maxWidth": device(v.width),
+        "maxHeight": device(v.height),
+        "everyNthFrame": 1,
+    })
+}
+
 impl Browser {
-    /// A frame of the watched tab: to the panel, and acknowledged so Chrome
-    /// sends the next, no sooner than `FRAME_GAP` after the last (BRW-9).
-    pub(super) fn on_frame(&self, e: Event) {
+    /// A frame of the watched tab: acknowledged first, so Chrome draws the
+    /// next while this one crosses to the panel, then sent. The page moving
+    /// again after being still is drawn at one pixel per CSS pixel until it
+    /// stops (`sharpen`).
+    pub(super) fn on_frame<R: Runtime>(&self, app: &AppHandle<R>, e: Event) {
         let ack_id = e.params.get("sessionId").cloned().unwrap_or(Value::Null);
         let Some(data) = e.params.get("data").and_then(Value::as_str) else { return };
-        let (frames, cdp, session, wait) = {
+        let (frames, cdp, session, wait, soften, wait_still) = {
             let mut inner = self.inner.lock();
             let Some(cdp) = inner.running.as_ref().map(|r| r.cdp.clone()) else { return };
             // A frame of a tab no longer watched goes unanswered, and so is
@@ -177,12 +226,25 @@ impl Browser {
             let now = Instant::now();
             let wait = w.next.saturating_duration_since(now);
             w.next = now + wait + FRAME_GAP;
-            (w.frames.clone(), cdp, w.session.clone(), wait)
+            let moved = !std::mem::take(&mut w.switching);
+            let soften = moved && w.sharp;
+            if soften {
+                w.sharp = false;
+                w.switching = true;
+            }
+            // Every frame drawn fast, whatever drew it, puts off the sharp
+            // one: a change, or the user's input switching to fast frames
+            // ahead of one. The sharp frame itself waits for nothing.
+            let wait_still = !w.sharp && w.still_due.is_none();
+            if !w.sharp {
+                w.still_due = Some(now + STILL_AFTER);
+            }
+            (w.frames.clone(), cdp, w.session.clone(), wait, soften.then_some(w.viewport), wait_still)
         };
-        if let Ok(jpeg) = base64::engine::general_purpose::STANDARD.decode(data) {
-            let _ = frames.send(InvokeResponseBody::Raw(jpeg));
-        }
-        let ack = move || cdp.send("Page.screencastFrameAck", json!({ "sessionId": ack_id }), Some(&session));
+        let ack = {
+            let (cdp, session) = (cdp.clone(), session.clone());
+            move || cdp.send("Page.screencastFrameAck", json!({ "sessionId": ack_id }), Some(&session))
+        };
         if wait.is_zero() {
             ack();
         } else {
@@ -191,9 +253,57 @@ impl Browser {
                 ack();
             });
         }
+        if let Ok(jpeg) = base64::engine::general_purpose::STANDARD.decode(data) {
+            let _ = frames.send(InvokeResponseBody::Raw(jpeg));
+        }
+        if let Some(v) = soften {
+            restart(&cdp, &session, v, false);
+        }
+        if wait_still {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                app.state::<crate::commands::AppState>().browser.sharpen(&cdp, &session).await;
+            });
+        }
+    }
+
+    /// Once the page has been still for `STILL_AFTER`, draw it sharp. Not a
+    /// screenshot: taking one makes Chrome draw a frame, which came at one
+    /// pixel per CSS pixel straight after it and replaced it, every 150ms.
+    async fn sharpen(&self, cdp: &Cdp, session: &str) {
+        loop {
+            let due = {
+                let inner = self.inner.lock();
+                match inner.watch.as_ref().filter(|w| w.session == session) {
+                    Some(w) => w.still_due,
+                    None => return,
+                }
+            };
+            let Some(due) = due else { return };
+            let now = Instant::now();
+            if now < due {
+                tokio::time::sleep(due - now).await;
+                continue;
+            }
+            let mut inner = self.inner.lock();
+            let Some(w) = inner.watch.as_mut().filter(|w| w.session == session) else { return };
+            w.still_due = None;
+            if !w.sharp {
+                w.sharp = true;
+                w.switching = true;
+                restart(cdp, session, w.viewport, true);
+            }
+            return;
+        }
     }
 }
 
+/// The screencast again with other settings. Chrome sends a frame as it
+/// starts, which is the one `switching` expects.
+fn restart(cdp: &Cdp, session: &str, v: Viewport, sharp: bool) {
+    cdp.send("Page.stopScreencast", json!({}), Some(session));
+    cdp.send("Page.startScreencast", screencast(v, sharp), Some(session));
+}
 
 #[cfg(test)]
 mod tests {
@@ -201,6 +311,77 @@ mod tests {
     use crate::browser::tests::{app_with_task, serve, HOME};
     use crate::commands::AppState;
     use tauri::Manager;
+
+    const HEAVY: &str = r#"<html><head><title>Heavy</title><style>
+        body{font:15px -apple-system,sans-serif;margin:0} .card{margin:12px;padding:16px;border-radius:8px;box-shadow:0 2px 8px #0003;background:linear-gradient(135deg,#fafafa,#e8eefc)}
+        .row{display:flex;gap:8px} .pill{padding:4px 10px;border-radius:12px;background:#4f46e5;color:#fff}
+    </style></head><body><script>
+        let h=''; for(let i=0;i<400;i++){h+=`<div class=card><h3>Booking ${i}</h3><div class=row><span class=pill>Flight</span><span class=pill>Hotel</span></div><p>Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris.</p><table><tr><td>Traveler</td><td>Ada Lovelace</td><td>SEK 12 400</td></tr></table></div>`}
+        document.body.innerHTML=h;
+    </script></body></html>"#;
+
+    /// A measurement rather than a test, like `echo_latency`: how long a
+    /// scroll takes to reach the app as a frame, the frame rate and size
+    /// while scrolling, and the frames once it stops, on a long page at a
+    /// panel's size. Run it with
+    /// `cargo test --lib scroll_latency -- --ignored --nocapture`.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore]
+    async fn scroll_latency() {
+        let Some((app, root, _)) = app_with_task() else { return };
+        let state = app.state::<AppState>();
+        let base = serve(HEAVY).await;
+        let (tx, frames) = std::sync::mpsc::channel::<(Instant, usize)>();
+        let channel = Channel::new(move |body| {
+            if let InvokeResponseBody::Raw(bytes) = body {
+                let _ = tx.send((Instant::now(), bytes.len()));
+            }
+            Ok(())
+        });
+        let viewport = Viewport { width: 930, height: 960, scale: 2.0 };
+        state.browser.watch(app.handle(), "t1", viewport, channel).await.unwrap();
+        let page = state.browser.page(app.handle(), "t1").await.unwrap();
+        page.navigate(&format!("{base}/")).await.unwrap();
+        page.settle(&state.browser).await;
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        while frames.try_recv().is_ok() {}
+
+        // One wheel tick at a time: how long until a frame comes.
+        let mut lat = Vec::new();
+        for _ in 0..20 {
+            while frames.try_recv().is_ok() {}
+            let t = Instant::now();
+            let wheel = input::BrowserInput::Wheel { x: 400.0, y: 400.0, dx: 0.0, dy: 120.0, modifiers: 0 };
+            state.browser.input("t1", &wheel).unwrap();
+            if let Ok((at, _)) = frames.recv_timeout(Duration::from_secs(2)) {
+                lat.push(at.duration_since(t).as_millis());
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        lat.sort();
+        // A continuous scroll, as a trackpad: a wheel every 16ms for 2s.
+        while frames.try_recv().is_ok() {}
+        let t0 = Instant::now();
+        let mut n = 0; let mut bytes = 0;
+        while t0.elapsed() < Duration::from_secs(2) {
+            let wheel = input::BrowserInput::Wheel { x: 400.0, y: 400.0, dx: 0.0, dy: 30.0, modifiers: 0 };
+            state.browser.input("t1", &wheel).unwrap();
+            tokio::time::sleep(Duration::from_millis(16)).await;
+            while let Ok((_, b)) = frames.try_recv() { n += 1; bytes += b; }
+        }
+        let stop = Instant::now();
+        let mut idle = Vec::new();
+        while stop.elapsed() < Duration::from_millis(1500) {
+            if let Ok((at, b)) = frames.recv_timeout(Duration::from_millis(100)) {
+                idle.push((at.duration_since(stop).as_millis(), b / 1024));
+            }
+        }
+        eprintln!("scroll latency ms median {} p90 {} | scroll fps {} avg {} KB | after stopping (ms, KB): {:?}",
+            lat.get(lat.len() / 2).copied().unwrap_or(0), lat.get(lat.len() * 9 / 10).copied().unwrap_or(0), n / 2, bytes / n.max(1) / 1024, idle);
+        state.browser.shutdown(Duration::from_secs(3));
+        state.ptys.shutdown(Duration::from_secs(1));
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     /// A JPEG's width and height, from its frame header.
     fn jpeg_size(jpeg: &[u8]) -> Option<(u16, u16)> {

@@ -41,8 +41,9 @@ sentence that should hold:
 - **Pure logic** (state machines, parsers, prompts, JQL): plain inputs and
   outputs. Parsers are tested against JSON shaped like the real API's, with
   made-up names.
-- **Timing**: `echo_latency` is `#[ignore]`, a measurement rather than a
-  test. Run it with `cargo test --lib echo_latency -- --ignored --nocapture`.
+- **Timing**: `echo_latency` and `scroll_latency` (the browser panel's
+  frames, against a real Chrome) are `#[ignore]`, measurements rather than
+  tests. Run one with `cargo test --lib echo_latency -- --ignored --nocapture`.
 
 A bug fix adds the test that fails without the fix. A test that cannot fail
 proves nothing: check it fails by breaking the code once.

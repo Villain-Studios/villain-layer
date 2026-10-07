@@ -40,7 +40,7 @@ impl Browser {
     /// One event from Chrome, on its reading thread: nothing here waits.
     pub(super) fn on_event<R: Runtime>(&self, app: &AppHandle<R>, e: Event) {
         if e.method == "Page.screencastFrame" {
-            return self.on_frame(e);
+            return self.on_frame(app, e);
         }
         if e.method == "Target.targetCreated" {
             return self.on_window(app, &e.params);

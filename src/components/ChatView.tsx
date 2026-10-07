@@ -7,6 +7,7 @@ import { CHAT_TASK_ID, paneName, paneState } from "../lib/derive";
 import { TerminalPane } from "./Terminal";
 import { PlusIcon } from "./icons";
 import { ContextMenu, Confirm } from "./ui";
+import { WaitingChats } from "./WaitingPanes";
 import type { MenuItem } from "./ui";
 
 function started(unix: string): string {
@@ -157,6 +158,7 @@ export function ChatView() {
           {panes.length === 0 && (
             <div className="chat-list-empty">No chats open.</div>
           )}
+          <WaitingChats />
         </div>
       </div>
 

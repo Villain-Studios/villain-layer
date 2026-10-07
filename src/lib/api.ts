@@ -29,6 +29,7 @@ import type {
   RepoSuggestion,
   RepoUpdate,
   Resumable,
+  WaitingPane,
   ReviewComment,
   ReviewQueue,
   ReviewerRun,
@@ -131,6 +132,10 @@ export const api = {
   ) => invoke<PaneInfo>("spawn_agent", {
     taskId, agentId, checkoutId: checkoutId ?? null, prompt: prompt ?? null, resume,
   }),
+  /** Panes the last launch did not put back, waiting for the user (PANE-7). */
+  waitingPanes: () => invoke<WaitingPane[]>("waiting_panes"),
+  reopenWaitingPane: (id: string) => invoke<PaneInfo>("reopen_waiting_pane", { id }),
+  forgetWaitingPane: (id: string) => invoke<void>("forget_waiting_pane", { id }),
   resumableAgents: (taskId: string, checkoutId?: string | null) =>
     invoke<Resumable[]>("resumable_agents", { taskId, checkoutId: checkoutId ?? null }),
   spawnChat: (agentId: string, prompt?: string | null) =>

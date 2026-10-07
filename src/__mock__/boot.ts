@@ -213,7 +213,8 @@ const answer: Record<string, Answer> = {
   // A copy, as IPC would hand over: the same objects edited in place look
   // unchanged to `sameTasks`, and the UI never sees the edit.
   list_tasks: () => structuredClone(world.tasks),
-  list_panes: () => world.panes,
+  // A copy too: a pane pushed onto the same array read as no change.
+  list_panes: () => structuredClone(world.panes),
   list_agents: () => world.agents,
 
   // Terminals.
@@ -229,6 +230,19 @@ const answer: Record<string, Answer> = {
   spawn_agent: (a) => newPane(a, "agent", a.taskId as string),
   spawn_shell: (a) => newPane(a, "shell", a.taskId as string),
   spawn_chat: (a) => newPane(a, "agent", "chat"),
+  waiting_panes: () => world.waiting,
+  reopen_waiting_pane: (a) => {
+    const w = world.waiting.find((x) => x.id === a.id);
+    if (!w) throw new Error("That pane is no longer waiting to be reopened.");
+    world.waiting = world.waiting.filter((x) => x !== w);
+    void emit("panes:waiting");
+    return newPane({ agentId: w.agent_id }, w.kind, w.task_id);
+  },
+  forget_waiting_pane: (a) => {
+    world.waiting = world.waiting.filter((x) => x.id !== a.id);
+    void emit("panes:waiting");
+    return null;
+  },
   close_pane: (a) => {
     world.panes = world.panes.filter((p) => p.id !== a.paneId);
     return null;

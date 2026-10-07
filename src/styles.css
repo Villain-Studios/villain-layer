@@ -1386,6 +1386,12 @@ textarea { resize: vertical; font-family: var(--mono); }
 .chat-item .x { color: var(--dimmer); font-size: 14px; line-height: 1; opacity: 0; }
 .chat-item:hover .x, .chat-item.active .x { opacity: 1; }
 .chat-item .x:hover { color: var(--red); }
+/* Chats the last launch did not put back (PANE-7), under the open ones. */
+.chat-list-waiting { padding: 12px 6px 4px; color: var(--dimmer); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+.chat-item.waiting .chat-item-title { color: var(--dim); }
+.chat-item.waiting .dot { background: var(--dimmer); }
+.waiting-banner { flex-wrap: wrap; row-gap: 6px; }
+.waiting-pane { display: inline-flex; align-items: center; gap: 6px; margin-left: 8px; }
 
 /* -------------------------------------------------------------- repos view */
 

@@ -344,6 +344,20 @@ export function Watchers() {
     };
   }, []);
 
+  // Panes the last launch did not put back (PANE-7). The restore can mark
+  // them before the window listens, so they are read now and once more
+  // shortly after, as notices are, and again whenever the list changes.
+  useEffect(() => {
+    const read = () => void useStore.getState().refreshWaiting().catch(() => {});
+    read();
+    const t = setTimeout(read, 4000);
+    const p = listen("panes:waiting", read);
+    return () => {
+      clearTimeout(t);
+      void p.then((un) => un());
+    };
+  }, []);
+
   // Say when a review lands, once.
   //
   // Only a change against something already seen is worth a toast: the first

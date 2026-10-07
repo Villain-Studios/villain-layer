@@ -307,6 +307,7 @@ mod tests {
             agent_id: if kind == "agent" { Some("claude".into()) } else { None },
             cwd: Some(cwd.into()),
             failed: 0,
+            waiting: false,
         }
     }
 

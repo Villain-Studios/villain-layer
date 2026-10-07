@@ -938,6 +938,7 @@ credentials themselves.
 | `browser_new_tab` | open a page in a new tab (BRW-3, BRW-16) | |
 | `browser_switch_tab` | make another tab the active one | |
 | `browser_close_tab` | close a tab, the active one by default | |
+| `browser_sign_in` | fill a saved sign-in into the page, without seeing the password (BRW-19) | |
 
 - **MCP-1** Every request MUST carry the bearer token. Loopback is not
   authorisation.
@@ -975,6 +976,7 @@ Known gaps:
 | Phone: Home network and router VPN | off | PHONE-1, PHONE-2 |
 | Phone: Let phones type into agents | off | PHONE-7 |
 | Browser: sites agents may use | none: this machine's pages only | BRW-3, BRW-11 |
+| Browser: saved sign-ins | none | BRW-18 |
 | Tickets follow the work (Jira) | not chosen | TKT-8, per Jira project |
 | Trust the folders this app creates | on | PANE-10 |
 | Terminal text | 13px | 9–24px |
@@ -1009,7 +1011,7 @@ Known gaps:
 | Where | What |
 |---|---|
 | `~/Library/Application Support/eu.codevillain.villain-layer/` | `config.json`: repos, tasks, settings, saved panes. `messages.json`: the message center (MSG-4). `notes.json`: repo notes (MEM-7). At agent launch also `.mcp.json` (0600), `claude-hooks.json`, `copilot-plugin/`, `opencode-plugin.js` |
-| Keychain, service `eu.codevillain.villain-layer` | one item holding every token, paired phones' included (PHONE-3) |
+| Keychain, service `eu.codevillain.villain-layer` | one item holding every token, paired phones' included (PHONE-3), and the passwords of the browser's saved sign-ins (BRW-18) |
 | `~/.villain-worktrees/` (settable) | task folders, `_chat/` rooms, and `.repos/`: the app's own copy of each repo (REPO-4) |
 | a task folder | the worktrees, `AGENTS.md` and `CLAUDE.md` (task context), `TICKET.md` (PANE-13), `.mcp.json`, and `.gemini/settings.json`, `PR_DESCRIPTION.md`, `PR_FEEDBACK.md`, and hand-offs too long to type (`CONFLICTS.md`, `REVIEW_COMMENTS.md`, `PR_DRAFT_REQUEST.md`, `FIRST_PROMPT.md`, PANE-11) as they come up |
 | `~/.claude.json` | trust entries for the app's own folders only (PANE-10) |
@@ -1282,6 +1284,30 @@ ring marks where it clicked.
 - **BRW-17** A tab MUST be named by its page's title, and by its site
   while it has none (loading, or a page without one); "New tab" when it
   has neither. Nobody names a tab.
+- **BRW-18** The user MAY save sign-ins for agents to use: a site, a
+  username and a password, in Settings → Browser, or from the panel's
+  "Save sign-in" after typing one into the page (BRW-20). The password
+  goes to the keychain, never `config.json`; the site and username are
+  in `config.json`. A site is a host with or without a port: `localhost`
+  alone is every port of this machine's (one app runs on :4200 for one
+  task and :4210 for another), and a site elsewhere without a port is
+  its default port only. A site's subdomains are other sites.
+- **BRW-19** An agent MUST NOT see a saved password. `browser_sign_in`
+  has the app fill the username, the password, or both (a login asks
+  for them on one page or on two) into the fields the agent names, and
+  press Enter if asked; it answers with the page, never the password. A
+  password is filled only on a page of the site it was saved for, only
+  into a password field (an agent could otherwise put it in a text box
+  and read it back), and never over plain `http` to a site that is not
+  this machine. While a filled-in password is on the page, until the
+  page navigates, `browser_evaluate` and `browser_screenshot` are
+  refused (either could read it back) and the outline hides that
+  field's value even if the page shows it.
+- **BRW-20** "Save sign-in" in the panel MUST save what the user typed
+  into the page's sign-in form: the password is read from the page's
+  password field by the app itself and goes straight to the keychain,
+  never through the window. The username is the form's, and is asked for
+  when the form has none (a login that asked for it on the step before).
 - **BRW-6** The tabs MUST come back where they were: each task's tabs'
   pages and which was active are kept in `config.json`, and opened when
   the task's browser is next needed. A config from before tabs had one
@@ -1300,7 +1326,8 @@ Code: `browser/` (`chrome.rs` finding and running it, `cdp.rs` the
 protocol, `page.rs` a tab's actions, `snapshot.rs` the outline, `sites.rs`
 BRW-3, `tools.rs` the tools, `panel.rs` and `input.rs` the panel's side,
 `requests.rs` BRW-11, `control.rs` BRW-12, BRW-13 and BRW-15, `tabs.rs`
-BRW-16 and BRW-17, `events.rs` Chrome's events and BRW-14),
+BRW-16 and BRW-17, `events.rs` Chrome's events and BRW-14, `sign_in.rs`
+BRW-18 to BRW-20),
 `commands/browser.rs`, `mcp.rs` (`dispatch`), `BrowserPanel.tsx`,
 `BrowserSettings.tsx`, `lib/browserInput.ts`, `Terminals.tsx`.
 

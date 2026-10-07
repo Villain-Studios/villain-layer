@@ -217,6 +217,15 @@ the config folder, started by the first call that needs a tab.
   `browser_input` without waiting for Chrome's answer, mouse moves
   coalesced to one per animation frame. Keys arrive at an off-screen
   textarea, so the window's paste and input methods have somewhere to land.
+- **Saved sign-ins** (`sign_in.rs`, BRW-18..20). The site and username
+  are in the config; the password is in the keychain bundle under
+  `secrets::sign_in_key(id)`, read only when it is filled in. It goes
+  from the keychain to the page by `Input.insertText` and is never in a
+  tool's answer. The tab remembers the field it went into (`Tab.secret`)
+  until the page navigates: the outline marks that field protected, and
+  `browser_evaluate` and `browser_screenshot` are refused meanwhile. A
+  test build keeps the keychain bundle in memory, so a test run never
+  touches the user's own item.
 - **A page's dialog** stops its scripts, and Chrome answers an input event
   only once the page's handlers have run: a click whose handler calls
   `confirm()` is not answered until the dialog is. Actions run through

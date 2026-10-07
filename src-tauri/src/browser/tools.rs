@@ -166,6 +166,21 @@ pub fn list() -> Vec<Value> {
             vec![],
         ),
         tool(
+            "browser_sign_in",
+            "Sign in with an account the user saved for this site: the app fills the \
+             username, the password, or both (a login may ask for them on two pages) into \
+             the fields you name, and you never see the password. Use it instead of asking \
+             the user for credentials; if none is saved, it says so. Afterwards, until the \
+             page moves on, browser_evaluate and browser_screenshot are refused.",
+            json!({
+                "username_field": str_prop("The username or email field's ref, if the page has one"),
+                "password_field": str_prop("The password field's ref, if the page has one"),
+                "username": str_prop("Which saved account, when the site has several; default the first"),
+                "submit": bool_prop("Press Enter afterwards"),
+            }),
+            vec![],
+        ),
+        tool(
             "browser_dialog",
             "Answer the alert, confirm or prompt the page opened: accept is OK, false is \
              Cancel. The page does nothing else until it is answered.",
@@ -285,7 +300,7 @@ async fn report_once<R: Runtime>(app: &AppHandle<R>, state: &AppState, task: &st
     if let Some(d) = state.browser.dialog(&page.task) {
         return Ok(text(format!("{did}\n\nPage: {title}\nURL: {url}\n\n{}", d.describe())));
     }
-    let outline = page.outline().await?;
+    let outline = page.outline(state.browser.secret_on_page(task)).await?;
     let tabs = state.browser.tabs(task);
     let tabs = if tabs.len() > 1 { format!("{}\n", super::tabs::tab_list(&tabs, state)) } else { String::new() };
     Ok(text(format!("{did}\n\nPage: {title}\nURL: {url}\n{tabs}\n{outline}")))
@@ -325,6 +340,14 @@ pub async fn call<R: Runtime>(app: &AppHandle<R>, name: &str, args: Value, calle
     let page = browser.page(app, &task).await?;
     // The page does nothing else until its dialog is answered, and a call
     // into it would wait as long. Reading the outline still says so.
+    // Either could read back a password the app filled in (BRW-19).
+    if matches!(name, "browser_evaluate" | "browser_screenshot") && browser.secret_on_page(&task).is_some() {
+        return Err(Error::Other(
+            "a saved password is filled into this page, and this could read it back: refused until \
+             the page moves on (signs in, or navigates)"
+                .into(),
+        ));
+    }
     // Tabs are the browser's, not the page's: another one can be opened or
     // switched to while this one waits.
     if !matches!(
@@ -511,6 +534,16 @@ pub async fn call<R: Runtime>(app: &AppHandle<R>, name: &str, args: Value, calle
         }
 
         "browser_tabs" => Ok(text(super::tabs::tab_list(&browser.tabs(&task), &state))),
+
+        "browser_sign_in" => {
+            let (url, _) = allowed_page(&page, &state).await?;
+            let did = browser
+                .until_dialog(super::sign_in::sign_in(app, &state, &page, &url, &args))
+                .await?
+                .unwrap_or_else(|| "Filled in the saved sign-in.".into());
+            page.settle(browser).await;
+            report(app, &state, &task, &did).await
+        }
 
         "browser_new_tab" => {
             let url = sites::complete(required(&args, "url")?);

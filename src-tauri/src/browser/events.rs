@@ -90,6 +90,8 @@ impl Browser {
                             .or_else(|| e.params.pointer("/frame/url"))
                             .and_then(Value::as_str)
                             .unwrap_or_default();
+                        // A new page holds no password the app filled in.
+                        tab.secret = None;
                         if tab.url != url {
                             tab.url = url.to_string();
                             save = true;
@@ -108,6 +110,9 @@ impl Browser {
                     // A route change in a page that changes its own address.
                     "Page.navigatedWithinDocument" => {
                         if e.params.get("frameId").and_then(Value::as_str) == Some(tab.target.as_str()) {
+                            // A page that signs in without loading another
+                            // moves on to its own next one: the form is gone.
+                            tab.secret = None;
                             ask = Some(tab.target.clone());
                         }
                     }

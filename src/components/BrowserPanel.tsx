@@ -9,6 +9,7 @@ import { ago } from "../lib/time";
 import type { BrowserInput, BrowserView } from "../lib/types";
 import { useStore } from "../store";
 import { BrowserTabs } from "./BrowserTabs";
+import { SaveSignIn } from "./SaveSignIn";
 import { BackIcon, CloseIcon, ExternalIcon, ForwardIcon, ReloadIcon } from "./icons";
 import { Spinner } from "./ui";
 
@@ -401,6 +402,7 @@ export function BrowserPanel({ taskId, visible, onClose }: { taskId: string; vis
             Hand back
           </button>
         )}
+        <SaveSignIn taskId={taskId} disabled={!host || driving} />
         <button
           className="btn btn-sm btn-icon"
           title="Open this page in your own browser"

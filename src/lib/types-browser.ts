@@ -100,3 +100,18 @@ export interface TabInfo {
   active: boolean;
   loading: boolean;
 }
+
+/** A saved sign-in, without its password, which stays in the keychain (BRW-18). */
+export interface SavedSignIn {
+  id: string;
+  /** A host, with a port or not: `localhost` alone is every port of it. */
+  site: string;
+  username: string;
+}
+
+/** What "Save sign-in" would save from the page (BRW-20): never the password. */
+export interface SignInForm {
+  site: string;
+  /** The form's username, if it has one. */
+  username: string | null;
+}

@@ -16,8 +16,10 @@ use tauri::{AppHandle, Manager};
 use crate::error::{Error, Result};
 
 mod integrations;
+mod browser;
 mod phone;
 pub use integrations::{FlowStatus, GithubConfig, JiraConfig, SlackConfig};
+pub use browser::{BrowserConfig, SavedSignIn, SavedTabs};
 pub use phone::{PhoneConfig, PhoneDevice};
 
 pub const SCHEMA_VERSION: u32 = 2;
@@ -87,15 +89,6 @@ pub struct Task {
     /// and never written again.
     #[serde(default, skip_serializing)]
     pub browser_url: Option<String>,
-}
-
-/// A task's browser tabs, as kept for next time (BRW-6).
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct SavedTabs {
-    /// Each tab's page, in order; one that had none is `about:blank`.
-    pub urls: Vec<String>,
-    pub active: usize,
 }
 
 impl Task {
@@ -316,16 +309,6 @@ pub struct AppConfig {
     pub phone: PhoneConfig,
     #[serde(default)]
     pub browser: BrowserConfig,
-}
-
-/// The browser agents use (§18).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct BrowserConfig {
-    /// Sites agents may use besides this machine's own (BRW-3), as bare
-    /// hosts; each covers its subdomains. Empty by default: a page's text is
-    /// written by whoever runs the site, and agents read it as instructions.
-    pub sites: Vec<String>,
 }
 
 impl AppConfig {

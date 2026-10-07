@@ -30,6 +30,8 @@ pub struct Settings {
     pub phone_open: bool,
     /// Sites agents may use in the browser besides this machine's (BRW-3).
     pub browser_sites: Vec<String>,
+    /// Saved sign-ins, without their passwords (BRW-18).
+    pub browser_sign_ins: Vec<crate::config::SavedSignIn>,
 }
 
 #[tauri::command]
@@ -44,6 +46,7 @@ pub fn get_settings(state: State<AppState>) -> Settings {
         slack_connected: c.slack.is_some(),
         phone_open: c.phone.tailscale || c.phone.home,
         browser_sites: c.browser.sites.clone(),
+        browser_sign_ins: c.browser.sign_ins.clone(),
         worktree_root: state.config.worktree_root().to_string_lossy().to_string(),
         worktree_root_is_default: c.worktree_root.is_none(),
         jira: c.jira,

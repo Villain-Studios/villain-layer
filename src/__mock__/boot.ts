@@ -510,6 +510,21 @@ const answer: Record<string, Answer> = {
     return null;
   },
   browser_unwatch: () => null,
+  add_browser_sign_in: (a) => {
+    const saved = { id: `si-${Date.now()}`, site: a.site as string, username: a.username as string };
+    world.settings.browser_sign_ins.push(saved);
+    return saved;
+  },
+  forget_browser_sign_in: (a) => {
+    world.settings.browser_sign_ins = world.settings.browser_sign_ins.filter((s) => s.id !== a.id);
+    return null;
+  },
+  browser_sign_in_form: () => ({ site: "localhost", username: null }),
+  browser_save_sign_in: (a) => {
+    const saved = { id: `si-${Date.now()}`, site: a.site as string, username: a.username as string };
+    world.settings.browser_sign_ins.push(saved);
+    return saved;
+  },
   browser_hold: (a) => {
     tabOf(a.taskId as string).held = a.held as boolean;
     void emit("browser:changed", a.taskId);

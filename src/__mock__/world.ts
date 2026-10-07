@@ -81,6 +81,7 @@ const disconnected: Settings = {
   slack_connected: false,
   phone_open: false,
   browser_sites: [],
+  browser_sign_ins: [],
 };
 
 const agents: AgentStatus[] = [
@@ -382,6 +383,7 @@ function busy(): World {
       github_connected: true,
       slack_connected: true,
       browser_sites: ["docs.acme.dev"],
+      browser_sign_ins: [{ id: "si-1", site: "localhost", username: "ada@acme.test" }],
     },
     prs,
     reviews: {

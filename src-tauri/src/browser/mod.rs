@@ -14,6 +14,7 @@ mod keys;
 mod page;
 mod panel;
 mod requests;
+pub mod sign_in;
 pub mod sites;
 mod snapshot;
 mod tabs;
@@ -80,6 +81,9 @@ struct Tab {
     /// The tab whose page opened this one (BRW-14), by its target id: it is
     /// active again when this one closes.
     opener: Option<String>,
+    /// The password field the app filled a saved password into (BRW-19),
+    /// until the page navigates.
+    secret: Option<i64>,
 }
 
 #[derive(Default)]
@@ -337,6 +341,7 @@ async fn attach(cdp: &Arc<Cdp>, target: String, user_agent: Option<&str>, viewpo
         console: VecDeque::new(),
         dialog: None,
         opener: None,
+        secret: None,
     })
 }
 

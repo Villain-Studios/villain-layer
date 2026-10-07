@@ -241,6 +241,7 @@ mod tests {
             console: VecDeque::new(),
             dialog: None,
             opener: opener.map(str::to_string),
+            secret: None,
         }
     }
 

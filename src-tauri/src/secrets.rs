@@ -35,6 +35,11 @@ pub const JIRA: &str = "jira-token";
 pub const GITHUB: &str = "github-token";
 pub const SLACK: &str = "slack-token";
 
+/// Where a saved browser sign-in's password is kept (BRW-18).
+pub fn sign_in_key(id: &str) -> String {
+    format!("browser-sign-in-{id}")
+}
+
 /// The v1 layout: one keychain item per integration.
 const LEGACY: [&str; 3] = [JIRA, GITHUB, SLACK];
 
@@ -77,6 +82,12 @@ fn load() -> Result<Bundle> {
     if let Some(bundle) = guard.as_ref() {
         return Ok(bundle.clone());
     }
+    // Tests keep the bundle in memory: a test run must not read, prompt
+    // for or write the keychain the user's own tokens are in.
+    if cfg!(test) {
+        *guard = Some(Bundle::new());
+        return Ok(Bundle::new());
+    }
 
     let bundle = match read_item(BUNDLE)? {
         Some(raw) => serde_json::from_str(&raw).unwrap_or_default(),
@@ -104,6 +115,10 @@ fn load() -> Result<Bundle> {
 }
 
 fn store(bundle: Bundle) -> Result<()> {
+    if cfg!(test) {
+        *cache().lock() = Some(bundle);
+        return Ok(());
+    }
     if bundle.is_empty() {
         let _ = delete_item(BUNDLE);
     } else {

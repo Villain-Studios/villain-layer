@@ -308,6 +308,10 @@ pub fn run() {
             commands::browser_new_tab,
             commands::browser_switch_tab,
             commands::browser_close_tab,
+            commands::add_browser_sign_in,
+            commands::forget_browser_sign_in,
+            commands::browser_sign_in_form,
+            commands::browser_save_sign_in,
             commands::set_browser_sites,
         ])
         .build(tauri::generate_context!())

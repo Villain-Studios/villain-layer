@@ -222,8 +222,10 @@ This task reviews pull request {}#{}{}, at commit `{}`: {}.              `{}` is
         "tab in a browser the user can watch and use too. Try what you build in it: ",
         "start the dev server, `browser_navigate` to it, and read the page with ",
         "`browser_snapshot`. This machine's pages (localhost) and the sites the user ",
-        "allowed are open to you; `browser_request_site` asks for another. Never type ",
-        "the user's passwords or other secrets: ask them to sign in themselves.\n",
+        "allowed are open to you; `browser_request_site` asks for another. To sign in, ",
+        "use `browser_sign_in`, which fills an account the user saved without showing you ",
+        "its password. Never type the user's passwords or other secrets yourself: if none ",
+        "is saved, ask the user to sign in or to save one.\n",
     ));
     md
 }

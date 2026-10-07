@@ -7,7 +7,8 @@ use tauri::{AppHandle, Manager};
 
 use super::AppState;
 use crate::browser::input::BrowserInput;
-use crate::browser::{sites, AgentAction, Dialog, Driver, SiteRequest, TabInfo, Viewport};
+use crate::browser::{sign_in, sites, AgentAction, Dialog, Driver, SiteRequest, TabInfo, Viewport};
+use crate::config::SavedSignIn;
 use crate::error::{Error, Result};
 
 /// A task's tab, as the panel shows it.
@@ -243,6 +244,48 @@ pub async fn set_browser_sites(app: AppHandle, sites: Vec<String>) -> Result<Vec
     // Whether agents may use the page a panel shows can have changed.
     let _ = tauri::Emitter::emit(&app, "browser:changed", "");
     Ok(kept)
+}
+
+/// Save a sign-in from Settings → Browser (BRW-18). Off the command thread:
+/// the keychain can stop and ask.
+#[tauri::command]
+pub async fn add_browser_sign_in(app: AppHandle, site: String, username: String, password: String) -> Result<SavedSignIn> {
+    super::blocking(app, move |state| sign_in::save(state, &site, &username, &password)).await
+}
+
+/// Forget a saved sign-in, its password with it.
+#[tauri::command]
+pub async fn forget_browser_sign_in(app: AppHandle, id: String) -> Result<()> {
+    super::blocking(app, move |state| sign_in::forget(state, &id)).await
+}
+
+/// What "Save sign-in" in the panel would save (BRW-20): the site and the
+/// username the page's form holds. Not the password, which never comes to
+/// the window: `browser_save_sign_in` reads it from the page again.
+#[derive(Debug, Serialize)]
+pub struct SignInForm {
+    pub site: String,
+    pub username: Option<String>,
+}
+
+#[tauri::command]
+pub async fn browser_sign_in_form(app: AppHandle, task_id: String) -> Result<SignInForm> {
+    let state = app.state::<AppState>();
+    let page = state.browser.page(&app, &task_id).await?;
+    let url = state.browser.state_of(&task_id).map(|s| s.0).unwrap_or_default();
+    let site = sign_in::default_site(&url).ok_or_else(|| Error::Other("this tab is not on a web page".into()))?;
+    let (username, _) = sign_in::read_form(&page).await?;
+    Ok(SignInForm { site, username })
+}
+
+/// Save the sign-in typed into the page (BRW-20): the password read from the
+/// page's password field, straight to the keychain.
+#[tauri::command]
+pub async fn browser_save_sign_in(app: AppHandle, task_id: String, site: String, username: String) -> Result<SavedSignIn> {
+    let state = app.state::<AppState>();
+    let page = state.browser.page(&app, &task_id).await?;
+    let (_, password) = sign_in::read_form(&page).await?;
+    super::blocking(app.clone(), move |state| sign_in::save(state, &site, &username, &password)).await
 }
 
 #[cfg(test)]

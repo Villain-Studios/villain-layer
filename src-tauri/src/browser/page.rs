@@ -107,9 +107,21 @@ impl Page {
         }
     }
 
-    pub async fn outline(&self) -> Result<String> {
+    /// The page's outline, with the value of the `hidden` element shown as a
+    /// password's is: the field a saved password was filled into, even if
+    /// the page has turned it into plain text ("show password") (BRW-19).
+    pub async fn outline(&self, hidden: Option<i64>) -> Result<String> {
         let tree = self.call("Accessibility.getFullAXTree", json!({})).await?;
-        let nodes = tree.get("nodes").and_then(Value::as_array).cloned().unwrap_or_default();
+        let mut nodes = tree.get("nodes").and_then(Value::as_array).cloned().unwrap_or_default();
+        if let Some(n) = hidden {
+            for node in nodes.iter_mut().filter(|v| v.get("backendDOMNodeId").and_then(Value::as_i64) == Some(n)) {
+                let protected = json!({ "name": "protected", "value": { "type": "boolean", "value": true } });
+                match node.get_mut("properties").and_then(Value::as_array_mut) {
+                    Some(props) => props.push(protected),
+                    None => node["properties"] = json!([protected]),
+                }
+            }
+        }
         Ok(snapshot::outline(&nodes))
     }
 

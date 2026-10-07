@@ -1,3 +1,5 @@
+import type { SavedSignIn } from "./types-browser";
+
 export interface Project {
   id: string;
   name: string;
@@ -393,6 +395,8 @@ export interface Settings {
   phone_open: boolean;
   /** Sites agents may use in the browser besides this machine's (BRW-3). */
   browser_sites: string[];
+  /** Saved sign-ins, without their passwords (BRW-18). */
+  browser_sign_ins: SavedSignIn[];
 }
 
 /** Settings → Phone (PHONE-*), as `phone::status` reports it. */

@@ -53,6 +53,8 @@ import type {
   PhonePairing,
   BrowserInput,
   BrowserView,
+  SavedSignIn,
+  SignInForm,
 } from "./types";
 
 export const api = {
@@ -337,6 +339,14 @@ export const api = {
   browserSwitchTab: (taskId: string, tab: string) => invoke<void>("browser_switch_tab", { taskId, tab }),
   /** The last tab is left open, empty. */
   browserCloseTab: (taskId: string, tab: string) => invoke<void>("browser_close_tab", { taskId, tab }),
+  addBrowserSignIn: (site: string, username: string, password: string) =>
+    invoke<SavedSignIn>("add_browser_sign_in", { site, username, password }),
+  forgetBrowserSignIn: (id: string) => invoke<void>("forget_browser_sign_in", { id }),
+  /** The site and username the page's sign-in form holds; never its password. */
+  browserSignInForm: (taskId: string) => invoke<SignInForm>("browser_sign_in_form", { taskId }),
+  /** Saves what was typed into the page; the backend reads the password from it. */
+  browserSaveSignIn: (taskId: string, site: string, username: string) =>
+    invoke<SavedSignIn>("browser_save_sign_in", { taskId, site, username }),
   browserDialog: (taskId: string, accept: boolean, text?: string) =>
     invoke<void>("browser_dialog", { taskId, accept, text: text ?? null }),
   /** Returns the list as kept: each site as its host, what is not one dropped. */

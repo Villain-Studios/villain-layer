@@ -151,3 +151,13 @@ export function ReloadIcon({ size = 15 }: { size?: number }) {
     </Svg>
   );
 }
+
+/** A key, for a saved sign-in. */
+export function KeyIcon({ size = 15 }: { size?: number }) {
+  return (
+    <Svg size={size}>
+      <circle cx="8" cy="15" r="4" />
+      <path d="M11 12l9-9M17 6l3 3M14 9l2 2" />
+    </Svg>
+  );
+}

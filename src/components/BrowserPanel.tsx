@@ -262,8 +262,10 @@ export function BrowserPanel({ taskId, visible, onClose }: { taskId: string; vis
   /** The page's site, allowed for agents from the panel itself (BRW-3). */
   async function allowHere(site: string) {
     try {
-      await api.setBrowserSites([...(allowed ?? []), site]);
+      const kept = await api.setBrowserSites([...(allowed ?? []), site]);
       await refreshSettings();
+      // Said, not left silent: a click that kept nothing looked like a dead button.
+      if (!kept.includes(site)) fail(`${site} is not a site agents can be allowed to use.`);
     } catch (e) {
       fail(e);
     }
@@ -290,10 +292,11 @@ export function BrowserPanel({ taskId, visible, onClose }: { taskId: string; vis
     }
   }
 
+  // Only a web page has a site to allow: Chrome's own pages have none.
   const [host, hostname] = (() => {
     try {
       const u = new URL(view?.url ?? "");
-      return [u.host, u.hostname];
+      return u.protocol === "http:" || u.protocol === "https:" ? [u.host, u.hostname] : ["", ""];
     } catch {
       return ["", ""];
     }

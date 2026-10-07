@@ -207,9 +207,15 @@ fn not_allowed(url: &str) -> Error {
 async fn allowed_page(page: &Page, state: &AppState) -> Result<(String, String)> {
     // A page with a dialog open answers nothing until it is answered: its
     // address as last heard, instead of asking it.
+    let heard = || state.browser.state_of(&page.task).map(|s| (s.0, s.1)).unwrap_or_default();
     let (url, title) = match state.browser.dialog(&page.task) {
-        Some(_) => state.browser.state_of(&page.task).map(|s| (s.0, s.1)).unwrap_or_default(),
-        None => page.location().await?,
+        Some(_) => heard(),
+        None => match page.location().await? {
+            // Chrome's error page for one that could not load: the page is
+            // the address that failed, which the tab keeps.
+            (u, _) if u.starts_with("chrome-error:") => heard(),
+            here => here,
+        },
     };
     let sites = state.config.read().browser.sites;
     if !sites::allowed(&url, &sites) {

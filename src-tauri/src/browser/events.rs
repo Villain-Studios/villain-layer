@@ -105,7 +105,16 @@ impl Browser {
                 let own = page.opener.is_none();
                 match e.method.as_str() {
                     "Page.frameNavigated" if e.params.pointer("/frame/parentId").is_none() => {
-                        let url = e.params.pointer("/frame/url").and_then(Value::as_str).unwrap_or_default();
+                        // A page that could not load is shown as Chrome's own
+                        // error page, whose address is not a site; the one that
+                        // failed is what the tab is on, for the panel and for
+                        // agents alike.
+                        let url = e
+                            .params
+                            .pointer("/frame/unreachableUrl")
+                            .or_else(|| e.params.pointer("/frame/url"))
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
                         if page.url != url {
                             page.url = url.to_string();
                             if own && sites::host_of(url).is_some() {
@@ -228,6 +237,31 @@ mod tests {
 
     fn text(content: &[Value]) -> String {
         content.iter().filter_map(|c| c.get("text").and_then(Value::as_str)).collect()
+    }
+
+    /// Against a real Chrome: a page that cannot be reached keeps its own
+    /// address, not Chrome's error page's (`chrome-error://chromewebdata/`),
+    /// which is not a site: the panel offered to allow "chromewebdata", and
+    /// agents were refused a page on this machine.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_page_that_cannot_be_reached_keeps_its_address() {
+        let Some((app, root, pane)) = app_with_task() else { return };
+        let state = app.state::<AppState>();
+        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let dead = format!("http://localhost:{port}/");
+
+        let page = state.browser.page(app.handle(), "t1").await.unwrap();
+        let refused = page.navigate(&dead).await.unwrap_err();
+        assert!(refused.to_string().contains("ERR_CONNECTION_REFUSED"), "{refused}");
+        page.settle(&state.browser).await;
+        assert_eq!(state.browser.view("t1").url, dead);
+
+        let read = call(app.handle(), "browser_snapshot", json!({}), Some(&pane)).await.unwrap();
+        assert!(text(&read).contains(&format!("URL: {dead}")), "{}", text(&read));
+
+        state.browser.shutdown(Duration::from_secs(3));
+        state.ptys.shutdown(Duration::from_secs(1));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// Against a real Chrome: a window the page opens is shown in the task's

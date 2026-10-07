@@ -278,13 +278,7 @@ const answer: Record<string, Answer> = {
       at(3, "nit", "The comment says what the line does; say why counting from zero is right here.", "// Counted from zero: the first try is not a retry."),
       at(40, "risk", "The backoff is never capped: with retries raised in config, the last wait is minutes long.", "await sleep(2 ** attempt * 100);", false),
     ];
-    const plan = [
-      { checkout_id: c?.id ?? "", path: "src/auth.ts", group: "start", why: "where the retry count changes" },
-      { checkout_id: c?.id ?? "", path: "src/auth.test.ts", group: "tests", why: "covers the new count" },
-    ];
     return new Promise((done) => setTimeout(() => done({
-      summary: "Counts retries from zero and logs each attempt. The risk is in auth.ts: the loop now makes one request more than configured.",
-      plan,
       findings, heads: (task?.checkouts ?? []).map((x) => ({ checkout_id: x.id, head: "f".repeat(40) })), model: "sonnet", dropped: 1,
     }), 2500));
   },
@@ -306,40 +300,6 @@ const answer: Record<string, Answer> = {
       }],
     };
     world.tasks = [...world.tasks, task];
-    return task;
-  },
-  task_for_review: (a) => {
-    const pr = a.pr as { repo: string; number: number; title: string; url: string; author: string; base: string };
-    const had = world.tasks.find((t) => t.review?.repo === pr.repo && t.review.number === pr.number);
-    if (had) return had;
-    const repo = pr.repo.split("/").pop() ?? "repo";
-    const id = `t-review-${world.tasks.length}`;
-    const branch = `review/${repo}-${pr.number}`;
-    const root = `/Users/you/.villain-worktrees/review-${repo}-${pr.number}`;
-    const queued = [...world.reviews.mine, ...(world.reviews.team?.prs ?? [])].find((r) => r.url === pr.url);
-    const task: TaskView = {
-      id, name: `Review: ${pr.title}`, root, branch, issue_key: null, issue_url: null,
-      created_at: ago(0), pane_count: 0,
-      review: { repo: pr.repo, number: pr.number, url: pr.url, author: pr.author, head_sha: queued?.head_sha ?? "c".repeat(40) },
-      checkouts: [{
-        id: `c-${id}`, task_id: id, project_id: `p-${repo}`, project_name: repo, path: `${root}/${repo}`,
-        base: pr.base, exists: true, broken: null, changed: 0,
-        status: { ahead: 0, behind: 0, staged: 0, unstaged: 0, untracked: 0, conflicted: 0, dirty_files: 0, branch },
-      }],
-    };
-    world.tasks = [...world.tasks, task];
-    return task;
-  },
-  github_post_review: (a) => {
-    const notes = (a.notes as unknown[]) ?? [];
-    return { url: "https://github.com/acme/api/pull/61#pullrequestreview-1", inline: notes.length, in_body: 0, moved_all: false };
-  },
-  review_take_latest: (a) => {
-    const task = world.tasks.find((t) => t.id === a.taskId);
-    if (!task?.review) throw new Error("not a review of a pull request");
-    const queued = [...world.reviews.mine, ...(world.reviews.team?.prs ?? [])].find((r) => r.url === task.review?.url);
-    task.review = { ...task.review, head_sha: queued?.head_sha ?? task.review.head_sha };
-    world.tasks = world.tasks.map((t) => (t.id === task.id ? { ...task } : t));
     return task;
   },
   github_all_prs: () => world.prs,

@@ -2,14 +2,13 @@ import { useEffect, useState, type MouseEvent, type ReactNode } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api } from "../lib/api";
 import { copyText } from "../lib/clipboard";
-import { authoredGroups, countOf, reviewCounts, reviewTaskOf, taskOfPr } from "../lib/derive";
+import { authoredGroups, countOf, reviewCounts, taskOfPr } from "../lib/derive";
 import { goTo } from "../lib/goto";
 import { readOneOf, write } from "../lib/persist";
 import { ago } from "../lib/time";
 import { useStore } from "../store";
 import type { AuthoredPr, ReviewRequest, TeamReviews } from "../lib/types";
 import { ChevronIcon } from "./icons";
-import { ReviewInProgress, ReviewPage } from "./ReviewPage";
 import { ContextMenu, Spinner, type MenuItem } from "./ui";
 
 /** `@fe` when that is all we know; the team's own name when GitHub sent one. */
@@ -25,9 +24,8 @@ function identity(pr: { repo: string; number: number }): string {
 }
 
 /**
- * A pull request waiting on your review, what it asks of you (REV-9), and
- * the way to review it here (REV-10): "Review" checks it out as a task of
- * its own and opens its diff. With a review task, a click goes there.
+ * A pull request waiting on your review, and what it asks of you (REV-9).
+ * A click opens it on GitHub, where it is reviewed.
  */
 function ReviewCard({
   pr,
@@ -39,30 +37,7 @@ function ReviewCard({
   onContextMenu: (e: MouseEvent) => void;
 }) {
   const fail = useStore((s) => s.fail);
-  const refreshTasks = useStore((s) => s.refreshTasks);
-  const task = useStore((s) => reviewTaskOf(pr, s.reviewTasks));
-  const [starting, setStarting] = useState(false);
-  const openGitHub = () => void openUrl(pr.url).catch(fail);
-  const openReview = (id: string) => useStore.getState().openReviewTask(id);
-  const open = () => (task ? openReview(task.id) : openGitHub());
-
-  async function review() {
-    if (task) return openReview(task.id);
-    setStarting(true);
-    try {
-      const made = await api.taskForReview({
-        repo: pr.repo, number: pr.number, title: pr.title, url: pr.url, author: pr.author, head: pr.head, base: pr.base,
-      });
-      // In the list before going to it: a review the store has not seen yet
-      // has no page to open.
-      await refreshTasks();
-      openReview(made.id);
-    } catch (e) {
-      fail(e);
-    } finally {
-      setStarting(false);
-    }
-  }
+  const open = () => void openUrl(pr.url).catch(fail);
 
   return (
     // A div, not a button: it holds buttons of its own.
@@ -79,7 +54,7 @@ function ReviewCard({
         }
       }}
       onContextMenu={onContextMenu}
-      title={task ? "Continue your review" : pr.url}
+      title={pr.url}
     >
       <div className="top">
         <span className="repo">{pr.repo || "pull request"}</span>
@@ -91,7 +66,7 @@ function ReviewCard({
           type="button"
           className="btn btn-sm"
           title={pr.url}
-          onClick={(e) => { e.stopPropagation(); openGitHub(); }}
+          onClick={(e) => { e.stopPropagation(); open(); }}
         >
           GitHub ↗
         </button>
@@ -108,15 +83,6 @@ function ReviewCard({
         {pr.checks === "pending" && <span className="chip warn">checks running</span>}
         {pr.checks === "passing" && <span className="chip add">checks pass</span>}
         <MyReview pr={pr} />
-        <button
-          type="button"
-          className="btn btn-sm start"
-          disabled={starting}
-          title={task ? "Continue your review" : `Review #${pr.number} here: its diff, your comments, Claude's first pass, and posting it to GitHub`}
-          onClick={(e) => { e.stopPropagation(); void review(); }}
-        >
-          {starting ? <Spinner /> : task ? "Continue review" : "Review"}
-        </button>
       </div>
     </div>
   );
@@ -286,8 +252,6 @@ function ReviewList({
 
 export function ReviewsView() {
   const settings = useStore((s) => s.settings);
-  const reviewTasks = useStore((s) => s.reviewTasks);
-  const reviewing = useStore((s) => s.reviewTasks.find((t) => t.id === s.openReview) ?? null);
   const queue = useStore((s) => s.reviewQueue);
   const loading = useStore((s) => s.reviewQueueLoading);
   const error = useStore((s) => s.reviewQueueError);
@@ -380,9 +344,6 @@ export function ReviewsView() {
     );
   }
 
-  // One pull request under review takes the whole view (REV-10).
-  if (reviewing) return <ReviewPage task={reviewing} />;
-
   const team = queue?.team ?? null;
   const authored = queue?.authored ?? null;
 
@@ -451,17 +412,6 @@ export function ReviewsView() {
 
       {side === "review" && (
         <>
-          {reviewTasks.length > 0 && (
-            <ReviewList
-              heading="In progress"
-              title="Reviews you have started here"
-              count={String(reviewTasks.length)}
-              open={!shut.started}
-              onToggle={() => toggle("started")}
-            >
-              {reviewTasks.map((t) => <ReviewInProgress key={t.id} task={t} />)}
-            </ReviewList>
-          )}
           <ReviewList
             heading="You"
             count={queue ? countOf(queue.mine.length, queue.mine_more) : undefined}

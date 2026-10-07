@@ -77,8 +77,10 @@ pub struct Task {
     /// That agent works on it from the chat, where the task cannot see it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chat: Option<String>,
-    /// Someone else's pull request, checked out to review it (REV-10). Such
-    /// a task is never pushed, opens no pull request and moves no ticket.
+    /// Someone else's pull request, checked out to review it by 0.5.0,
+    /// which could review pull requests here. Nothing makes one now, but
+    /// the checkouts made then stay until deleted: such a task is never
+    /// pushed, opens no pull request and moves no ticket.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review: Option<ReviewOf>,
     /// Its browser tabs' pages and which was active (BRW-6), opened again
@@ -102,7 +104,7 @@ impl Task {
     }
 }
 
-/// The pull request a review task is of.
+/// The pull request a review task left from 0.5.0 is of.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReviewOf {
     /// `owner/name` of the repository it merges into.

@@ -10,12 +10,10 @@ use crate::error::{Error, Result};
 
 mod outgoing;
 mod remote;
-mod review;
 mod store;
 mod upkeep;
 pub use outgoing::{outgoing_commits, outgoing_from, outgoing_patch};
 pub use remote::origin_slug;
-pub use review::{follow_pull, take_pull};
 pub use store::{
     adopt_worktree, belongs_to, changed_between, copy_local_config, create_store, default_tip,
     follow_clone_origin, is_own_clone, is_store_of, owner, reclaim_clone, relink_worktree, take_branch_from_clone, take_branch_from_origin,

@@ -214,8 +214,8 @@ pub async fn github_all_prs(state: State<'_, AppState>) -> Result<Vec<TaskPrs>> 
         .read()
         .tasks
         .iter()
-        // A review task has no pull request of its own on its branch, and
-        // its ticket is someone else's to move (REV-10).
+        // A review task left from 0.5.0 has no pull request of its own on
+        // its branch, and its ticket is someone else's to move.
         .filter(|t| t.review.is_none())
         .map(|t| t.id.clone())
         .collect();

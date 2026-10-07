@@ -16,8 +16,9 @@ cask "villain-layer" do
     strategy :github_latest
   end
 
-  # Only macOS 27 has been tried. Lower this once an older one has been.
-  depends_on macos: :golden_gate
+  # macOS 26 is the oldest the tests run on (check.yml pins it). Lower this
+  # once an older one has been tried.
+  depends_on macos: :tahoe
 
   app "Villain Layer.app"
 

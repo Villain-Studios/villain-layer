@@ -42,8 +42,10 @@ result, and pushes it. Change the cask here: the tap's copy is overwritten.
 A prerelease is never put in the tap.
 
 The cask refuses to upgrade or uninstall while Villain Layer is running,
-for the same reason `release:mac` does. It requires macOS 27, the only one
-it has been tried on.
+for the same reason `release:mac` does. It requires macOS 26, the oldest
+the tests run on: `check.yml` and `release.yml` run on `macos-26`, not
+`macos-latest`, so that 26 stays tested when GitHub moves on. Lower both
+together.
 
 ### Setting up the tap, once
 

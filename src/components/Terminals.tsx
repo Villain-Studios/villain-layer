@@ -5,9 +5,10 @@ import { read, write } from "../lib/persist";
 import { markStopping, useStore } from "../store";
 import { paneScope, paneState } from "../lib/derive";
 import type { PaneInfo, Resumable, TaskView } from "../lib/types";
+import { BrowserPanel, useBrowserView } from "./BrowserPanel";
 import { ChatLink } from "./ChatLink";
 import { TerminalPane } from "./Terminal";
-import { CloseIcon, PlusIcon, SwapIcon } from "./icons";
+import { CloseIcon, GlobeIcon, PlusIcon, SwapIcon } from "./icons";
 import { ContextMenu, Field, Modal, Spinner } from "./ui";
 import type { MenuItem } from "./ui";
 
@@ -72,6 +73,17 @@ export function Terminals({ task }: { task: TaskView }) {
   const cursorIde = useStore((s) => s.cursorIde);
 
   const multi = task.checkouts.length > 1;
+
+  /** The task's browser beside its terminals (BRW-9), remembered per task. */
+  const [browserOpen, setBrowserOpen] = useState(() => read<boolean>(`browserOpen.${task.id}`, false));
+  const showBrowser = (open: boolean) => {
+    setBrowserOpen(open);
+    write(`browserOpen.${task.id}`, open);
+  };
+  const browser = useBrowserView(task.id);
+  /** The browser's share of the width, dragged. */
+  const [browserShare, setBrowserShare] = useState(() => read<number>("browserShare", 0.5));
+  const splitRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { setScope(null); }, [task.id]);
 
@@ -367,6 +379,20 @@ export function Terminals({ task }: { task: TaskView }) {
         )}
 
         <button
+          className={`btn btn-sm btn-add${browserOpen ? " active" : ""}`}
+          title={
+            browserOpen
+              ? "Hide this task's browser"
+              : browser?.tab
+                ? "Show this task's browser: its agents have used it"
+                : "Show this task's browser"
+          }
+          onClick={() => showBrowser(!browserOpen)}
+        >
+          <GlobeIcon />
+          {!browserOpen && browser?.tab && <span className="browser-dot" />}
+        </button>
+        <button
           ref={addRef}
           className="btn btn-sm btn-add"
           title="New pane"
@@ -421,6 +447,7 @@ export function Terminals({ task }: { task: TaskView }) {
         );
       })()}
 
+      <div className="term-split" ref={splitRef}>
       <div className="pane-stack">
         {panes.map((p) => (
           // Visible also means this tab is the one on screen. Terminals stay
@@ -485,6 +512,35 @@ export function Terminals({ task }: { task: TaskView }) {
             </div>
           </div>
         )}
+      </div>
+      {browserOpen && (
+        <>
+          <div
+            className="diff-grip"
+            title="Drag to resize"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              const box = splitRef.current?.getBoundingClientRect();
+              if (!box) return;
+              const move = (m: MouseEvent) => {
+                // Clamped so neither side can be dragged away: the agent's
+                // terminal and the page it works on are both the point.
+                setBrowserShare(Math.min(0.8, Math.max(0.2, (box.right - m.clientX) / box.width)));
+              };
+              const done = () => {
+                window.removeEventListener("mousemove", move);
+                window.removeEventListener("mouseup", done);
+                setBrowserShare((v) => { write("browserShare", v); return v; });
+              };
+              window.addEventListener("mousemove", move);
+              window.addEventListener("mouseup", done);
+            }}
+          />
+          <div className="browser-side" style={{ flexBasis: `${browserShare * 100}%` }}>
+            <BrowserPanel taskId={task.id} visible={tab === "terminals"} onClose={() => showBrowser(false)} />
+          </div>
+        </>
+      )}
       </div>
 
       {handoff && (

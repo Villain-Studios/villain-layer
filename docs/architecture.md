@@ -126,6 +126,7 @@ for, and the reverse, and that each is in this table.
 | `app:notices` | none | a notice was queued after startup (`commands::notify`) | `Watchers.tsx` → `takeNotices`, as toasts |
 | `messages:changed` | none | the message center's log changed: recorded, read or cleared (`messages.rs`) | `Watchers.tsx` → `refreshMessages` |
 | `notes:changed` | none | an agent remembered, checked or forgot a repo note (`notes.rs`, MEM-5) | `ReposView.tsx`, while open → `listRepoNotes` |
+| `browser:changed` | task id, or `""` for every task | a task's tab changed: made, navigated, retitled, loading, an agent acted, closed; or the browser went away (`browser/`) | `BrowserPanel.tsx` (`useBrowserView`) → `browser_view` |
 | `phone:changed` | none | phone access changed: a way in switched, a phone paired, forgotten, connected or gone (`phone/`) | `PhoneSettings.tsx` → `phoneStatus`, for Settings and the top bar's phone |
 
 What still polls, and why, is marked at each `setInterval` with
@@ -186,6 +187,15 @@ the config folder, started by the first call that needs a tab.
   the page's outline (`snapshot.rs`), built from the accessibility tree:
   roles and names, with the backend node id of anything actionable as its
   ref.
+- **The panel** (`BrowserPanel.tsx`) is not a web view of the page but a
+  picture of it: `Page.startScreencast` frames, JPEGs, sent raw over a
+  Tauri `Channel` (an event would carry them as base64 inside JSON) and
+  drawn on a canvas, newest only. Only the watched tab is sent frames, and
+  each is acknowledged no sooner than 66ms after the last, which is how
+  Chrome is held to 15 a second. The user's input goes back through
+  `browser_input` without waiting for Chrome's answer, mouse moves
+  coalesced to one per animation frame. Keys arrive at an off-screen
+  textarea, so the window's paste and input methods have somewhere to land.
 - **Headless Chrome on macOS** has no menu bar, and it is the menu that
   makes ⌘A select all; `keys.rs` sends the editing command with the key.
   It also calls itself `HeadlessChrome` in its user agent, which some

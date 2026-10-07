@@ -194,6 +194,18 @@ async fn report(page: &Page, state: &AppState, did: &str) -> Result<Vec<Value>> 
     Ok(text(format!("{did}\n\nPage: {title}\nURL: {url}\n\n{outline}")))
 }
 
+/// How the panel names an element an agent acted on: its label, not its
+/// value, which for a password field is the password.
+async fn label(page: &Page, n: i64) -> String {
+    page.call_on(n, LABEL, vec![])
+        .await
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_string))
+        .filter(|l| !l.is_empty())
+        .map(|l| format!("“{l}”"))
+        .unwrap_or_else(|| format!("e{n}"))
+}
+
 fn node(args: &Value) -> Result<i64> {
     let r = required(args, "ref")?;
     snapshot::node_of(r).ok_or_else(|| Error::Other(format!("{r} is not a ref: use one from the outline, like e12")))
@@ -211,12 +223,14 @@ pub async fn call<R: Runtime>(app: &AppHandle<R>, name: &str, args: Value, calle
             if !sites::allowed(&url, &state.config.read().browser.sites) {
                 return Err(not_allowed(&url));
             }
+            browser.record(app, &task, &format!("Opened {url}"), None);
             page.navigate(&url).await?;
             page.settle(browser).await;
             report(&page, &state, &format!("Opened {url}.")).await
         }
 
         "browser_back" => {
+            browser.record(app, &task, "Went back", None);
             let went = page.back().await?;
             if !went {
                 return report(&page, &state, "There is no page to go back to.").await;
@@ -225,12 +239,15 @@ pub async fn call<R: Runtime>(app: &AppHandle<R>, name: &str, args: Value, calle
             report(&page, &state, "Went back.").await
         }
 
-        "browser_snapshot" => report(&page, &state, "").await.map(|mut c| {
+        "browser_snapshot" => {
+            browser.record(app, &task, "Read the page", None);
+            report(&page, &state, "").await.map(|mut c| {
             if let Some(t) = c[0].get("text").and_then(Value::as_str) {
                 c[0]["text"] = json!(t.trim_start());
             }
             c
-        }),
+        })
+        }
 
         "browser_click" => {
             allowed_page(&page, &state).await?;
@@ -238,6 +255,8 @@ pub async fn call<R: Runtime>(app: &AppHandle<R>, name: &str, args: Value, calle
             let at = page.center(n).await?;
             let right = args.get("right").and_then(Value::as_bool).unwrap_or(false);
             let double = args.get("double").and_then(Value::as_bool).unwrap_or(false);
+            let what = if double { "Double-clicked" } else if right { "Right-clicked" } else { "Clicked" };
+            browser.record(app, &task, &format!("{what} {}", label(&page, n).await), Some(at));
             page.click(at, if right { "right" } else { "left" }, if double { 2 } else { 1 }).await?;
             page.settle(browser).await;
             report(&page, &state, &format!("Clicked e{n}.")).await
@@ -246,7 +265,9 @@ pub async fn call<R: Runtime>(app: &AppHandle<R>, name: &str, args: Value, calle
         "browser_hover" => {
             allowed_page(&page, &state).await?;
             let n = node(&args)?;
-            page.hover(page.center(n).await?).await?;
+            let at = page.center(n).await?;
+            browser.record(app, &task, &format!("Pointed at {}", label(&page, n).await), Some(at));
+            page.hover(at).await?;
             tokio::time::sleep(Duration::from_millis(300)).await;
             report(&page, &state, &format!("The mouse is over e{n}.")).await
         }
@@ -255,6 +276,8 @@ pub async fn call<R: Runtime>(app: &AppHandle<R>, name: &str, args: Value, calle
             allowed_page(&page, &state).await?;
             let n = node(&args)?;
             let typed = args.get("text").and_then(Value::as_str).unwrap_or_default();
+            let at = page.center(n).await.ok();
+            browser.record(app, &task, &format!("Typed into {}", label(&page, n).await), at);
             page.focus(n).await?;
             if args.get("clear").and_then(Value::as_bool).unwrap_or(false) {
                 page.call_on(n, SELECT_ALL, vec![]).await?;
@@ -273,6 +296,7 @@ pub async fn call<R: Runtime>(app: &AppHandle<R>, name: &str, args: Value, calle
         "browser_press_key" => {
             allowed_page(&page, &state).await?;
             let key = required(&args, "key")?;
+            browser.record(app, &task, &format!("Pressed {key}"), None);
             page.key(key).await?;
             page.settle(browser).await;
             report(&page, &state, &format!("Pressed {key}.")).await
@@ -283,6 +307,7 @@ pub async fn call<R: Runtime>(app: &AppHandle<R>, name: &str, args: Value, calle
             let n = node(&args)?;
             let values: Vec<Value> = args.get("values").and_then(Value::as_array).cloned().unwrap_or_default();
             let chosen = page.call_on(n, SELECT_OPTIONS, vec![Value::Array(values)]).await?;
+            browser.record(app, &task, &format!("Chose an option in {}", label(&page, n).await), page.center(n).await.ok());
             Ok(text(format!("Chosen in e{n}: {chosen}")))
         }
 
@@ -296,6 +321,7 @@ pub async fn call<R: Runtime>(app: &AppHandle<R>, name: &str, args: Value, calle
                     (v.width as f64 / 2.0, v.height as f64 / 2.0)
                 }
             };
+            browser.record(app, &task, &format!("Scrolled {} {} pixels", if dy < 0.0 { "up" } else { "down" }, dy.abs()), Some(at));
             page.wheel(at, dy).await?;
             tokio::time::sleep(Duration::from_millis(400)).await;
             report(&page, &state, &format!("Scrolled {dy} pixels.")).await
@@ -305,6 +331,7 @@ pub async fn call<R: Runtime>(app: &AppHandle<R>, name: &str, args: Value, calle
             allowed_page(&page, &state).await?;
             let seconds = args.get("seconds").and_then(Value::as_f64).unwrap_or(5.0).clamp(0.0, 30.0);
             let deadline = Instant::now() + Duration::from_secs_f64(seconds);
+            browser.record(app, &task, "Waiting on the page", None);
             let did = match arg(&args, "text") {
                 Some(wanted) => {
                     let probe = format!("document.body ? document.body.innerText.includes({}) : false", json!(wanted));
@@ -328,6 +355,7 @@ pub async fn call<R: Runtime>(app: &AppHandle<R>, name: &str, args: Value, calle
 
         "browser_screenshot" => {
             let (url, _) = allowed_page(&page, &state).await?;
+            browser.record(app, &task, "Took a screenshot", None);
             let data = page.screenshot(browser.viewport(&task)).await?;
             Ok(vec![
                 json!({ "type": "image", "data": data, "mimeType": "image/jpeg" }),
@@ -338,12 +366,14 @@ pub async fn call<R: Runtime>(app: &AppHandle<R>, name: &str, args: Value, calle
         "browser_console" => {
             allowed_page(&page, &state).await?;
             let clear = args.get("clear").and_then(Value::as_bool).unwrap_or(false);
+            browser.record(app, &task, "Read the console", None);
             let lines = browser.console(&task, clear);
             Ok(text(if lines.is_empty() { "The console is empty.".to_string() } else { lines.join("\n") }))
         }
 
         "browser_evaluate" => {
             allowed_page(&page, &state).await?;
+            browser.record(app, &task, "Ran JavaScript in the page", None);
             let value = page.eval(required(&args, "expression")?).await?;
             let shown = serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string());
             Ok(text(shown.chars().take(40_000).collect::<String>()))
@@ -352,6 +382,14 @@ pub async fn call<R: Runtime>(app: &AppHandle<R>, name: &str, args: Value, calle
         other => Err(Error::NotFound(format!("tool {other}"))),
     }
 }
+
+/// An element's name for a person: what it says or is labelled, never its
+/// value.
+const LABEL: &str = "function () {
+  const t = (this.getAttribute('aria-label') || (this.labels && this.labels[0] && this.labels[0].innerText)
+    || this.placeholder || this.innerText || this.title || this.alt || this.name || '').trim().split('\\n')[0];
+  return t.length > 40 ? t.slice(0, 40) + '…' : t;
+}";
 
 /// Select everything in a field, or in an editable element.
 const SELECT_ALL: &str = "function () {
@@ -383,27 +421,7 @@ const SELECT_OPTIONS: &str = "function (wanted) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{AppConfig, ConfigStore, Task};
-    use crate::pty::{PaneKind, SpawnOptions};
-
-    const HOME: &str = r#"<html><head><title>Home</title></head><body>
-        <h1>Hello</h1>
-        <a href="/two">Next page</a>
-        <input aria-label="User name">
-        <select aria-label="Size"><option value="s">Small</option><option value="l">Large</option></select>
-        <button onclick="console.log('saved', document.querySelector('input').value); document.title = 'Saved ' + event.isTrusted">Save</button>
-    </body></html>"#;
-
-    async fn serve() -> String {
-        use axum::{response::Html, routing::get, Router};
-        let router = Router::new()
-            .route("/", get(|| async { Html(HOME) }))
-            .route("/two", get(|| async { Html("<html><head><title>Two</title></head><body><p>The second page</p></body></html>") }));
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let base = format!("http://localhost:{}", listener.local_addr().unwrap().port());
-        tokio::spawn(async move { axum::serve(listener, router).await });
-        base
-    }
+    use crate::browser::tests::{app_with_task, serve, HOME};
 
     fn texts(content: &[Value]) -> String {
         content.iter().filter_map(|c| c.get("text").and_then(Value::as_str)).collect::<Vec<_>>().join("\n")
@@ -422,65 +440,9 @@ mod tests {
     /// the internet. Skipped where no Chrome is installed.
     #[tokio::test(flavor = "multi_thread")]
     async fn an_agent_uses_its_task_s_tab_on_this_machine_and_nothing_else() {
-        if super::super::chrome::find().is_none() {
-            eprintln!("skipped: no Chrome installed");
-            return;
-        }
-        let root = std::env::temp_dir().join(format!("vl-browser-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&root).unwrap();
-        let task = Task {
-            id: "t1".into(),
-            name: "Try the form".into(),
-            root: root.to_string_lossy().to_string(),
-            branch: "t1".into(),
-            issue_key: None,
-            issue_url: None,
-            created_at: chrono::Utc::now(),
-            ticket_stage: None,
-            chat: None,
-            review: None,
-            browser_url: None,
-        };
-        let cfg = AppConfig { tasks: vec![task], ..Default::default() };
-        let app = tauri::test::mock_app();
-        app.manage(AppState {
-            config: ConfigStore::for_tests(root.join("config.json"), cfg),
-            ptys: crate::pty::PtyManager::default(),
-            jira_types: Default::default(),
-            epic_field_missing: Default::default(),
-            pending_notices: Default::default(),
-            status_cache: Default::default(),
-            news: Default::default(),
-            messages: crate::messages::Messages::for_tests(root.join("messages.json")),
-            notes: crate::notes::Notes::load(&root),
-            browser: Default::default(),
-        });
+        let Some((app, root, pane)) = app_with_task() else { return };
         let state = app.state::<AppState>();
-        let pane = state
-            .ptys
-            .spawn(
-                app.handle(),
-                SpawnOptions {
-                    task_id: "t1".into(),
-                    checkout_id: None,
-                    cwd: root.to_string_lossy().to_string(),
-                    kind: PaneKind::Agent,
-                    title: "Agent".into(),
-                    program: "/bin/sleep".into(),
-                    args: vec!["60".into()],
-                    agent_id: Some("claude".into()),
-                    rows: None,
-                    cols: None,
-                    initial_input: None,
-                    prompted: false,
-                    env: Vec::new(),
-                    title_activity: None,
-                    title_topic: None,
-                },
-            )
-            .unwrap()
-            .id;
-        let base = serve().await;
+        let base = serve(HOME).await;
         let handle = app.handle();
         let tool = |name: &'static str, args: Value| call(handle, name, args, Some(&pane));
 
@@ -499,6 +461,9 @@ mod tests {
         let save = ref_of(&opened, "button \"Save\"");
         let clicked = texts(&tool("browser_click", json!({ "ref": save })).await.unwrap());
         assert!(clicked.contains("Page: Saved true"), "a click is real input: {clicked}");
+        let did = state.browser.view("t1").last_action.unwrap();
+        assert_eq!(did.text, "Clicked “Save”", "the panel names it as a person would");
+        assert!(did.x.is_some() && did.y.is_some());
         let console = texts(&tool("browser_console", json!({})).await.unwrap());
         assert!(console.contains("[log] saved ada"), "{console}");
 

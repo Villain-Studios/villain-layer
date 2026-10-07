@@ -131,6 +131,7 @@ mod landed;
 mod task_context;
 mod notes;
 mod phone;
+mod browser;
 
 pub use projects::*;
 pub use repos::*;
@@ -152,6 +153,7 @@ pub use outgoing::*;
 pub(crate) use landed::{advance, landed};
 pub use notes::*;
 pub use phone::*;
+pub use browser::*;
 
 #[cfg(test)]
 mod tests {

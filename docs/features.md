@@ -1178,6 +1178,13 @@ drive it with the `browser_*` tools (§12): they read a page as an outline
 of numbered elements, act on those, and get the page back as it is
 afterwards.
 
+The globe in a task's pane bar shows its tab beside the terminals (a dot
+on it says the task's agents have used the browser). The panel has an
+address bar, back, forward and reload, and the page itself, live: the user
+clicks, scrolls, types and pastes in it as in any browser, to sign in or
+to help an agent that is stuck. Under it is what an agent last did, and a
+ring marks where it clicked.
+
 - **BRW-1** There MUST be one browser for the app, started when it is first
   needed, with one tab per task. It is the Google Chrome (or Chromium)
   installed on the Mac, run headless with a profile of its own in the
@@ -1200,6 +1207,20 @@ afterwards.
 - **BRW-5** A password field's value MUST NOT appear in an outline. The
   tools tell agents never to type the user's secrets, and to ask the user
   to sign in themselves.
+- **BRW-9** The panel MUST show the task's tab as it is, and the user's
+  own input MUST reach it as real input: mouse buttons, moves and the
+  wheel, keys, paste, dictation and an input method's text. The page is
+  laid out at the panel's size, so the user and the agents see the same
+  page. Frames are sent only while the panel is on screen, at most 15 a
+  second; a hidden panel costs nothing. ⌘C and ⌘X put the page's
+  selection on the Mac's clipboard (a headless Chrome copies to one of its
+  own); ⌘L, ⌘R, ⌘[ and ⌘] are the address bar, reload, back and forward.
+  The user may open any page; BRW-3 is about what agents may read, and the
+  panel says when agents cannot use the page it shows.
+- **BRW-10** What an agent last did in the tab MUST show under it, as a
+  person would say it ("Clicked “Save”"), and where it clicked is marked
+  for a moment. An element is named by its label, never its value, which
+  for a password field is the password.
 - **BRW-6** The tab MUST come back where it was: each task's last page is
   kept in `config.json`, and opened when the task's tab is next needed.
   Deleting or finishing a task closes its tab.
@@ -1214,13 +1235,19 @@ afterwards.
 
 Code: `browser/` (`chrome.rs` finding and running it, `cdp.rs` the
 protocol, `page.rs` a tab's actions, `snapshot.rs` the outline, `sites.rs`
-BRW-3, `tools.rs` the tools), `mcp.rs` (`dispatch`).
+BRW-3, `tools.rs` the tools, `input.rs` the panel's input),
+`commands/browser.rs`, `mcp.rs` (`dispatch`), `BrowserPanel.tsx`,
+`lib/browserInput.ts`, `Terminals.tsx`.
 
 Known gaps:
 - Agents cannot see the page's frames from another site (an embedded
   sign-in or payment form): the outline is the main page's.
 - Passkeys, password managers and extensions do not work in the app's own
   profile.
+- A `<select>` list's options are not drawn when it opens in the panel:
+  choose with the arrow keys and Enter, or by typing an option's first
+  letters. Agents use `browser_select`.
+- The mouse pointer does not change over links and text fields.
 
 ---
 

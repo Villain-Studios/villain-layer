@@ -295,6 +295,13 @@ pub fn run() {
             commands::set_phone_access,
             commands::phone_pair,
             commands::phone_forget,
+            commands::browser_view,
+            commands::browser_open,
+            commands::browser_go,
+            commands::browser_watch,
+            commands::browser_unwatch,
+            commands::browser_input,
+            commands::browser_copy,
         ])
         .build(tauri::generate_context!())
         // guard: allow panic — startup, before any agent exists; without a window there is nothing to run.

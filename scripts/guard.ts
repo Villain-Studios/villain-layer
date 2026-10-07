@@ -499,8 +499,9 @@ const DEFAULT_CEILING = 600;
  */
 const CEILINGS: Record<string, number> = {
   // One sheet by design (docs/recipes.md: each area's section, the tokens
-  // on :root); reviewing in the app (DIFF-6, REV-9..11, PR-11) added its sections.
-  "src/styles.css": 1900,
+  // on :root); reviewing in the app (DIFF-6, REV-9..11, PR-11) added its
+  // sections, and the browser panel (BRW-9) its own.
+  "src/styles.css": 2000,
   "src/components/DiffView.tsx": 1100,
   "src/components/PrPanel.tsx": 800,
   "src/store.ts": 800,

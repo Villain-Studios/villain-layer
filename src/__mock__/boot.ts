@@ -26,7 +26,7 @@
  */
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
-import type { Catchup, Cleaned, FlowStatus, Message, PaneInfo, PhoneStatus, Project, RepoUpdate, Synced, TaskView } from "../lib/types";
+import type { BrowserView, Catchup, Cleaned, FlowStatus, Message, PaneInfo, PhoneStatus, Project, RepoUpdate, Synced, TaskView } from "../lib/types";
 import { ago, SCENARIOS } from "./world";
 
 type Args = Record<string, unknown>;
@@ -68,6 +68,65 @@ function newPane(args: Args, kind: PaneInfo["kind"], task: string): PaneInfo {
   world.panes.push(p);
   world.output[p.id] = kind === "agent" ? `${p.title} starting…\r\n` : "you@mac % ";
   return p;
+}
+
+/**
+ * Each task's browser tab (§18). In the busy world, the login task's agent
+ * has been using its tab; the others have none until the panel opens.
+ */
+const browsers = new Map<string, BrowserView>();
+const noTab = (): BrowserView => ({
+  chrome: true, tab: null, url: "", title: "", loading: false, agents_may: false, last_action: null,
+});
+if (world.panes.some((p) => p.task_id === "t-login")) {
+  browsers.set("t-login", {
+    chrome: true,
+    tab: "tab-t-login",
+    url: "http://localhost:5173/login",
+    title: "Sign in · Acme",
+    loading: false,
+    agents_may: true,
+    last_action: { text: "Clicked “Sign in”", x: 160, y: 236, at: Date.now() - 40_000 },
+  });
+}
+function tabOf(task: string): BrowserView {
+  let b = browsers.get(task);
+  if (!b) {
+    b = { ...noTab(), tab: `tab-${task}`, url: "about:blank" };
+    browsers.set(task, b);
+    void emit("browser:changed", task);
+  }
+  return b;
+}
+
+/** A page as Chrome would draw it into a frame: a sign-in form. */
+async function frameOf(b: BrowserView, width: number, height: number, scale: number): Promise<ArrayBuffer> {
+  const c = document.createElement("canvas");
+  c.width = Math.round(width * scale);
+  c.height = Math.round(height * scale);
+  const g = c.getContext("2d")!;
+  g.scale(scale, scale);
+  g.fillStyle = "#f6f7f9";
+  g.fillRect(0, 0, width, height);
+  g.fillStyle = "#111";
+  g.font = "600 22px -apple-system, sans-serif";
+  g.fillText(b.title || "New tab", 40, 60);
+  g.font = "13px -apple-system, sans-serif";
+  g.fillStyle = "#666";
+  g.fillText(b.url || "about:blank", 40, 84);
+  for (const [i, label] of ["Email", "Password"].entries()) {
+    g.fillStyle = "#333";
+    g.fillText(label, 40, 118 + i * 52);
+    g.strokeStyle = "#bbb";
+    g.strokeRect(40, 124 + i * 52, 240, 30);
+  }
+  g.fillStyle = "#4f46e5";
+  g.fillRect(40, 220, 240, 34);
+  g.fillStyle = "#fff";
+  g.font = "600 14px -apple-system, sans-serif";
+  g.fillText("Sign in", 136, 242);
+  const blob = await new Promise<Blob>((done) => c.toBlob((x) => done(x!), "image/jpeg", 0.8));
+  return blob.arrayBuffer();
 }
 
 /** Settings → Phone. Off, with one phone paired before. */
@@ -400,6 +459,32 @@ const answer: Record<string, Answer> = {
     return null;
   },
 
+  browser_view: (a) => structuredClone(browsers.get(a.taskId as string) ?? noTab()),
+  browser_open: (a) => {
+    const b = tabOf(a.taskId as string);
+    const url = (a.url as string | null)?.trim();
+    if (url) {
+      b.url = url.includes("://") ? url : `http://${url}`;
+      const host = new URL(b.url).hostname;
+      b.title = host;
+      b.agents_may = host === "localhost" || host === "127.0.0.1";
+      void emit("browser:changed", a.taskId);
+    }
+    return null;
+  },
+  browser_go: () => null,
+  browser_watch: async (a) => {
+    const b = tabOf(a.taskId as string);
+    const frames = a.frames as { id: number };
+    const jpeg = await frameOf(b, a.width as number, a.height as number, a.scale as number);
+    const internals = (window as unknown as { __TAURI_INTERNALS__: { runCallback: (id: number, data: unknown) => void } }).__TAURI_INTERNALS__;
+    internals.runCallback(frames.id, { index: 0, message: jpeg });
+    return null;
+  },
+  browser_unwatch: () => null,
+  browser_input: () => null,
+  browser_copy: () => "copied from the page",
+
   // Plugins the UI reaches through @tauri-apps packages.
   "plugin:notification|is_permission_granted": () => true,
   "plugin:app|version": () => "0.0.0-mock",
@@ -424,6 +509,8 @@ mockIPC(
   calls,
   world,
   on: (cmd: string, fn: Answer) => overrides.set(cmd, fn),
+  /** Each task's browser tab; edit one, then emit "browser:changed" with its task. */
+  browsers,
   emit: (event: string, payload?: unknown) => emit(event, payload),
 };
 

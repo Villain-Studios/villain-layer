@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
   AddedRepo,
   AgentStatus,
@@ -51,6 +51,8 @@ import type {
   Target,
   PhoneStatus,
   PhonePairing,
+  BrowserInput,
+  BrowserView,
 } from "./types";
 
 export const api = {
@@ -313,6 +315,21 @@ export const api = {
     invoke<PhoneStatus>("set_phone_access", { tailscale, home, typing }),
   phonePair: () => invoke<PhonePairing>("phone_pair"),
   phoneForget: (id: string) => invoke<void>("phone_forget", { id }),
+
+  // browser (BRW-*)
+  browserView: (taskId: string) => invoke<BrowserView>("browser_view", { taskId }),
+  /** Opens the task's tab, starting the browser; goes to `url` when given. */
+  browserOpen: (taskId: string, url?: string) =>
+    invoke<void>("browser_open", { taskId, url: url ?? null }),
+  browserGo: (taskId: string, to: "back" | "forward" | "reload") =>
+    invoke<void>("browser_go", { taskId, to }),
+  /** Sizes the tab to the panel and sends its frames, JPEGs, to `frames`. */
+  browserWatch: (taskId: string, width: number, height: number, scale: number, frames: Channel<ArrayBuffer>) =>
+    invoke<void>("browser_watch", { taskId, width, height, scale, frames }),
+  browserUnwatch: (taskId: string) => invoke<void>("browser_unwatch", { taskId }),
+  browserInput: (taskId: string, input: BrowserInput) =>
+    invoke<void>("browser_input", { taskId, input }),
+  browserCopy: (taskId: string) => invoke<string>("browser_copy", { taskId }),
 };
 
 export function errMessage(e: unknown): string {

@@ -69,11 +69,19 @@ impl Page {
 
     /// Back one page in the tab's history. False when there is none.
     pub async fn back(&self) -> Result<bool> {
+        self.history(-1).await
+    }
+
+    pub async fn forward(&self) -> Result<bool> {
+        self.history(1).await
+    }
+
+    async fn history(&self, by: i64) -> Result<bool> {
         let h = self.call("Page.getNavigationHistory", json!({})).await?;
-        let at = h.get("currentIndex").and_then(Value::as_i64).unwrap_or(0);
-        let entry = (at > 0)
-            .then(|| h.get("entries")?.as_array()?.get(at as usize - 1)?.get("id")?.as_i64())
-            .flatten();
+        let at = h.get("currentIndex").and_then(Value::as_i64).unwrap_or(0) + by;
+        let entry = usize::try_from(at)
+            .ok()
+            .and_then(|i| h.get("entries")?.as_array()?.get(i)?.get("id")?.as_i64());
         let Some(id) = entry else { return Ok(false) };
         self.call("Page.navigateToHistoryEntry", json!({ "entryId": id })).await?;
         Ok(true)

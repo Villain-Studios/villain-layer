@@ -334,6 +334,8 @@ export interface TicketMove {
 
 // GitHub's pull requests, checks and reviews: their own file, re-exported here.
 export * from "./types-github";
+// The browser panel's (§18), likewise.
+export * from "./types-browser";
 
 export interface JiraConfig {
   base_url: string;
@@ -568,4 +570,5 @@ export interface RepoOutgoing {
   leftovers_more: boolean;
   error: string | null;
 }
+
 

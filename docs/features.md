@@ -919,6 +919,19 @@ credentials themselves.
 | `remember` | keep a lasting fact about a repository, after asking the user (MEM-1) | yes |
 | `check_note` | say a note still holds, as of now | |
 | `forget_note` | remove a note that no longer holds, with a reason for the message center | yes |
+| `browser_navigate` | open a page in the task's browser tab (BRW-3), and get its outline | |
+| `browser_back` | back one page | |
+| `browser_snapshot` | the page as an outline, each element it can act on numbered | |
+| `browser_click` | click an element, as real mouse input | |
+| `browser_hover` | move the mouse over an element | |
+| `browser_type` | type into a field | |
+| `browser_press_key` | press a key, with modifiers | |
+| `browser_select` | choose options in a list | |
+| `browser_scroll` | scroll the page, or the part under an element | |
+| `browser_wait` | wait for text to show, or for some seconds | |
+| `browser_screenshot` | an image of the tab | |
+| `browser_console` | the page's console messages and uncaught errors | |
+| `browser_evaluate` | run JavaScript in the page | |
 
 - **MCP-1** Every request MUST carry the bearer token. Loopback is not
   authorisation.
@@ -993,6 +1006,7 @@ Known gaps:
 | `~/.villain-worktrees/` (settable) | task folders, `_chat/` rooms, and `.repos/`: the app's own copy of each repo (REPO-4) |
 | a task folder | the worktrees, `AGENTS.md` and `CLAUDE.md` (task context), `TICKET.md` (PANE-13), `.mcp.json`, and `.gemini/settings.json`, `PR_DESCRIPTION.md`, `PR_FEEDBACK.md`, and hand-offs too long to type (`CONFLICTS.md`, `REVIEW_COMMENTS.md`, `PR_DRAFT_REQUEST.md`, `FIRST_PROMPT.md`, PANE-11) as they come up |
 | `~/.claude.json` | trust entries for the app's own folders only (PANE-10) |
+| `<config folder>/browser/` | the browser's own Chrome profile (BRW-1): cookies, sign-ins and storage of the pages opened there |
 | `~/Library/Logs/villain-layer/panic.log` | a crash's location and backtrace |
 
 The dev build uses `eu.codevillain.villain-layer.dev` for its config folder
@@ -1153,6 +1167,60 @@ Known gaps:
 - The key bar sends the arrows' normal-mode codes. The agent CLIs read
   them; a program that only takes the application-mode ones would not.
 - A phone cannot start, stop or hand off an agent.
+
+## 18. Browser
+
+Each task has a tab in a browser its agents can use: to open the dev
+server, read the page, fill in a form and click through it, as a person
+trying the change would. It is one Chrome for the app, run in the
+background with a profile of its own, and one tab in it per task. Agents
+drive it with the `browser_*` tools (§12): they read a page as an outline
+of numbered elements, act on those, and get the page back as it is
+afterwards.
+
+- **BRW-1** There MUST be one browser for the app, started when it is first
+  needed, with one tab per task. It is the Google Chrome (or Chromium)
+  installed on the Mac, run headless with a profile of its own in the
+  app's config folder: never the user's own Chrome profile, its sign-ins or
+  its extensions. Without Chrome, the tools say what to install.
+- **BRW-2** An agent's tools MUST act on its own task's tab, found from the
+  pane that calls (`X-Villain-Pane`). A chat's agent has none. The header
+  is not a credential (CHAT-3): an agent could name another task's pane and
+  drive that task's tab, which is no more than it could do by asking.
+- **BRW-3** Agents MUST use only pages on this machine (`localhost`,
+  `*.localhost`, `127.0.0.1`, `[::1]`), over `http` or `https`. Opening any
+  other page is refused, and so is reading or acting on a tab that a link
+  or a redirect took elsewhere. A page's text is written by whoever runs
+  the site, and an agent reads it as it reads a ticket: as something that
+  may tell it what to do.
+- **BRW-4** An action MUST be real input: mouse events at the element's
+  middle, scrolled into view, and keys as key events, so a page cannot tell
+  an agent's click from a person's. Each action waits for a page load it
+  started (up to 10 seconds) and answers with the page as it is then.
+- **BRW-5** A password field's value MUST NOT appear in an outline. The
+  tools tell agents never to type the user's secrets, and to ask the user
+  to sign in themselves.
+- **BRW-6** The tab MUST come back where it was: each task's last page is
+  kept in `config.json`, and opened when the task's tab is next needed.
+  Deleting or finishing a task closes its tab.
+- **BRW-7** The browser MUST stop with the app: asked to close, then its
+  process group killed after 3 seconds, alongside the agents' own grace
+  period. A browser that dies is started again when next needed.
+- **BRW-8** Nothing the browser does MUST wait on the main thread or the
+  async runtime. Chrome is started on the blocking pool and spoken to over
+  a pipe (`--remote-debugging-pipe`) by two threads of its own. A pipe, not
+  a port: with a debugging port open, any process on the Mac could drive
+  the browser and every site signed in to there.
+
+Code: `browser/` (`chrome.rs` finding and running it, `cdp.rs` the
+protocol, `page.rs` a tab's actions, `snapshot.rs` the outline, `sites.rs`
+BRW-3, `tools.rs` the tools), `mcp.rs` (`dispatch`).
+
+Known gaps:
+- Agents cannot see the page's frames from another site (an embedded
+  sign-in or payment form): the outline is the main page's.
+- Passkeys, password managers and extensions do not work in the app's own
+  profile.
 
 ---
 

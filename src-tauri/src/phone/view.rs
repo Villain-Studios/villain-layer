@@ -125,6 +125,7 @@ mod tests {
             ticket_stage: None,
             chat: None,
             review: None,
+            browser_url: None,
         }
     }
 

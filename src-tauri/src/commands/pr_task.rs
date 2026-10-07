@@ -282,6 +282,7 @@ mod tests {
             news: Default::default(),
             messages: crate::messages::Messages::for_tests(root.join("messages.json")),
             notes: crate::notes::Notes::load(root),
+            browser: Default::default(),
         }
     }
 

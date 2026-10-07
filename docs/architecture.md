@@ -49,6 +49,7 @@ the app's own copy of each repository, not to the user's clone:
 | tokio workers | `async fn` commands, HTTP clients, the MCP server | Nothing that blocks. The MCP server shares these. |
 | blocking pool | `commands::blocking(app, \|state\| …)`, `commands::off_runtime(\|\| …)` | git, file walks, child processes, the keychain |
 | per pane | a reader, a writer and a waiter thread, plus flush timers | owned by `pty.rs` |
+| browser | a reader and a writer thread on Chrome's pipe | owned by `browser/cdp.rs`; events are handled on the reader, which never waits on Chrome |
 | background | `attention` (5s), `news` (3 min while away), restore and login-shell warm-up at startup | started in `lib.rs` |
 
 `commands::blocking` exists because `delete_task` once froze the whole app
@@ -164,6 +165,31 @@ in front, and slower once nobody has touched it for 45 seconds
   Reports arrive at `/hook/<pane>` and are applied under one lock by
   `report_with`. Keystrokes adjust it too (`typed`): Esc at a question is a
   refusal.
+
+## The browser
+
+`browser/` runs one headless Chrome for the app, with a tab per task
+(§18 in `features.md`). Chrome is the user's installed one, on a profile in
+the config folder, started by the first call that needs a tab.
+
+- **The pipe.** Chrome reads DevTools Protocol messages on its fd 3 and
+  writes on its fd 4 (`--remote-debugging-pipe`), each ended by a NUL.
+  `cdp.rs` writes from one thread and reads on another. A call waits on a
+  oneshot, so the async side awaits without blocking; `send` does not wait
+  at all, for input and for anything sent from the reader itself.
+- **Tabs.** `Target.attachToTarget` with `flatten` gives each tab a session
+  id that every message about it carries. `Browser` keeps a task's tab by
+  that id, and the reader routes events by it: navigations (saved to the
+  task, BRW-6), loading, titles, the console.
+- **Tools** (`tools.rs`) find the task from the calling pane, check the
+  page's site against `sites.rs` before reading or acting, and answer with
+  the page's outline (`snapshot.rs`), built from the accessibility tree:
+  roles and names, with the backend node id of anything actionable as its
+  ref.
+- **Headless Chrome on macOS** has no menu bar, and it is the menu that
+  makes ⌘A select all; `keys.rs` sends the editing command with the key.
+  It also calls itself `HeadlessChrome` in its user agent, which some
+  sites turn away; each tab gets Chrome's own.
 
 ## Agents
 

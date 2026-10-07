@@ -212,6 +212,7 @@ mod tests {
             ticket_stage: moved.map(String::from),
             chat: None,
             review: None,
+            browser_url: None,
         }
     }
 

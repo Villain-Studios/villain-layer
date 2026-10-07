@@ -219,7 +219,11 @@ async fn dispatch(app: &AppHandle, method: &str, params: Value, caller: Option<&
             "serverInfo": { "name": "villain-layer", "version": env!("CARGO_PKG_VERSION") }
         })),
         "ping" => Ok(json!({})),
-        "tools/list" => Ok(json!({ "tools": tools() })),
+        "tools/list" => {
+            let mut all = tools();
+            all.extend(crate::browser::tools::list());
+            Ok(json!({ "tools": all }))
+        }
         "tools/call" => {
             let name = params
                 .get("name")
@@ -230,11 +234,17 @@ async fn dispatch(app: &AppHandle, method: &str, params: Value, caller: Option<&
 
             // A tool failure is reported to the model, not as a protocol error,
             // so it can read the message and try something else.
-            match call(app, &name, args, caller).await {
-                Ok(value) => Ok(json!({
-                    "content": [{ "type": "text", "text": to_text(&value) }],
-                    "isError": false
-                })),
+            // The browser's tools answer in content blocks of their own: a
+            // screenshot is an image, not text.
+            let answer = if crate::browser::tools::owns(&name) {
+                crate::browser::tools::call(app, &name, args, caller).await
+            } else {
+                call(app, &name, args, caller)
+                    .await
+                    .map(|value| vec![json!({ "type": "text", "text": to_text(&value) })])
+            };
+            match answer {
+                Ok(content) => Ok(json!({ "content": content, "isError": false })),
                 Err(e) => Ok(json!({
                     "content": [{ "type": "text", "text": e.to_string() }],
                     "isError": true
@@ -252,15 +262,15 @@ fn to_text(v: &Value) -> String {
     }
 }
 
-fn arg<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
+pub(crate) fn arg<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
     args.get(key).and_then(|v| v.as_str()).filter(|s| !s.is_empty())
 }
 
-fn required<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
+pub(crate) fn required<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
     arg(args, key).ok_or_else(|| crate::error::Error::Other(format!("{key} is required")))
 }
 
-fn tool(name: &str, description: &str, properties: Value, required: Vec<&str>) -> Value {
+pub(crate) fn tool(name: &str, description: &str, properties: Value, required: Vec<&str>) -> Value {
     json!({
         "name": name,
         "description": description,
@@ -272,11 +282,11 @@ fn tool(name: &str, description: &str, properties: Value, required: Vec<&str>) -
     })
 }
 
-fn str_prop(desc: &str) -> Value {
+pub(crate) fn str_prop(desc: &str) -> Value {
     json!({ "type": "string", "description": desc })
 }
 
-fn bool_prop(desc: &str) -> Value {
+pub(crate) fn bool_prop(desc: &str) -> Value {
     json!({ "type": "boolean", "description": desc })
 }
 

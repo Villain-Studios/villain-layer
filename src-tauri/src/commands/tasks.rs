@@ -513,6 +513,7 @@ pub(crate) fn new_task(state: &AppState, req: NewTask) -> Result<Task> {
         ticket_stage: None,
         chat: None,
         review: None,
+        browser_url: None,
     };
     state.config.update(|c| c.tasks.push(task.clone()))?;
 
@@ -960,6 +961,7 @@ fn delete_task_inner(state: &AppState, id: String, force: bool) -> Result<Vec<Re
     }
     let closed = state.ptys.close_task(&id);
     let _ = state.config.update(|c| c.saved_panes.retain(|p| !closed.contains(&p.id)));
+    state.browser.close_task(&id);
 
     let mut results = Vec::new();
     for checkout in state.config.checkouts_of(&id) {
@@ -1085,6 +1087,7 @@ mod tests {
             news: Default::default(),
             messages: crate::messages::Messages::for_tests(root.join("messages.json")),
             notes: crate::notes::Notes::load(root),
+            browser: Default::default(),
         }
     }
 

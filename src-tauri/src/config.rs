@@ -79,6 +79,10 @@ pub struct Task {
     /// a task is never pushed, opens no pull request and moves no ticket.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review: Option<ReviewOf>,
+    /// The page its browser tab was last on (BRW-6), opened again the next
+    /// time the tab is needed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser_url: Option<String>,
 }
 
 /// The pull request a review task is of.
@@ -286,6 +290,18 @@ pub struct AppConfig {
     pub slack: Option<SlackConfig>,
     #[serde(default)]
     pub phone: PhoneConfig,
+    #[serde(default)]
+    pub browser: BrowserConfig,
+}
+
+/// The browser agents use (§18).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BrowserConfig {
+    /// Sites agents may use besides this machine's own (BRW-3), as bare
+    /// hosts; each covers its subdomains. Empty by default: a page's text is
+    /// written by whoever runs the site, and agents read it as instructions.
+    pub sites: Vec<String>,
 }
 
 impl AppConfig {
@@ -320,6 +336,7 @@ impl AppConfig {
                 ticket_stage: None,
                 chat: None,
                 review: None,
+                browser_url: None,
             });
             self.checkouts.push(Checkout {
                 id: uuid::Uuid::new_v4().to_string(),

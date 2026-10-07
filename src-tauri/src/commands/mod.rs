@@ -29,6 +29,8 @@ pub struct AppState {
     pub messages: crate::messages::Messages,
     /// What agents learned about each repository (MEM-1).
     pub notes: crate::notes::Notes,
+    /// The browser agents use, a tab per task (§18).
+    pub browser: crate::browser::Browser,
 }
 
 /// Snapshot of one checkout's status, reused until it goes hot or ages out.
@@ -487,6 +489,7 @@ mod tests {
             ticket_stage: None,
             chat: None,
             review: None,
+            browser_url: None,
         });
         cfg.checkouts.push(Checkout {
             id: "c1".into(),
@@ -509,6 +512,7 @@ mod tests {
             news: Default::default(),
             messages: crate::messages::Messages::for_tests(std::env::temp_dir().join("vl-test-messages.json")),
             notes: crate::notes::Notes::load(&root),
+            browser: Default::default(),
         };
 
         assert_eq!(super::adopt_worktrees(&state), (1, Vec::new()));

@@ -216,7 +216,13 @@ This task reviews pull request {}#{}{}, at commit `{}`: {}.              `{}` is
         "repository's name, and it is checked out here on the same branch. Do that ",
         "rather than reading or editing the original clone: that one is on its own ",
         "branch and is not yours to change. `list_repos` shows what is available and ",
-        "`list_tasks` gives the task id.\n",
+        "`list_tasks` gives the task id.\n\n",
+        "## A browser\n\n",
+        "The `browser_*` tools on the `villain-layer` MCP server drive this task's own ",
+        "tab in a browser the user can watch and use too. Try what you build in it: ",
+        "start the dev server, `browser_navigate` to it, and read the page with ",
+        "`browser_snapshot`. Only this machine's pages (localhost) are allowed. Never ",
+        "type the user's passwords or other secrets: ask them to sign in themselves.\n",
     ));
     md
 }
@@ -325,6 +331,7 @@ mod tests {
             ticket_stage: None,
             chat: None,
             review: None,
+            browser_url: None,
         }
     }
 

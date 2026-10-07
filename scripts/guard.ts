@@ -547,13 +547,15 @@ for (const f of Object.keys(CEILINGS)) {
 const features = existsSync("docs/features.md") ? read("docs/features.md") : "";
 const architecture = existsSync("docs/architecture.md") ? read("docs/architecture.md") : "";
 
-const mcp = rust.get("src-tauri/src/mcp.rs");
-if (mcp) {
+// Every file that defines MCP tools: the browser's are kept with the browser.
+for (const file of ["src-tauri/src/mcp.rs", "src-tauri/src/browser/tools.rs"]) {
+  const mcp = rust.get(file);
+  if (!mcp) continue;
   for (const m of mcp.code.matchAll(/\btool\(\s*"/g)) {
     const start = m.index! + m[0].length;
     const name = mcp.raw.slice(start, mcp.raw.indexOf('"', start));
     if (!features.includes(`\`${name}\``)) {
-      report("docs-sync", "src-tauri/src/mcp.rs", lineAt(mcp.raw, m.index!),
+      report("docs-sync", file, lineAt(mcp.raw, m.index!),
         `MCP tool \`${name}\` is not in the tool table in docs/features.md. Agents' users read that table to know what an agent can do on their behalf.`);
     }
   }

@@ -1,6 +1,7 @@
 mod agents;
 mod attention;
 mod awake;
+mod browser;
 mod commands;
 mod config;
 mod error;
@@ -118,6 +119,7 @@ pub fn run() {
                 news: Default::default(),
                 messages: log,
                 notes,
+                browser: Default::default(),
             };
             app.manage(state);
             messages::spawn_writer(handle.clone(), dirty)?;
@@ -305,7 +307,14 @@ pub fn run() {
                 let state = app.state::<AppState>();
                 // Whatever the writer had not got to yet.
                 let _ = state.messages.flush();
+                // Beside the agents, not after them: each waits out its own
+                // grace period, and quitting should not take both (BRW-7).
+                let browser = app.clone();
+                let closing = std::thread::spawn(move || {
+                    browser.state::<AppState>().browser.shutdown(std::time::Duration::from_secs(3));
+                });
                 state.ptys.shutdown(std::time::Duration::from_secs(5));
+                let _ = closing.join();
             }
         });
 }

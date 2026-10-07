@@ -933,6 +933,7 @@ credentials themselves.
 | `browser_console` | the page's console messages and uncaught errors | |
 | `browser_evaluate` | run JavaScript in the page | |
 | `browser_request_site` | ask the user to let agents use a site (BRW-11) | |
+| `browser_dialog` | answer the page's alert, confirm or prompt (BRW-13) | |
 
 - **MCP-1** Every request MUST carry the bearer token. Loopback is not
   authorisation.
@@ -1232,6 +1233,18 @@ ring marks where it clicked.
   The tool waits up to two minutes and says what the user chose, or that
   no answer came yet; the same request again waits on the one already
   asked. No `confirm` an agent passes can stand in for the user's answer.
+- **BRW-12** "Take over" in the panel MUST keep the task's agents out of
+  its tab until "Hand back": every browser tool is refused while the user
+  holds it, reads included, so nothing an agent does or reads overlaps the
+  user signing in. The tool says why, so the agent can tell the user what
+  it was about to do. Holding outlives the tab: a browser started again is
+  still held.
+- **BRW-13** An alert, confirm or prompt the page opens MUST be shown over
+  the panel and answered there (OK, Cancel, a prompt's text), or by an
+  agent with `browser_dialog`. A headless Chrome draws none, and the page's
+  scripts wait on it: an agent's action that opened one comes back at once
+  saying so, rather than waiting on a page that cannot answer, and nothing
+  else is done until it is answered.
 - **BRW-6** The tab MUST come back where it was: each task's last page is
   kept in `config.json`, and opened when the task's tab is next needed.
   Deleting or finishing a task closes its tab.
@@ -1247,7 +1260,7 @@ ring marks where it clicked.
 Code: `browser/` (`chrome.rs` finding and running it, `cdp.rs` the
 protocol, `page.rs` a tab's actions, `snapshot.rs` the outline, `sites.rs`
 BRW-3, `tools.rs` the tools, `panel.rs` and `input.rs` the panel's side,
-`requests.rs` BRW-11),
+`requests.rs` BRW-11, `control.rs` BRW-12 and BRW-13),
 `commands/browser.rs`, `mcp.rs` (`dispatch`), `BrowserPanel.tsx`,
 `BrowserSettings.tsx`, `lib/browserInput.ts`, `Terminals.tsx`.
 

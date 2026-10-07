@@ -7,7 +7,7 @@ use tauri::{AppHandle, Manager};
 
 use super::AppState;
 use crate::browser::input::BrowserInput;
-use crate::browser::{sites, AgentAction, SiteRequest, Viewport};
+use crate::browser::{sites, AgentAction, Dialog, SiteRequest, Viewport};
 use crate::error::{Error, Result};
 
 /// A task's tab, as the panel shows it.
@@ -25,6 +25,10 @@ pub struct BrowserView {
     pub last_action: Option<AgentAction>,
     /// Sites the task's agents asked for, waiting on the user (BRW-11).
     pub requests: Vec<SiteRequest>,
+    /// A dialog the page opened, waiting on an answer (BRW-13).
+    pub dialog: Option<Dialog>,
+    /// The user has taken the tab over, and agents wait (BRW-12).
+    pub held: bool,
 }
 
 /// The task's tab, as last heard. Makes nothing: a task whose panel was
@@ -45,6 +49,8 @@ pub async fn browser_view(app: AppHandle, task_id: String) -> Result<BrowserView
         loading: view.loading,
         last_action: view.last_action,
         requests: state.browser.requests(&task_id),
+        dialog: view.dialog,
+        held: view.held,
     })
 }
 
@@ -148,6 +154,19 @@ pub async fn browser_copy(app: AppHandle, task_id: String) -> Result<String> {
         )
         .await?;
     Ok(v.as_str().unwrap_or_default().to_string())
+}
+
+/// Take the task's tab from its agents, or hand it back (BRW-12).
+#[tauri::command]
+pub fn browser_hold(app: AppHandle, task_id: String, held: bool) {
+    app.state::<AppState>().browser.hold(&app, &task_id, held);
+}
+
+/// Answer the dialog the page opened, from the panel (BRW-13).
+#[tauri::command]
+pub async fn browser_dialog(app: AppHandle, task_id: String, accept: bool, text: Option<String>) -> Result<()> {
+    let state = app.state::<AppState>();
+    state.browser.answer_dialog(&task_id, accept, text.as_deref()).await.map(|_| ())
 }
 
 /// The user's answer to an agent's request for a site (BRW-11). Allowed,

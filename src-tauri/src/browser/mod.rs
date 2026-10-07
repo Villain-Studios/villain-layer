@@ -6,6 +6,7 @@
 
 mod cdp;
 mod chrome;
+mod control;
 pub mod input;
 mod keys;
 mod page;
@@ -15,7 +16,7 @@ pub mod sites;
 mod snapshot;
 pub mod tools;
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -26,6 +27,7 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 use crate::commands::AppState;
 use crate::error::{Error, Result};
 use cdp::{Cdp, Event};
+pub use control::Dialog;
 pub use page::Page;
 pub use panel::AgentAction;
 pub use requests::SiteRequest;
@@ -70,6 +72,7 @@ struct Tab {
     viewport: Viewport,
     console: VecDeque<String>,
     last_action: Option<AgentAction>,
+    dialog: Option<Dialog>,
 }
 
 #[derive(Default)]
@@ -80,6 +83,9 @@ struct Inner {
     watch: Option<Watch>,
     requests: Vec<Asked>,
     next_request: u64,
+    /// Tasks whose tab the user has taken over (BRW-12). Kept apart from
+    /// the tabs, so a tab made again is still held.
+    held: HashSet<String>,
 }
 
 /// Tell the panel a task's tab changed; an empty task is every tab.
@@ -93,6 +99,8 @@ pub struct Browser {
     /// Held while Chrome starts or a tab is made, so two first calls at once
     /// make one browser and one tab.
     making: tokio::sync::Mutex<()>,
+    /// Rung when any tab opens a dialog (`until_dialog`).
+    dialog_opened: tokio::sync::Notify,
 }
 
 impl Browser {
@@ -313,6 +321,19 @@ impl Browser {
                         }
                     }
                 }
+                "Page.javascriptDialogOpening" => {
+                    if let Some(tab) = inner.tabs.get_mut(&task) {
+                        tab.dialog = Some(Dialog::from_event(&e.params));
+                    }
+                    self.dialog_opened.notify_waiters();
+                    tell = Some(task.clone());
+                }
+                "Page.javascriptDialogClosed" => {
+                    if let Some(tab) = inner.tabs.get_mut(&task) {
+                        tab.dialog = None;
+                    }
+                    tell = Some(task.clone());
+                }
                 "Target.targetDestroyed" | "Target.targetCrashed" | "Target.detachedFromTarget" => {
                     inner.tabs.remove(&task);
                 }
@@ -374,6 +395,7 @@ async fn make_tab(cdp: &Arc<Cdp>, user_agent: Option<&str>, viewport: Viewport) 
         viewport,
         console: VecDeque::new(),
         last_action: None,
+        dialog: None,
     })
 }
 

@@ -196,6 +196,11 @@ the config folder, started by the first call that needs a tab.
   `browser_input` without waiting for Chrome's answer, mouse moves
   coalesced to one per animation frame. Keys arrive at an off-screen
   textarea, so the window's paste and input methods have somewhere to land.
+- **A page's dialog** stops its scripts, and Chrome answers an input event
+  only once the page's handlers have run: a click whose handler calls
+  `confirm()` is not answered until the dialog is. Actions run through
+  `Browser::until_dialog`, which stops waiting when any tab opens one, and
+  nothing else calls into a page while its dialog is open.
 - **Headless Chrome on macOS** has no menu bar, and it is the menu that
   makes ⌘A select all; `keys.rs` sends the editing command with the key.
   It also calls itself `HeadlessChrome` in its user agent, which some

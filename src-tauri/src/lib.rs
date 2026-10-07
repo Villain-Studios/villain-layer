@@ -303,6 +303,8 @@ pub fn run() {
             commands::browser_input,
             commands::browser_copy,
             commands::browser_answer_site,
+            commands::browser_hold,
+            commands::browser_dialog,
             commands::set_browser_sites,
         ])
         .build(tauri::generate_context!())

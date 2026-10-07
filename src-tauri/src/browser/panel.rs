@@ -39,6 +39,10 @@ pub struct TabView {
     pub title: String,
     pub loading: bool,
     pub last_action: Option<AgentAction>,
+    /// A dialog the page opened, waiting on an answer (BRW-13).
+    pub dialog: Option<super::Dialog>,
+    /// The user has taken the tab over (BRW-12).
+    pub held: bool,
 }
 
 /// The tab on screen in the panel, which alone is sent frames (BRW-9).
@@ -54,6 +58,7 @@ impl Browser {
     /// The task's tab for the panel; a default one when there is no tab.
     pub fn view(&self, task: &str) -> TabView {
         let inner = self.inner.lock();
+        let held = inner.held.contains(task);
         inner
             .tabs
             .get(task)
@@ -63,8 +68,10 @@ impl Browser {
                 title: t.title.clone(),
                 loading: t.loading,
                 last_action: t.last_action.clone(),
+                dialog: t.dialog.clone(),
+                held,
             })
-            .unwrap_or_default()
+            .unwrap_or(TabView { held, ..TabView::default() })
     }
 
     /// Send the task's tab to the panel: sized to it, and its frames as they

@@ -60,6 +60,9 @@ export function BrowserPanel({ taskId, visible, onClose }: { taskId: string; vis
   const [attempt, setAttempt] = useState(0);
   const [focused, setFocused] = useState(false);
   const [marker, setMarker] = useState<{ x: number; y: number; at: number } | null>(null);
+  const [promptText, setPromptText] = useState("");
+  const dialogShown = view?.dialog ? `${view.dialog.kind}:${view.dialog.message}` : "";
+  useEffect(() => { setPromptText(view?.dialog?.default_prompt ?? ""); }, [dialogShown]); // eslint-disable-line react-hooks/exhaustive-deps -- a new dialog, not every refresh
   const screenRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const keysRef = useRef<HTMLTextAreaElement>(null);
@@ -227,6 +230,25 @@ export function BrowserPanel({ taskId, visible, onClose }: { taskId: string; vis
     send(key("keyDown", k));
   }
 
+  async function hold(held: boolean) {
+    try {
+      await api.browserHold(taskId, held);
+      if (held) keysRef.current?.focus();
+    } catch (e) {
+      fail(e);
+    }
+  }
+
+  /** The page's dialog answered (BRW-13). */
+  async function answerDialog(accept: boolean) {
+    try {
+      await api.browserDialog(taskId, accept, view?.dialog?.kind === "prompt" ? promptText : undefined);
+      keysRef.current?.focus();
+    } catch (e) {
+      fail(e);
+    }
+  }
+
   /** An agent's request answered (BRW-11). */
   async function answer(id: number, allow: boolean) {
     try {
@@ -302,6 +324,18 @@ export function BrowserPanel({ taskId, visible, onClose }: { taskId: string; vis
           />
         </form>
         <button
+          className={`btn btn-sm${view?.held ? " btn-primary" : ""}`}
+          title={
+            view?.held
+              ? "Let agents use this tab again"
+              : "Keep agents out of this tab while you use it: to sign in, or to look at something"
+          }
+          disabled={!tab}
+          onClick={() => void hold(!view?.held)}
+        >
+          {view?.held ? "Hand back" : "Take over"}
+        </button>
+        <button
           className="btn btn-sm btn-icon"
           title="Open this page in your own browser"
           disabled={!view?.url || view.url === "about:blank"}
@@ -327,6 +361,29 @@ export function BrowserPanel({ taskId, visible, onClose }: { taskId: string; vis
           </button>
         </div>
       ))}
+
+      {view?.dialog && (
+        <form
+          className="browser-ask browser-dialog"
+          onSubmit={(e) => { e.preventDefault(); void answerDialog(true); }}
+        >
+          <span>
+            <b>The page {view.dialog.kind === "alert" ? "says" : "asks"}:</b> {view.dialog.message}
+          </span>
+          {view.dialog.kind === "prompt" && (
+            <input value={promptText} onChange={(e) => setPromptText(e.target.value)} autoFocus />
+          )}
+          <div className="spacer" />
+          {view.dialog.kind !== "alert" && (
+            <button type="button" className="btn btn-sm" onClick={() => void answerDialog(false)}>
+              {view.dialog.kind === "beforeunload" ? "Stay" : "Cancel"}
+            </button>
+          )}
+          <button className="btn btn-sm btn-primary">
+            {view.dialog.kind === "beforeunload" ? "Leave" : "OK"}
+          </button>
+        </form>
+      )}
 
       <div className={`browser-screen${focused ? " focused" : ""}`} ref={screenRef}>
         {view && !view.chrome ? (
@@ -411,7 +468,11 @@ export function BrowserPanel({ taskId, visible, onClose }: { taskId: string; vis
       </div>
 
       <div className="browser-status">
-        {last ? (
+        {view?.held ? (
+          <span className="browser-held">
+            <b>You have the browser.</b> Agents wait until you hand it back.
+          </span>
+        ) : last ? (
           <span title={new Date(last.at).toLocaleString()}>
             <b>Agent</b> · {last.text} · {ago(last.at)}
           </span>

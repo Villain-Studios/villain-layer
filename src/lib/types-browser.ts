@@ -23,6 +23,17 @@ export interface BrowserView {
   last_action: AgentAction | null;
   /** Sites the task's agents asked for, waiting on the user (BRW-11). */
   requests: SiteRequest[];
+  /** A dialog the page opened, waiting on an answer (BRW-13). */
+  dialog: PageDialog | null;
+  /** The user has taken the tab over, and agents wait (BRW-12). */
+  held: boolean;
+}
+
+/** An alert, confirm or prompt the page opened. Headless Chrome draws none. */
+export interface PageDialog {
+  kind: "alert" | "confirm" | "prompt" | "beforeunload";
+  message: string;
+  default_prompt: string;
 }
 
 /** An agent asking to use a site in the browser (BRW-11). */

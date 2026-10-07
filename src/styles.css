@@ -330,6 +330,9 @@ textarea { resize: vertical; font-family: var(--mono); }
   background: color-mix(in srgb, var(--amber) 12%, var(--panel)); border-bottom: 1px solid var(--border-soft);
 }
 .browser-ask > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.browser-dialog { background: color-mix(in srgb, var(--accent) 14%, var(--panel)); }
+.browser-dialog input { width: 180px; font-size: 12.5px; padding: 3px 6px; }
+.browser-held { color: var(--accent); }
 .site-row { padding: 2px 0; }
 .btn-add.active { color: var(--text); border-color: var(--accent-dim); background: var(--panel-2); }
 .btn-add .browser-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); margin-left: 4px; }

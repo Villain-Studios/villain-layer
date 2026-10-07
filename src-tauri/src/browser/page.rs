@@ -94,6 +94,10 @@ impl Page {
         tokio::time::sleep(Duration::from_millis(300)).await;
         let deadline = Instant::now() + LOAD_WAIT;
         while Instant::now() < deadline {
+            // The page's scripts wait on a dialog, and so would this.
+            if browser.dialog(&self.task).is_some() {
+                return;
+            }
             let loading = browser.state_of(&self.task).is_some_and(|s| s.2);
             if !loading {
                 if let Ok(Value::String(s)) = self.eval("document.readyState").await {

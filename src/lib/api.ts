@@ -331,6 +331,9 @@ export const api = {
     invoke<void>("browser_input", { taskId, input }),
   browserCopy: (taskId: string) => invoke<string>("browser_copy", { taskId }),
   browserAnswerSite: (id: number, allow: boolean) => invoke<void>("browser_answer_site", { id, allow }),
+  browserHold: (taskId: string, held: boolean) => invoke<void>("browser_hold", { taskId, held }),
+  browserDialog: (taskId: string, accept: boolean, text?: string) =>
+    invoke<void>("browser_dialog", { taskId, accept, text: text ?? null }),
   /** Returns the list as kept: each site as its host, what is not one dropped. */
   setBrowserSites: (sites: string[]) => invoke<string[]>("set_browser_sites", { sites }),
 };

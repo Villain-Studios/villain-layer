@@ -77,6 +77,7 @@ function newPane(args: Args, kind: PaneInfo["kind"], task: string): PaneInfo {
 const browsers = new Map<string, BrowserView>();
 const noTab = (): BrowserView => ({
   chrome: true, tab: null, url: "", title: "", loading: false, agents_may: false, last_action: null, requests: [],
+  dialog: null, held: false,
 });
 if (world.panes.some((p) => p.task_id === "t-login")) {
   browsers.set("t-login", {
@@ -91,6 +92,8 @@ if (world.panes.some((p) => p.task_id === "t-login")) {
       id: 1, task: "t-login", site: "github.com", at: Date.now() - 20_000,
       reason: "Read the OAuth app's callback URL settings, to see why the redirect loops",
     }],
+    dialog: null,
+    held: false,
   });
 }
 function tabOf(task: string): BrowserView {
@@ -486,6 +489,18 @@ const answer: Record<string, Answer> = {
     return null;
   },
   browser_unwatch: () => null,
+  browser_hold: (a) => {
+    tabOf(a.taskId as string).held = a.held as boolean;
+    void emit("browser:changed", a.taskId);
+    return null;
+  },
+  browser_dialog: (a) => {
+    const b = tabOf(a.taskId as string);
+    if (!b.dialog) throw "no dialog is open";
+    b.dialog = null;
+    void emit("browser:changed", a.taskId);
+    return null;
+  },
   browser_answer_site: (a) => {
     for (const [task, b] of browsers) {
       const r = b.requests.find((x) => x.id === a.id);

@@ -226,6 +226,11 @@ the config folder, started by the first call that needs a tab.
   `browser_evaluate` and `browser_screenshot` are refused meanwhile. A
   test build keeps the keychain bundle in memory, so a test run never
   touches the user's own item.
+- **Copying a sign-in** (`session.rs`, BRW-21) reads the other tab's
+  storages with `Runtime.evaluate` and its cookies with
+  `Network.getCookies`, and writes them into the active tab the same way.
+  The values stay in the backend; the agent is told the keys. Cookies are
+  set by URL, so they belong to the active page's host alone.
 - **A page's dialog** stops its scripts, and Chrome answers an input event
   only once the page's handlers have run: a click whose handler calls
   `confirm()` is not answered until the dialog is. Actions run through

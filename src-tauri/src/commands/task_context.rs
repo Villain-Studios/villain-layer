@@ -225,7 +225,8 @@ This task reviews pull request {}#{}{}, at commit `{}`: {}.              `{}` is
         "allowed are open to you; `browser_request_site` asks for another. To sign in, ",
         "use `browser_sign_in`, which fills an account the user saved without showing you ",
         "its password. Never type the user's passwords or other secrets yourself: if none ",
-        "is saved, ask the user to sign in or to save one.\n",
+        "is saved, ask the user to sign in or to save one. An app signed in on one port ",
+        "of this machine is signed in on another with `browser_copy_session`.\n",
     ));
     md
 }

@@ -181,6 +181,20 @@ pub fn list() -> Vec<Value> {
             vec![],
         ),
         tool(
+            "browser_copy_session",
+            "Copy a sign-in from another of this task's tabs into the active one: that \
+             tab's local storage, session storage and cookies are written into the active \
+             tab's page, which is then reloaded. For an app signed in on one port of this \
+             machine (say localhost:4200, the one its sign-in server lets through) that you \
+             need signed in on another. Both pages must be on this machine. You are told \
+             what was copied by name, never the values.",
+            json!({
+                "from_tab": { "type": "integer", "description": "The number of the tab that is signed in, from 1 (browser_tabs lists them)" },
+                "reload": bool_prop("Reload the active tab afterwards, so the app reads its sign-in; default true"),
+            }),
+            vec!["from_tab"],
+        ),
+        tool(
             "browser_dialog",
             "Answer the alert, confirm or prompt the page opened: accept is OK, false is \
              Cancel. The page does nothing else until it is answered.",
@@ -541,6 +555,15 @@ pub async fn call<R: Runtime>(app: &AppHandle<R>, name: &str, args: Value, calle
                 .until_dialog(super::sign_in::sign_in(app, &state, &page, &url, &args))
                 .await?
                 .unwrap_or_else(|| "Filled in the saved sign-in.".into());
+            page.settle(browser).await;
+            report(app, &state, &task, &did).await
+        }
+
+        "browser_copy_session" => {
+            let did = browser
+                .until_dialog(super::session::copy_session(app, &state, &page, &args))
+                .await?
+                .unwrap_or_else(|| "Copied the sign-in.".into());
             page.settle(browser).await;
             report(app, &state, &task, &did).await
         }

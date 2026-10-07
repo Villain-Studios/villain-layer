@@ -939,6 +939,7 @@ credentials themselves.
 | `browser_switch_tab` | make another tab the active one | |
 | `browser_close_tab` | close a tab, the active one by default | |
 | `browser_sign_in` | fill a saved sign-in into the page, without seeing the password (BRW-19) | |
+| `browser_copy_session` | copy a sign-in from another tab on this machine into the active one (BRW-21) | |
 
 - **MCP-1** Every request MUST carry the bearer token. Loopback is not
   authorisation.
@@ -1308,6 +1309,18 @@ ring marks where it clicked.
   password field by the app itself and goes straight to the keychain,
   never through the window. The username is the form's, and is asked for
   when the form has none (a login that asked for it on the step before).
+- **BRW-21** An agent MAY copy a sign-in from another of the task's tabs
+  into the active one with `browser_copy_session`: the other page's local
+  storage, session storage and cookies are written into the active
+  page's, which is then reloaded. It is for an app signed in on one port
+  of this machine (the one its sign-in server lets through, CORS) and
+  needed on another. Both pages MUST be on this machine, so nothing is
+  copied off it or from a site agents only browse. The agent is told
+  what was copied by name and count, never a value. An item already
+  there under the same key is replaced; others are kept. Cookies are
+  copied only between two hosts (`localhost` and `127.0.0.1`): one
+  host's ports share them already. Refused while a filled-in password is
+  on either page (BRW-19).
 - **BRW-6** The tabs MUST come back where they were: each task's tabs'
   pages and which was active are kept in `config.json`, and opened when
   the task's browser is next needed. A config from before tabs had one
@@ -1327,7 +1340,7 @@ protocol, `page.rs` a tab's actions, `snapshot.rs` the outline, `sites.rs`
 BRW-3, `tools.rs` the tools, `panel.rs` and `input.rs` the panel's side,
 `requests.rs` BRW-11, `control.rs` BRW-12, BRW-13 and BRW-15, `tabs.rs`
 BRW-16 and BRW-17, `events.rs` Chrome's events and BRW-14, `sign_in.rs`
-BRW-18 to BRW-20),
+BRW-18 to BRW-20, `session.rs` BRW-21),
 `commands/browser.rs`, `mcp.rs` (`dispatch`), `BrowserPanel.tsx`,
 `BrowserSettings.tsx`, `lib/browserInput.ts`, `Terminals.tsx`.
 
@@ -1336,6 +1349,8 @@ Known gaps:
   sign-in or payment form): the outline is the main page's.
 - Passkeys, password managers and extensions do not work in the app's own
   profile.
+- `browser_copy_session` does not copy IndexedDB, where some sign-ins are
+  kept (Firebase's).
 - A `<select>` list's options are not drawn when it opens in the panel:
   choose with the arrow keys and Enter, or by typing an option's first
   letters. Agents use `browser_select`.

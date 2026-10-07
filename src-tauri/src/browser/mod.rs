@@ -14,6 +14,7 @@ mod keys;
 mod page;
 mod panel;
 mod requests;
+mod session;
 pub mod sign_in;
 pub mod sites;
 mod snapshot;

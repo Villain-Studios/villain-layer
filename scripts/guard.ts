@@ -515,6 +515,9 @@ const CEILINGS: Record<string, number> = {
   // Every MCP tool is defined and dispatched here, and docs-sync reads the
   // definitions from this file; the repo-notes tools took it past 1000.
   "src-tauri/src/mcp.rs": 1100,
+  // The same for the browser's tools (BRW-*); each tool's work lives in
+  // its own module (sign_in.rs, session.rs, tabs.rs), its definition here.
+  "src-tauri/src/browser/tools.rs": 700,
   "src-tauri/src/commands/panes.rs": 1000,
   "src-tauri/src/integrations/jira.rs": 900,
   "src-tauri/src/agents.rs": 850,

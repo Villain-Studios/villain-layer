@@ -115,6 +115,7 @@ mod cleanup;
 mod cleanup_remote;
 mod tasks;
 mod panes;
+mod panes_restore;
 mod diff;
 mod jira;
 mod github;
@@ -137,6 +138,7 @@ pub use repos::*;
 pub use cleanup::*;
 pub use tasks::*;
 pub use panes::*;
+pub use panes_restore::*;
 pub use diff::*;
 pub use jira::*;
 pub use github::*;
@@ -155,7 +157,7 @@ pub use browser::*;
 
 #[cfg(test)]
 mod tests {
-    use super::panes::{panes_to_restore, RESTORE_LIMIT};
+    use super::panes_restore::{panes_to_restore, RESTORE_LIMIT};
     use super::slack::slack_allows;
     use super::tasks::{derive_branch, suggest_from};
     use super::jira::project_of;

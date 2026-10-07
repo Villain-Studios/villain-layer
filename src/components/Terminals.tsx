@@ -7,6 +7,7 @@ import { paneScope, paneState } from "../lib/derive";
 import type { PaneInfo, Resumable, TaskView } from "../lib/types";
 import { BrowserPanel, useBrowserView } from "./BrowserPanel";
 import { ChatLink } from "./ChatLink";
+import { PaneNotice } from "./PaneNotice";
 import { TerminalPane } from "./Terminal";
 import { CloseIcon, GlobeIcon, PlusIcon, SwapIcon } from "./icons";
 import { ContextMenu, Field, Modal, Spinner } from "./ui";
@@ -429,32 +430,7 @@ export function Terminals({ task }: { task: TaskView }) {
 
       <ChatLink task={task} />
 
-      {(() => {
-        const p = panes.find((x) => x.id === active && x.notice);
-        if (!p) return null;
-        if (p.notice === "trust_prompt") {
-          return (
-            <div className="limit-banner">
-              <span>
-                <b>{p.title}</b> is asking whether to trust this folder — answer it in
-                the terminal below. Every task gets its own worktree, so this is asked
-                once per task, and nothing runs until it is answered.
-              </span>
-            </div>
-          );
-        }
-        return (
-          <div className="limit-banner">
-            <span>
-              <b>{p.title}</b> looks out of budget — it reported hitting a usage limit.
-            </span>
-            <div className="spacer" />
-            <button className="btn btn-sm btn-primary" onClick={() => startHandoff(p)}>
-              Hand off to another agent…
-            </button>
-          </div>
-        );
-      })()}
+      <PaneNotice pane={panes.find((x) => x.id === active && x.notice)} onHandoff={startHandoff} />
 
       <div className="term-split" ref={splitRef}>
       <div className="pane-stack">

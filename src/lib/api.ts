@@ -332,6 +332,7 @@ export const api = {
   browserCopy: (taskId: string) => invoke<string>("browser_copy", { taskId }),
   browserAnswerSite: (id: number, allow: boolean) => invoke<void>("browser_answer_site", { id, allow }),
   browserHold: (taskId: string, held: boolean) => invoke<void>("browser_hold", { taskId, held }),
+  browserCloseWindow: (taskId: string) => invoke<void>("browser_close_window", { taskId }),
   browserDialog: (taskId: string, accept: boolean, text?: string) =>
     invoke<void>("browser_dialog", { taskId, accept, text: text ?? null }),
   /** Returns the list as kept: each site as its host, what is not one dropped. */

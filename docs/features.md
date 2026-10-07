@@ -934,6 +934,7 @@ credentials themselves.
 | `browser_evaluate` | run JavaScript in the page | |
 | `browser_request_site` | ask the user to let agents use a site (BRW-11) | |
 | `browser_dialog` | answer the page's alert, confirm or prompt (BRW-13) | |
+| `browser_close_window` | close a window the page opened, back to the page under it (BRW-14) | |
 
 - **MCP-1** Every request MUST carry the bearer token. Loopback is not
   authorisation.
@@ -1245,6 +1246,12 @@ ring marks where it clicked.
   scripts wait on it: an agent's action that opened one comes back at once
   saying so, rather than waiting on a page that cannot answer, and nothing
   else is done until it is answered.
+- **BRW-14** A window a page opens (a sign-in popup, a link that opens a
+  new tab) MUST be shown in the task's tab, over the page that opened it,
+  for the user and the agents alike; agents are told it is one. Closing
+  it (the panel's "Close window", `browser_close_window`, or the page
+  closing itself, as sign-in windows do) shows the page under it again.
+  Only the task's own page is kept for next time (BRW-6).
 - **BRW-6** The tab MUST come back where it was: each task's last page is
   kept in `config.json`, and opened when the task's tab is next needed.
   Deleting or finishing a task closes its tab.
@@ -1260,7 +1267,8 @@ ring marks where it clicked.
 Code: `browser/` (`chrome.rs` finding and running it, `cdp.rs` the
 protocol, `page.rs` a tab's actions, `snapshot.rs` the outline, `sites.rs`
 BRW-3, `tools.rs` the tools, `panel.rs` and `input.rs` the panel's side,
-`requests.rs` BRW-11, `control.rs` BRW-12 and BRW-13),
+`requests.rs` BRW-11, `control.rs` BRW-12 and BRW-13, `events.rs` Chrome's
+events and BRW-14),
 `commands/browser.rs`, `mcp.rs` (`dispatch`), `BrowserPanel.tsx`,
 `BrowserSettings.tsx`, `lib/browserInput.ts`, `Terminals.tsx`.
 

@@ -180,8 +180,12 @@ the config folder, started by the first call that needs a tab.
   at all, for input and for anything sent from the reader itself.
 - **Tabs.** `Target.attachToTarget` with `flatten` gives each tab a session
   id that every message about it carries. `Browser` keeps a task's tab by
-  that id, and the reader routes events by it: navigations (saved to the
-  task, BRW-6), loading, titles, the console.
+  that id, and the reader routes events by it (`events.rs`): navigations
+  (saved to the task, BRW-6), loading, titles, the console, dialogs. A
+  task's tab is a stack: a window a page opens (`Target.targetCreated`
+  with an `openerId`, reported even for a `noopener` link) is attached and
+  shown over its opener, and its closing shows the opener again (BRW-14).
+  Everything that acts on "the task's tab" acts on the top of the stack.
 - **Tools** (`tools.rs`) find the task from the calling pane, check the
   page's site against `sites.rs` before reading or acting, and answer with
   the page's outline (`snapshot.rs`), built from the accessibility tree:

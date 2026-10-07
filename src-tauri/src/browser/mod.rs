@@ -7,6 +7,7 @@
 mod cdp;
 mod chrome;
 mod control;
+mod events;
 pub mod input;
 mod keys;
 mod page;
@@ -26,7 +27,7 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::commands::AppState;
 use crate::error::{Error, Result};
-use cdp::{Cdp, Event};
+use cdp::Cdp;
 pub use control::Dialog;
 pub use page::Page;
 pub use panel::AgentAction;
@@ -73,6 +74,9 @@ struct Tab {
     console: VecDeque<String>,
     last_action: Option<AgentAction>,
     dialog: Option<Dialog>,
+    /// The page this one covers: it is a window that page opened (BRW-14),
+    /// and closing it shows that page again.
+    opener: Option<Box<Tab>>,
 }
 
 #[derive(Default)]
@@ -224,8 +228,12 @@ impl Browser {
             inner.watch = None;
         }
         let Some(tab) = inner.tabs.remove(task) else { return };
-        if let Some(r) = inner.running.as_ref() {
-            r.cdp.send("Target.closeTarget", json!({ "targetId": tab.target }), None);
+        let Some(r) = inner.running.as_ref() else { return };
+        // The windows its pages opened too: each is a page of its own.
+        let mut page = Some(&tab);
+        while let Some(p) = page {
+            r.cdp.send("Target.closeTarget", json!({ "targetId": p.target }), None);
+            page = p.opener.as_deref();
         }
     }
 
@@ -258,104 +266,6 @@ impl Browser {
         }
         lines
     }
-
-    fn task_of_session(inner: &Inner, session: &str) -> Option<String> {
-        inner.tabs.iter().find(|(_, t)| t.session == session).map(|(k, _)| k.clone())
-    }
-
-    fn task_of_target(inner: &Inner, target: &str) -> Option<String> {
-        inner.tabs.iter().find(|(_, t)| t.target == target).map(|(k, _)| k.clone())
-    }
-
-    /// One event from Chrome, on its reading thread: nothing here waits.
-    fn on_event<R: Runtime>(&self, app: &AppHandle<R>, e: Event) {
-        if e.method == "Page.screencastFrame" {
-            return self.on_frame(e);
-        }
-        let mut save: Option<(String, String)> = None;
-        let mut tell: Option<String> = None;
-        {
-            let mut inner = self.inner.lock();
-            let task = match e.session.as_deref() {
-                Some(s) => Self::task_of_session(&inner, s),
-                None => e
-                    .params
-                    .pointer("/targetInfo/targetId")
-                    .or_else(|| e.params.get("targetId"))
-                    .and_then(Value::as_str)
-                    .and_then(|t| Self::task_of_target(&inner, t)),
-            };
-            let Some(task) = task else { return };
-            let before = inner.tabs.get(&task).map(|t| (t.url.clone(), t.title.clone(), t.loading));
-
-            match e.method.as_str() {
-                "Page.frameNavigated" if e.params.pointer("/frame/parentId").is_none() => {
-                    let url = e.params.pointer("/frame/url").and_then(Value::as_str).unwrap_or_default();
-                    if let Some(tab) = inner.tabs.get_mut(&task) {
-                        if tab.url != url {
-                            tab.url = url.to_string();
-                            if sites::host_of(url).is_some() {
-                                save = Some((task.clone(), url.to_string()));
-                            }
-                        }
-                    }
-                }
-                "Page.frameStartedLoading" | "Page.frameStoppedLoading" => {
-                    let frame = e.params.get("frameId").and_then(Value::as_str);
-                    if let Some(tab) = inner.tabs.get_mut(&task).filter(|t| Some(t.target.as_str()) == frame) {
-                        tab.loading = e.method == "Page.frameStartedLoading";
-                    }
-                }
-                "Target.targetInfoChanged" => {
-                    if let Some(tab) = inner.tabs.get_mut(&task) {
-                        if let Some(title) = e.params.pointer("/targetInfo/title").and_then(Value::as_str) {
-                            tab.title = title.to_string();
-                        }
-                    }
-                }
-                "Runtime.consoleAPICalled" | "Runtime.exceptionThrown" => {
-                    if let Some(tab) = inner.tabs.get_mut(&task) {
-                        tab.console.push_back(console_line(&e.method, &e.params));
-                        while tab.console.len() > CONSOLE_LINES {
-                            tab.console.pop_front();
-                        }
-                    }
-                }
-                "Page.javascriptDialogOpening" => {
-                    if let Some(tab) = inner.tabs.get_mut(&task) {
-                        tab.dialog = Some(Dialog::from_event(&e.params));
-                    }
-                    self.dialog_opened.notify_waiters();
-                    tell = Some(task.clone());
-                }
-                "Page.javascriptDialogClosed" => {
-                    if let Some(tab) = inner.tabs.get_mut(&task) {
-                        tab.dialog = None;
-                    }
-                    tell = Some(task.clone());
-                }
-                "Target.targetDestroyed" | "Target.targetCrashed" | "Target.detachedFromTarget" => {
-                    inner.tabs.remove(&task);
-                }
-                _ => {}
-            }
-            let after = inner.tabs.get(&task).map(|t| (t.url.clone(), t.title.clone(), t.loading));
-            if before != after {
-                tell = Some(task);
-            }
-        }
-        if let Some(task) = tell {
-            changed(app, &task);
-        }
-        // Outside the lock: a config write waits on the disk.
-        if let Some((task, url)) = save {
-            let _ = app.state::<AppState>().config.update(|c| {
-                if let Some(t) = c.tasks.iter_mut().find(|t| t.id == task) {
-                    t.browser_url = Some(url);
-                }
-            });
-        }
-    }
 }
 
 /// A new tab, attached, with what every tab needs switched on.
@@ -366,6 +276,12 @@ async fn make_tab(cdp: &Arc<Cdp>, user_agent: Option<&str>, viewport: Viewport) 
         .and_then(Value::as_str)
         .ok_or_else(|| Error::Other("the browser made no tab".into()))?
         .to_string();
+    attach(cdp, target, user_agent, viewport).await
+}
+
+/// A page Chrome has, as one of the app's tabs: the app's own new tab, or
+/// a window a page opened (BRW-14).
+async fn attach(cdp: &Arc<Cdp>, target: String, user_agent: Option<&str>, viewport: Viewport) -> Result<Tab> {
     let attached = cdp
         .call("Target.attachToTarget", json!({ "targetId": target, "flatten": true }), None)
         .await?;
@@ -396,6 +312,7 @@ async fn make_tab(cdp: &Arc<Cdp>, user_agent: Option<&str>, viewport: Viewport) 
         console: VecDeque::new(),
         last_action: None,
         dialog: None,
+        opener: None,
     })
 }
 

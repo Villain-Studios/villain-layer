@@ -29,6 +29,8 @@ pub struct BrowserView {
     pub dialog: Option<Dialog>,
     /// The user has taken the tab over, and agents wait (BRW-12).
     pub held: bool,
+    /// What is shown is a window the page opened (BRW-14).
+    pub window: bool,
 }
 
 /// The task's tab, as last heard. Makes nothing: a task whose panel was
@@ -51,6 +53,7 @@ pub async fn browser_view(app: AppHandle, task_id: String) -> Result<BrowserView
         requests: state.browser.requests(&task_id),
         dialog: view.dialog,
         held: view.held,
+        window: view.window,
     })
 }
 
@@ -160,6 +163,12 @@ pub async fn browser_copy(app: AppHandle, task_id: String) -> Result<String> {
 #[tauri::command]
 pub fn browser_hold(app: AppHandle, task_id: String, held: bool) {
     app.state::<AppState>().browser.hold(&app, &task_id, held);
+}
+
+/// Close the window a page opened, showing the page under it (BRW-14).
+#[tauri::command]
+pub fn browser_close_window(app: AppHandle, task_id: String) {
+    app.state::<AppState>().browser.close_window(&task_id);
 }
 
 /// Answer the dialog the page opened, from the panel (BRW-13).

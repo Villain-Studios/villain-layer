@@ -77,7 +77,7 @@ function newPane(args: Args, kind: PaneInfo["kind"], task: string): PaneInfo {
 const browsers = new Map<string, BrowserView>();
 const noTab = (): BrowserView => ({
   chrome: true, tab: null, url: "", title: "", loading: false, agents_may: false, last_action: null, requests: [],
-  dialog: null, held: false,
+  dialog: null, held: false, window: false,
 });
 if (world.panes.some((p) => p.task_id === "t-login")) {
   browsers.set("t-login", {
@@ -94,6 +94,7 @@ if (world.panes.some((p) => p.task_id === "t-login")) {
     }],
     dialog: null,
     held: false,
+    window: false,
   });
 }
 function tabOf(task: string): BrowserView {
@@ -491,6 +492,12 @@ const answer: Record<string, Answer> = {
   browser_unwatch: () => null,
   browser_hold: (a) => {
     tabOf(a.taskId as string).held = a.held as boolean;
+    void emit("browser:changed", a.taskId);
+    return null;
+  },
+  browser_close_window: (a) => {
+    const b = tabOf(a.taskId as string);
+    b.window = false;
     void emit("browser:changed", a.taskId);
     return null;
   },

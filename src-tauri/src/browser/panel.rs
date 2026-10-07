@@ -43,6 +43,8 @@ pub struct TabView {
     pub dialog: Option<super::Dialog>,
     /// The user has taken the tab over (BRW-12).
     pub held: bool,
+    /// What is shown is a window the page opened, over it (BRW-14).
+    pub window: bool,
 }
 
 /// The tab on screen in the panel, which alone is sent frames (BRW-9).
@@ -70,6 +72,7 @@ impl Browser {
                 last_action: t.last_action.clone(),
                 dialog: t.dialog.clone(),
                 held,
+                window: t.opener.is_some(),
             })
             .unwrap_or(TabView { held, ..TabView::default() })
     }

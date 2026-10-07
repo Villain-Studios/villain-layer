@@ -27,6 +27,8 @@ export interface BrowserView {
   dialog: PageDialog | null;
   /** The user has taken the tab over, and agents wait (BRW-12). */
   held: boolean;
+  /** What is shown is a window the page opened, over it (BRW-14). */
+  window: boolean;
 }
 
 /** An alert, confirm or prompt the page opened. Headless Chrome draws none. */

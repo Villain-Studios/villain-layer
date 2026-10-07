@@ -323,6 +323,15 @@ export function BrowserPanel({ taskId, visible, onClose }: { taskId: string; vis
             onKeyDown={(e) => { if (e.key === "Escape") { setEditing(false); keysRef.current?.focus(); } }}
           />
         </form>
+        {view?.window && (
+          <button
+            className="btn btn-sm"
+            title="Close this window, which the page opened, and go back to the page under it"
+            onClick={() => void api.browserCloseWindow(taskId).catch(fail)}
+          >
+            Close window
+          </button>
+        )}
         <button
           className={`btn btn-sm${view?.held ? " btn-primary" : ""}`}
           title={

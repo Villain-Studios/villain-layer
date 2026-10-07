@@ -136,6 +136,13 @@ pub fn list() -> Vec<Value> {
             vec![],
         ),
         tool(
+            "browser_close_window",
+            "Close the window the page opened (a sign-in popup, a link that opened a new \
+             tab), going back to the page that opened it.",
+            json!({}),
+            vec![],
+        ),
+        tool(
             "browser_dialog",
             "Answer the alert, confirm or prompt the page opened: accept is OK, false is \
              Cancel. The page does nothing else until it is answered.",
@@ -211,8 +218,10 @@ async fn allowed_page(page: &Page, state: &AppState) -> Result<(String, String)>
     Ok((url, title))
 }
 
-/// What an action did, then the page as it is now.
-async fn report(page: &Page, state: &AppState, did: &str) -> Result<Vec<Value>> {
+/// What an action did, then the page as it is now: the one shown, which is
+/// a window the page opened if the action opened one (BRW-14).
+async fn report<R: Runtime>(app: &AppHandle<R>, state: &AppState, task: &str, did: &str) -> Result<Vec<Value>> {
+    let page = &state.browser.page(app, task).await?;
     let (url, title) = match allowed_page(page, state).await {
         Ok(at) => at,
         // The action itself happened; where it led is what agents may not read.
@@ -222,7 +231,13 @@ async fn report(page: &Page, state: &AppState, did: &str) -> Result<Vec<Value>> 
         return Ok(text(format!("{did}\n\nPage: {title}\nURL: {url}\n\n{}", d.describe())));
     }
     let outline = page.outline().await?;
-    Ok(text(format!("{did}\n\nPage: {title}\nURL: {url}\n\n{outline}")))
+    let window = if state.browser.in_window(task) {
+        "This is a window the page opened, over the page that opened it; \
+         browser_close_window goes back to that page.\n"
+    } else {
+        ""
+    };
+    Ok(text(format!("{did}\n\nPage: {title}\nURL: {url}\n{window}\n{outline}")))
 }
 
 /// How the panel names an element an agent acted on: its label, not its
@@ -272,22 +287,22 @@ pub async fn call<R: Runtime>(app: &AppHandle<R>, name: &str, args: Value, calle
             browser.record(app, &task, &format!("Opened {url}"), None);
             page.navigate(&url).await?;
             page.settle(browser).await;
-            report(&page, &state, &format!("Opened {url}.")).await
+            report(app, &state, &task, &format!("Opened {url}.")).await
         }
 
         "browser_back" => {
             browser.record(app, &task, "Went back", None);
             let went = page.back().await?;
             if !went {
-                return report(&page, &state, "There is no page to go back to.").await;
+                return report(app, &state, &task, "There is no page to go back to.").await;
             }
             page.settle(browser).await;
-            report(&page, &state, "Went back.").await
+            report(app, &state, &task, "Went back.").await
         }
 
         "browser_snapshot" => {
             browser.record(app, &task, "Read the page", None);
-            report(&page, &state, "").await.map(|mut c| {
+            report(app, &state, &task, "").await.map(|mut c| {
             if let Some(t) = c[0].get("text").and_then(Value::as_str) {
                 c[0]["text"] = json!(t.trim_start());
             }
@@ -305,7 +320,7 @@ pub async fn call<R: Runtime>(app: &AppHandle<R>, name: &str, args: Value, calle
             browser.record(app, &task, &format!("{what} {}", label(&page, n).await), Some(at));
             browser.until_dialog(page.click(at, if right { "right" } else { "left" }, if double { 2 } else { 1 })).await?;
             page.settle(browser).await;
-            report(&page, &state, &format!("Clicked e{n}.")).await
+            report(app, &state, &task, &format!("Clicked e{n}.")).await
         }
 
         "browser_hover" => {
@@ -315,7 +330,7 @@ pub async fn call<R: Runtime>(app: &AppHandle<R>, name: &str, args: Value, calle
             browser.record(app, &task, &format!("Pointed at {}", label(&page, n).await), Some(at));
             browser.until_dialog(page.hover(at)).await?;
             tokio::time::sleep(Duration::from_millis(300)).await;
-            report(&page, &state, &format!("The mouse is over e{n}.")).await
+            report(app, &state, &task, &format!("The mouse is over e{n}.")).await
         }
 
         "browser_type" => {
@@ -343,7 +358,7 @@ pub async fn call<R: Runtime>(app: &AppHandle<R>, name: &str, args: Value, calle
                 })
                 .await?;
             page.settle(browser).await;
-            report(&page, &state, &format!("Typed into e{n}.")).await
+            report(app, &state, &task, &format!("Typed into e{n}.")).await
         }
 
         "browser_press_key" => {
@@ -352,7 +367,7 @@ pub async fn call<R: Runtime>(app: &AppHandle<R>, name: &str, args: Value, calle
             browser.record(app, &task, &format!("Pressed {key}"), None);
             browser.until_dialog(page.key(key)).await?;
             page.settle(browser).await;
-            report(&page, &state, &format!("Pressed {key}.")).await
+            report(app, &state, &task, &format!("Pressed {key}.")).await
         }
 
         "browser_select" => {
@@ -362,7 +377,7 @@ pub async fn call<R: Runtime>(app: &AppHandle<R>, name: &str, args: Value, calle
             browser.record(app, &task, &format!("Chose an option in {}", label(&page, n).await), page.center(n).await.ok());
             match browser.until_dialog(page.call_on(n, SELECT_OPTIONS, vec![Value::Array(values)])).await? {
                 Some(chosen) => Ok(text(format!("Chosen in e{n}: {chosen}"))),
-                None => report(&page, &state, &format!("Chose in e{n}.")).await,
+                None => report(app, &state, &task, &format!("Chose in e{n}.")).await,
             }
         }
 
@@ -379,7 +394,7 @@ pub async fn call<R: Runtime>(app: &AppHandle<R>, name: &str, args: Value, calle
             browser.record(app, &task, &format!("Scrolled {} {} pixels", if dy < 0.0 { "up" } else { "down" }, dy.abs()), Some(at));
             browser.until_dialog(page.wheel(at, dy)).await?;
             tokio::time::sleep(Duration::from_millis(400)).await;
-            report(&page, &state, &format!("Scrolled {dy} pixels.")).await
+            report(app, &state, &task, &format!("Scrolled {dy} pixels.")).await
         }
 
         "browser_wait" => {
@@ -405,7 +420,7 @@ pub async fn call<R: Runtime>(app: &AppHandle<R>, name: &str, args: Value, calle
                     format!("Waited {seconds} seconds.")
                 }
             };
-            report(&page, &state, &did).await
+            report(app, &state, &task, &did).await
         }
 
         "browser_screenshot" => {
@@ -430,10 +445,24 @@ pub async fn call<R: Runtime>(app: &AppHandle<R>, name: &str, args: Value, calle
             allowed_page(&page, &state).await?;
             browser.record(app, &task, "Ran JavaScript in the page", None);
             let Some(value) = browser.until_dialog(page.eval(required(&args, "expression")?)).await? else {
-                return report(&page, &state, "Ran it.").await;
+                return report(app, &state, &task, "Ran it.").await;
             };
             let shown = serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string());
             Ok(text(shown.chars().take(40_000).collect::<String>()))
+        }
+
+        "browser_close_window" => {
+            if !browser.close_window(&task) {
+                return Err(Error::Other("this is the task's own tab, not a window a page opened: there is nothing to close".into()));
+            }
+            browser.record(app, &task, "Closed the window the page opened", None);
+            for _ in 0..40 {
+                if !browser.in_window(&task) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            report(app, &state, &task, "Closed the window.").await
         }
 
         "browser_dialog" => {
@@ -445,7 +474,7 @@ pub async fn call<R: Runtime>(app: &AppHandle<R>, name: &str, args: Value, calle
             let what = if accept { "Accepted" } else { "Dismissed" };
             browser.record(app, &task, &format!("{what} the page's {}", d.kind), None);
             page.settle(browser).await;
-            report(&page, &state, &format!("{what} the {} dialog.", d.kind)).await
+            report(app, &state, &task, &format!("{what} the {} dialog.", d.kind)).await
         }
 
         other => Err(Error::NotFound(format!("tool {other}"))),

@@ -305,6 +305,7 @@ pub fn run() {
             commands::browser_answer_site,
             commands::browser_hold,
             commands::browser_dialog,
+            commands::browser_close_window,
             commands::set_browser_sites,
         ])
         .build(tauri::generate_context!())

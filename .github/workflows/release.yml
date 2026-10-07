@@ -22,7 +22,8 @@ jobs:
 
   release:
     needs: check
-    runs-on: macos-latest
+    # The oldest macOS the cask allows, the same as check.yml.
+    runs-on: macos-26
     permissions:
       contents: write
     steps:

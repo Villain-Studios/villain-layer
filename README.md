@@ -46,7 +46,7 @@ The full list, with the rules each feature follows, is in
 
 To run it:
 
-- macOS
+- macOS 26 or later
 - git, from the Xcode Command Line Tools (`xcode-select --install`)
 - at least one agent CLI on your `PATH`: `claude`, `copilot`, `opencode`
   or `gemini`, already signed in
@@ -59,7 +59,7 @@ To build it, also:
 
 ## Install
 
-With [Homebrew](https://brew.sh), on macOS 27:
+With [Homebrew](https://brew.sh):
 
 ```bash
 brew tap villain-studios/tap

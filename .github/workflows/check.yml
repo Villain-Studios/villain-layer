@@ -1,6 +1,7 @@
 # `bun run check`, the same as before a commit: the guard, tsc, the frontend
 # build, clippy and the Rust tests. macOS, because the app and its PTY tests
-# are macOS-only.
+# are macOS-only. macOS 26, the oldest the cask allows, rather than
+# macos-latest: that moves on to newer ones and would leave 26 untested.
 name: check
 
 on:
@@ -16,7 +17,7 @@ permissions:
 
 jobs:
   check:
-    runs-on: macos-latest
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2

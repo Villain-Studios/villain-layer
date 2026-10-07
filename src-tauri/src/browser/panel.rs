@@ -25,6 +25,10 @@ const STILL_AFTER: Duration = Duration::from_millis(150);
 /// How often the panel's size is set again while frames come at another.
 const RESIZE_AGAIN: Duration = Duration::from_millis(250);
 
+/// Frames of an older screencast in a row before Chrome's number is taken
+/// for the running one: the count is off, and restarting would not end.
+const STALE_AT_MOST: u32 = 8;
+
 /// How long the sharp frame may take before a picture is taken instead.
 const SHARP_WAIT: Duration = Duration::from_millis(400);
 
@@ -77,9 +81,13 @@ pub(super) struct Watch {
     viewport: Viewport,
     /// Frames are drawn sharp: the page is still.
     sharp: bool,
-    /// The next frame is the one Chrome sends for a change of `sharp`, not
-    /// for a change in the page.
+    /// The screencast was started again for a change of `sharp`, and its
+    /// first frame, drawn at the new scale, has not come yet.
     switching: bool,
+    /// The number of the screencast running now (`Tab::screencasts`).
+    screencast: i64,
+    /// Frames of an older screencast in a row (`STALE_AT_MOST`).
+    stale: u32,
     /// When the page will have been still long enough to be drawn sharp, if
     /// that is waited for.
     still_due: Option<Instant>,
@@ -141,11 +149,17 @@ impl Browser {
                 next: Instant::now(),
                 viewport,
                 sharp: false,
-                switching: false,
-                still_due: None,
+                switching: true,
+                screencast: 0,
+                stale: 0,
+                still_due: Some(Instant::now() + STILL_AFTER),
                 recent: Default::default(),
                 resized: None,
             });
+            let n = inner.count_screencast();
+            if let Some(w) = inner.watch.as_mut() {
+                w.screencast = n;
+            }
         }
         // Every time, not only when the panel's size changed: a tab shown
         // again after another one in front of it closed kept its layout but
@@ -156,7 +170,23 @@ impl Browser {
             json!({ "width": viewport.width, "height": viewport.height, "deviceScaleFactor": viewport.scale, "mobile": false }),
         )
         .await?;
+        // Stopped first, so a screencast already running for this tab (the
+        // panel resized) starts over rather than being started twice.
+        page.call("Page.stopScreencast", json!({})).await?;
         page.call("Page.startScreencast", screencast(viewport, false)).await?;
+        // Sharp once still, whether or not a frame came: on a busy machine
+        // Chrome sent none for a still page, and the panel kept the picture
+        // of the tab before.
+        let (cdp, session) = {
+            let inner = self.inner.lock();
+            let Some(cdp) = inner.running.as_ref().map(|r| r.cdp.clone()) else { return Ok(()) };
+            let Some(w) = inner.watch.as_ref().filter(|w| w.task == task) else { return Ok(()) };
+            (cdp, w.session.clone())
+        };
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            app.state::<crate::commands::AppState>().browser.sharpen(&cdp, &session).await;
+        });
         Ok(())
     }
 
@@ -186,7 +216,7 @@ impl Browser {
         if let Some(w) = inner.watch.as_mut().filter(|w| acts && w.sharp && w.session == session) {
             w.sharp = false;
             w.switching = true;
-            restart(&cdp, &session, w.viewport, false);
+            inner.restart(false);
         }
         drop(inner);
         if let Some((method, params)) = input::to_cdp(event) {
@@ -236,10 +266,9 @@ impl Browser {
     pub(super) fn on_frame<R: Runtime>(&self, app: &AppHandle<R>, e: Event) {
         let ack_id = e.params.get("sessionId").cloned().unwrap_or(Value::Null);
         let Some(data) = e.params.get("data").and_then(Value::as_str) else { return };
-        // The size of what Chrome drew, in CSS pixels.
-        let drawn = |k: &str| e.params.pointer(&format!("/metadata/{k}")).and_then(Value::as_f64);
-        let (drawn_w, drawn_h) = (drawn("deviceWidth"), drawn("deviceHeight"));
-        let (frames, cdp, session, wait, soften, wait_still) = {
+        let Ok(jpeg) = base64::engine::general_purpose::STANDARD.decode(data) else { return };
+        let drawn = jpeg_size(&jpeg);
+        let (frames, cdp, session, wait, wait_still) = {
             let mut inner = self.inner.lock();
             let Some(cdp) = inner.running.as_ref().map(|r| r.cdp.clone()) else { return };
             // A frame of a tab no longer watched goes unanswered, and so is
@@ -248,13 +277,13 @@ impl Browser {
                 return;
             };
             let now = Instant::now();
-            // Drawn at another size than the panel's: Chrome sometimes drops
+            // Drawn at another shape than the panel's: Chrome sometimes drops
             // the size a tab was given when it comes to the front again (after
             // the tab before it closed), and draws it at its window's size,
             // which the panel stretched out of shape. Not shown; the size is
-            // set again, and the next frame is right.
-            let off = |drawn: Option<f64>, want: u32| drawn.is_some_and(|d| (d - f64::from(want)).abs() > 1.5);
-            if off(drawn_w, w.viewport.width) || off(drawn_h, w.viewport.height) {
+            // set again, and the next frame is right. Measured on the picture:
+            // the frame's metadata gave the panel's size for a squeezed one.
+            if drawn.is_some_and(|d| !same_shape(d, w.viewport)) {
                 let v = w.viewport;
                 let again = w.resized.is_none_or(|t| now.duration_since(t) > RESIZE_AGAIN);
                 if again {
@@ -264,6 +293,9 @@ impl Browser {
                 drop(inner);
                 cdp.send("Page.screencastFrameAck", json!({ "sessionId": ack_id }), Some(&session));
                 if again {
+                    // Cleared first: the same size set again is no change to
+                    // Chrome, which then drew nothing new.
+                    cdp.send("Emulation.clearDeviceMetricsOverride", json!({}), Some(&session));
                     cdp.send(
                         "Emulation.setDeviceMetricsOverride",
                         json!({ "width": v.width, "height": v.height, "deviceScaleFactor": v.scale, "mobile": false }),
@@ -271,6 +303,28 @@ impl Browser {
                     );
                 }
                 return;
+            }
+            // A frame of an older screencast, on its way when it was stopped.
+            // Taken for the new screencast's first frame, the panel waited for
+            // nothing more, and Chrome sent nothing more: its answer carries
+            // the old number, which Chrome does not count, and it waited on
+            // it. The panel froze. Not shown; the screencast starts over,
+            // which Chrome counts from nothing.
+            match ack_id.as_i64() {
+                Some(n) if n < w.screencast && w.stale < STALE_AT_MOST => {
+                    w.stale += 1;
+                    let (session, sharp) = (w.session.clone(), w.sharp);
+                    inner.restart(sharp);
+                    drop(inner);
+                    cdp.send("Page.screencastFrameAck", json!({ "sessionId": ack_id }), Some(&session));
+                    return;
+                }
+                // Chrome's number is the right one.
+                Some(n) => {
+                    w.screencast = n;
+                    w.stale = 0;
+                }
+                None => {}
             }
             let wait = w.next.saturating_duration_since(now);
             w.next = now + wait + FRAME_GAP;
@@ -296,7 +350,11 @@ impl Browser {
             if !w.sharp {
                 w.still_due = Some(now + STILL_AFTER);
             }
-            (w.frames.clone(), cdp, w.session.clone(), wait, soften.then_some(w.viewport), wait_still)
+            let sent = (w.frames.clone(), cdp, w.session.clone(), wait, wait_still);
+            if soften {
+                inner.restart(false);
+            }
+            sent
         };
         let ack = {
             let (cdp, session) = (cdp.clone(), session.clone());
@@ -310,12 +368,7 @@ impl Browser {
                 ack();
             });
         }
-        if let Ok(jpeg) = base64::engine::general_purpose::STANDARD.decode(data) {
-            let _ = frames.send(InvokeResponseBody::Raw(jpeg));
-        }
-        if let Some(v) = soften {
-            restart(&cdp, &session, v, false);
-        }
+        let _ = frames.send(InvokeResponseBody::Raw(jpeg));
         if wait_still {
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
@@ -351,7 +404,7 @@ impl Browser {
                 }
                 w.sharp = true;
                 w.switching = true;
-                restart(cdp, session, w.viewport, true);
+                inner.restart(true);
             }
             return self.make_sure_sharp(cdp, session).await;
         }
@@ -383,7 +436,7 @@ impl Browser {
         else {
             return;
         };
-        let inner = self.inner.lock();
+        let mut inner = self.inner.lock();
         let Some(w) = inner.watch.as_ref().filter(|w| w.session == session && w.sharp) else { return };
         if let Some(jpeg) = shot
             .get("data")
@@ -392,14 +445,71 @@ impl Browser {
         {
             let _ = w.frames.send(InvokeResponseBody::Raw(jpeg));
         }
+        // And the screencast started over, in case it is stuck rather than
+        // slow: else the page's next change would not be drawn either.
+        if w.switching {
+            inner.restart(true);
+        }
     }
 }
 
-/// The screencast again with other settings. Chrome sends a frame as it
-/// starts, which is the one `switching` expects.
-fn restart(cdp: &Cdp, session: &str, v: Viewport, sharp: bool) {
-    cdp.send("Page.stopScreencast", json!({}), Some(session));
-    cdp.send("Page.startScreencast", screencast(v, sharp), Some(session));
+/// The pixel size of a JPEG, from its frame header.
+fn jpeg_size(jpeg: &[u8]) -> Option<(u16, u16)> {
+    if jpeg.get(..2)? != [0xFF, 0xD8] {
+        return None;
+    }
+    let mut at = 2;
+    loop {
+        let marker = *jpeg.get(at + 1)?;
+        if *jpeg.get(at)? != 0xFF {
+            return None;
+        }
+        if matches!(marker, 0xC0..=0xC3) {
+            let h = u16::from_be_bytes([*jpeg.get(at + 5)?, *jpeg.get(at + 6)?]);
+            let w = u16::from_be_bytes([*jpeg.get(at + 7)?, *jpeg.get(at + 8)?]);
+            return Some((w, h));
+        }
+        at += 2 + usize::from(u16::from_be_bytes([*jpeg.get(at + 2)?, *jpeg.get(at + 3)?]));
+    }
+}
+
+/// Whether a picture `(w, h)` is the panel's shape, at whatever scale: a
+/// fast frame is one pixel per CSS pixel, a sharp one the screen's. Its
+/// height is the one its width makes at the panel's shape, give or take
+/// the rounding of either.
+fn same_shape((w, h): (u16, u16), v: Viewport) -> bool {
+    if v.width == 0 {
+        return true;
+    }
+    let expected = f64::from(w) * f64::from(v.height) / f64::from(v.width);
+    (f64::from(h) - expected).abs() <= 2.0
+}
+
+impl super::Inner {
+    /// The watched tab's screencast again, with other settings, counted.
+    /// Chrome sends a frame as it starts, which is the one `switching`
+    /// expects.
+    fn restart(&mut self, sharp: bool) {
+        let Some(cdp) = self.running.as_ref().map(|r| r.cdp.clone()) else { return };
+        let n = self.count_screencast();
+        let Some(w) = self.watch.as_mut() else { return };
+        w.screencast = n;
+        cdp.send("Page.stopScreencast", json!({}), Some(&w.session));
+        cdp.send("Page.startScreencast", screencast(w.viewport, sharp), Some(&w.session));
+    }
+
+    /// One more screencast started on the watched tab; its number.
+    fn count_screencast(&mut self) -> i64 {
+        let Some(session) = self.watch.as_ref().map(|w| w.session.clone()) else { return 0 };
+        self.tabs
+            .values_mut()
+            .flat_map(|t| t.list.iter_mut())
+            .find(|t| t.session == session)
+            .map_or(0, |t| {
+                t.screencasts += 1;
+                t.screencasts
+            })
+    }
 }
 
 #[cfg(test)]
@@ -505,14 +615,22 @@ mod tests {
         state.browser.watch(app.handle(), "t1", panel, channel()).await.unwrap();
         let id = state.browser.tabs("t1").iter().find(|t| t.active).unwrap().id.clone();
         state.browser.close_tab(app.handle(), "t1", &id).await.unwrap();
+        while frames.try_recv().is_ok() {}
         state.browser.watch(app.handle(), "t1", panel, channel()).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(800)).await;
 
-        let mut newest = None;
-        while let Ok(f) = frames.try_recv() {
-            newest = jpeg_size(&f);
+        // Every frame is the panel's shape, soft or sharp, and a sharp one
+        // comes once the page is still. Not by a fixed time: on CI's runner
+        // the sharp frame took longer than the 800ms this once waited.
+        let sharp = Some((1800, 1820));
+        let mut seen = Vec::new();
+        let until = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < until && seen.last() != Some(&sharp) {
+            if let Ok(f) = frames.recv_timeout(Duration::from_millis(100)) {
+                seen.push(jpeg_size(&f));
+            }
         }
-        assert_eq!(newest, Some((1800, 1820)), "drawn at the panel's size, sharp");
+        assert!(seen.iter().all(|s| *s == Some((900, 910)) || *s == sharp), "only ever the panel's shape: {seen:?}");
+        assert_eq!(seen.last(), Some(&sharp), "drawn sharp once still: {seen:?}");
 
         state.browser.shutdown(Duration::from_secs(3));
         state.ptys.shutdown(Duration::from_secs(1));
@@ -583,11 +701,16 @@ mod tests {
     }
 
     /// A JPEG's width and height, from its frame header.
-    fn jpeg_size(jpeg: &[u8]) -> Option<(u16, u16)> {
-        let at = jpeg.windows(2).position(|w| w[0] == 0xFF && (w[1] == 0xC0 || w[1] == 0xC2))?;
-        let h = u16::from_be_bytes([*jpeg.get(at + 5)?, *jpeg.get(at + 6)?]);
-        let w = u16::from_be_bytes([*jpeg.get(at + 7)?, *jpeg.get(at + 8)?]);
-        Some((w, h))
+    #[test]
+    fn a_picture_squeezed_out_of_the_panel_s_shape_is_told_apart_at_any_scale() {
+        let panel = Viewport { width: 900, height: 910, scale: 2.0 };
+        assert!(same_shape((900, 910), panel), "a fast frame");
+        assert!(same_shape((1800, 1820), panel), "a sharp one");
+        assert!(!same_shape((900, 501), panel), "the squeezed one CI saw");
+        assert!(!same_shape((1800, 1003), panel));
+        assert!(!same_shape((1800, 1790), panel), "a few pixels short is out of shape too");
+        assert!(same_shape((1351, 1366), Viewport { width: 901, height: 911, scale: 1.5 }), "rounded");
+        assert_eq!(jpeg_size(b"not a jpeg"), None);
     }
 
     /// The panel's way, against a real Chrome: watching the tab sends it

@@ -242,6 +242,7 @@ mod tests {
             dialog: None,
             opener: opener.map(str::to_string),
             secret: None,
+            screencasts: 0,
         }
     }
 

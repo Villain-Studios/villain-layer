@@ -85,6 +85,9 @@ struct Tab {
     /// The password field the app filled a saved password into (BRW-19),
     /// until the page navigates.
     secret: Option<i64>,
+    /// How many screencasts the panel started on this tab. Chrome numbers
+    /// them the same way, and every frame carries its screencast's number.
+    screencasts: i64,
 }
 
 #[derive(Default)]
@@ -343,6 +346,7 @@ async fn attach(cdp: &Arc<Cdp>, target: String, user_agent: Option<&str>, viewpo
         dialog: None,
         opener: None,
         secret: None,
+        screencasts: 0,
     })
 }
 

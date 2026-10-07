@@ -213,7 +213,17 @@ the config folder, started by the first call that needs a tab.
   a scroll took 40ms to arrive at three times the bytes, which was the
   lag. Every change counted as moving, a blinking caret or a click
   flipped text between sharp and blurred. Not a screenshot for the still: taking one makes Chrome draw a
-  frame, which replaced it. `scroll_latency` measures it. The user's input goes back through
+  frame, which replaced it. `scroll_latency` measures it. Each frame is
+  measured from its JPEG header, not its metadata, which on a busy
+  machine said the panel's size for a squeezed frame. A frame of another
+  shape is dropped and the tab's size set again. Chrome numbers each
+  screencast started on a tab, and a frame's acknowledgement carries its
+  number. A frame from before a restart, still on its way, carries the
+  old number, and after acknowledging one Chrome sent nothing more. So the
+  panel counts the screencasts it starts (`Tab::screencasts`); a frame of
+  an older one is dropped and the screencast restarted. If the sharp frame
+  is 400ms late, a clipped screenshot stands in, and the screencast is
+  restarted again. The user's input goes back through
   `browser_input` without waiting for Chrome's answer, mouse moves
   coalesced to one per animation frame. Keys arrive at an off-screen
   textarea, so the window's paste and input methods have somewhere to land.

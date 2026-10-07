@@ -207,10 +207,12 @@ the config folder, started by the first call that needs a tab.
   crosses. Chrome runs with `--force-device-scale-factor=2`: a screencast
   is drawn at the window's scale, not the one a tab emulates, and without
   it a Retina panel showed half its pixels, stretched. The screencast runs
-  at one pixel per CSS pixel while the page moves and is restarted sharp
-  once it has been still for 150ms (`panel.rs`, `sharpen`): sharp all the
-  time, a scroll took 40ms to arrive at three times the bytes, which was
-  the lag. Not a screenshot for the still: taking one makes Chrome draw a
+  sharp, drops to one pixel per CSS pixel while the page moves (the user
+  scrolling, or three changes within 250ms), and is restarted sharp once
+  it has been still for 150ms (`panel.rs`, `sharpen`): sharp all the time,
+  a scroll took 40ms to arrive at three times the bytes, which was the
+  lag. Every change counted as moving, a blinking caret or a click
+  flipped text between sharp and blurred. Not a screenshot for the still: taking one makes Chrome draw a
   frame, which replaced it. `scroll_latency` measures it. The user's input goes back through
   `browser_input` without waiting for Chrome's answer, mouse moves
   coalesced to one per animation frame. Keys arrive at an off-screen

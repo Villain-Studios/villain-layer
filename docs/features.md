@@ -1222,11 +1222,13 @@ ring marks where it clicked.
   wheel, keys, paste, dictation and an input method's text. The page is
   laid out at the panel's size, so the user and the agents see the same
   page. Frames are sent only while the panel is on screen, up to 60 a
-  second. While the page moves they are drawn at one pixel per CSS pixel,
-  which reaches the panel in about 15ms; once it has been still for 150ms
-  it is drawn as sharp as a Retina screen (two device pixels to a CSS
-  pixel). The user's own scroll, key or click switches to fast frames
-  before the page changes. A hidden panel costs nothing. ⌘C and ⌘X put the page's
+  second, as sharp as a Retina screen (two device pixels to a CSS pixel).
+  While the page moves (the user scrolling, or three changes within a
+  quarter second, as in a scroll or an animation) they are drawn at one
+  pixel per CSS pixel instead, which reaches the panel in about 15ms,
+  until the page has been still for 150ms. A single change, a click, a
+  key or a blinking caret, is drawn sharp: text MUST NOT flip between
+  sharp and blurred. A hidden panel costs nothing. ⌘C and ⌘X put the page's
   selection on the Mac's clipboard (a headless Chrome copies to one of its
   own); ⌘L, ⌘R, ⌘[ and ⌘] are the address bar, reload, back and forward.
   The user may open any page; BRW-3 is about what agents may read, and the

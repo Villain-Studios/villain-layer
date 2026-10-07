@@ -306,7 +306,7 @@ mod tests {
         let router = Router::new()
             .route("/", get(|| async { Html(TABS) }))
             .route("/two", get(|| async { Html("<html><head><title>Two</title></head><body><p>The second page</p></body></html>") }))
-            .route("/bye", get(|| async { Html("<html><head><title>Signing in</title></head><body><script>setTimeout(() => window.close(), 300)</script></body></html>") }));
+            .route("/bye", get(|| async { Html("<html><head><title>Signing in</title></head><body><script>setTimeout(() => window.close(), 1500)</script></body></html>") }));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://localhost:{}", listener.local_addr().unwrap().port());
         tokio::spawn(async move { axum::serve(listener, router).await });
@@ -334,9 +334,12 @@ mod tests {
         assert_eq!(names(), ["Home*", "Two"]);
 
         let home = text(&tool("browser_snapshot", json!({})).await.unwrap());
-        tool("browser_click", json!({ "ref": ref_of(&home, "button \"Sign in\"") })).await.unwrap();
-        let mut seen = Vec::new();
-        for _ in 0..60 {
+        // The window stays long enough to be seen as a tab under a loaded
+        // test run, then closes itself.
+        let signing = text(&tool("browser_click", json!({ "ref": ref_of(&home, "button \"Sign in\"") })).await.unwrap());
+        assert!(signing.contains("Page: Signing in"), "the click's answer is the window: {signing}");
+        let mut seen = vec![names()];
+        for _ in 0..80 {
             let now = names();
             if seen.last() != Some(&now) {
                 seen.push(now.clone());

@@ -22,6 +22,13 @@ const FRAME_GAP: Duration = Duration::from_millis(16);
 /// How long the page is still before a sharp picture of it is sent.
 const STILL_AFTER: Duration = Duration::from_millis(150);
 
+/// Changes this close together are the page moving (a scroll, an
+/// animation): `MOVING.0` of them within `MOVING.1`. One change on its own
+/// is drawn sharp. A caret blinks twice a second, and with every change
+/// counted as moving, text flipped between sharp and blurred with each
+/// blink, and with each click.
+const MOVING: (usize, Duration) = (3, Duration::from_millis(250));
+
 /// What an agent last did in a tab, for the panel to show (BRW-10).
 #[derive(Clone, Debug, Serialize)]
 pub struct AgentAction {
@@ -70,6 +77,9 @@ pub(super) struct Watch {
     /// When the page will have been still long enough to be drawn sharp, if
     /// that is waited for.
     still_due: Option<Instant>,
+    /// When the last changes came while sharp: only a run of them is the
+    /// page moving (`MOVING`).
+    recent: std::collections::VecDeque<Instant>,
 }
 
 impl Browser {
@@ -126,6 +136,7 @@ impl Browser {
                 sharp: false,
                 switching: false,
                 still_due: None,
+                recent: Default::default(),
             });
             resize
         };
@@ -158,10 +169,11 @@ impl Browser {
         else {
             return Err(Error::Other("this task's tab is not open".into()));
         };
-        // What the user does is about to change the page: fast frames from
-        // now, not a sharp one first. Not for a bare mouse move, which
-        // mostly changes nothing, and would blur a still page each time.
-        let acts = !matches!(event, input::BrowserInput::Mouse { r#type, .. } if r#type == "mouseMoved");
+        // A scroll is about to move the page: fast frames from now, not a
+        // sharp one first. Not a click or a key, which change a page once
+        // and leave text to be read: made fast, each blurred the page for a
+        // moment.
+        let acts = matches!(event, input::BrowserInput::Wheel { .. });
         if let Some(w) = inner.watch.as_mut().filter(|w| acts && w.sharp && w.session == session) {
             w.sharp = false;
             w.switching = true;
@@ -200,7 +212,7 @@ fn screencast(v: Viewport, sharp: bool) -> Value {
     let device = |css: u32| (css as f64 * scale).round() as u32;
     json!({
         "format": "jpeg",
-        "quality": if sharp { 85 } else { 70 },
+        "quality": if sharp { 90 } else { 80 },
         "maxWidth": device(v.width),
         "maxHeight": device(v.height),
         "everyNthFrame": 1,
@@ -227,7 +239,16 @@ impl Browser {
             let wait = w.next.saturating_duration_since(now);
             w.next = now + wait + FRAME_GAP;
             let moved = !std::mem::take(&mut w.switching);
-            let soften = moved && w.sharp;
+            if moved && w.sharp {
+                w.recent.push_back(now);
+                while w.recent.front().is_some_and(|t| now.duration_since(*t) > MOVING.1) {
+                    w.recent.pop_front();
+                }
+            }
+            let soften = moved && w.sharp && w.recent.len() >= MOVING.0;
+            if soften {
+                w.recent.clear();
+            }
             if soften {
                 w.sharp = false;
                 w.switching = true;
@@ -319,6 +340,62 @@ mod tests {
         let h=''; for(let i=0;i<400;i++){h+=`<div class=card><h3>Booking ${i}</h3><div class=row><span class=pill>Flight</span><span class=pill>Hotel</span></div><p>Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris.</p><table><tr><td>Traveler</td><td>Ada Lovelace</td><td>SEK 12 400</td></tr></table></div>`}
         document.body.innerHTML=h;
     </script></body></html>"#;
+
+    /// Against a real Chrome: a caret blinking in a field changes the page
+    /// twice a second, and a click changes it once, and the page stays sharp
+    /// through both. Each blink and each click counted as the page moving,
+    /// and the panel flipped between sharp and blurred text.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_blinking_caret_or_a_click_does_not_blur_the_page() {
+        let Some((app, root, _)) = app_with_task() else { return };
+        let state = app.state::<AppState>();
+        let base = serve(r#"<html><head><title>Field</title></head><body><p>Some text to read</p><input autofocus value="typed"></body></html>"#).await;
+        let (tx, frames) = std::sync::mpsc::channel::<Vec<u8>>();
+        let channel = Channel::new(move |body| {
+            if let InvokeResponseBody::Raw(bytes) = body {
+                let _ = tx.send(bytes);
+            }
+            Ok(())
+        });
+        let viewport = Viewport { width: 640, height: 480, scale: 2.0 };
+        state.browser.watch(app.handle(), "t1", viewport, channel).await.unwrap();
+        let page = state.browser.page(app.handle(), "t1").await.unwrap();
+        page.navigate(&format!("{base}/")).await.unwrap();
+        page.settle(&state.browser).await;
+        page.eval("document.querySelector('input').focus()").await.unwrap();
+        tokio::time::sleep(Duration::from_millis(1000)).await;
+        while frames.try_recv().is_ok() {}
+
+        let mut sizes = Vec::new();
+        let until = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < until {
+            if let Ok(jpeg) = frames.recv_timeout(Duration::from_millis(100)) {
+                sizes.push(jpeg_size(&jpeg));
+            }
+        }
+        assert!(sizes.len() >= 3, "the caret blinks: {sizes:?}");
+        assert!(sizes.iter().all(|s| *s == Some((1280, 960))), "sharp through every blink: {sizes:?}");
+
+        // Nor does a click: it changes the page once, and text stays sharp.
+        for kind in ["mousePressed", "mouseReleased"] {
+            let click = input::BrowserInput::Mouse {
+                r#type: kind.into(), x: 20.0, y: 20.0, button: "left".into(), buttons: 1, click_count: 1, modifiers: 0,
+            };
+            state.browser.input("t1", &click).unwrap();
+        }
+        let mut after = Vec::new();
+        let until = Instant::now() + Duration::from_millis(1200);
+        while Instant::now() < until {
+            if let Ok(jpeg) = frames.recv_timeout(Duration::from_millis(100)) {
+                after.push(jpeg_size(&jpeg));
+            }
+        }
+        assert!(!after.is_empty() && after.iter().all(|s| *s == Some((1280, 960))), "sharp after a click: {after:?}");
+
+        state.browser.shutdown(Duration::from_secs(3));
+        state.ptys.shutdown(Duration::from_secs(1));
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     /// A measurement rather than a test, like `echo_latency`: how long a
     /// scroll takes to reach the app as a frame, the frame rate and size

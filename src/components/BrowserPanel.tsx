@@ -40,6 +40,9 @@ export function useBrowserView(taskId: string): BrowserView | null {
   return view;
 }
 
+/** How long after its last browser call an agent still at work is taken to be using the tab. */
+const DRIVING_LINGER = 60_000;
+
 /** The page's size in CSS pixels, as the panel lays it out. */
 type Size = { width: number; height: number };
 
@@ -152,6 +155,28 @@ export function BrowserPanel({ taskId, visible, onClose }: { taskId: string; vis
     return () => window.clearTimeout(t);
   }, [lastX, lastY, lastAt]);
 
+  // Whether an agent is using the tab (BRW-15): while a browser call of its
+  // runs, and between calls for as long as it is still working on its turn,
+  // up to a minute after its last one. An agent thinks between calls, and
+  // an overlay that came and went with each call said nothing.
+  const driver = view?.driver ?? null;
+  const driverWorking = useStore((s) =>
+    driver ? s.panes.find((p) => p.id === driver.pane)?.activity === "working" : false,
+  );
+  const [, setTick] = useState(0);
+  const lingering = !!driver && driverWorking && Date.now() - driver.last_at < DRIVING_LINGER;
+  const driving = !!driver && !view?.held && (driver.calls > 0 || lingering);
+  // Looked at again when the minute runs out, which no event says.
+  useEffect(() => {
+    if (!driver || driver.calls > 0 || !driverWorking) return;
+    const left = driver.last_at + DRIVING_LINGER - Date.now();
+    if (left <= 0) return;
+    const t = window.setTimeout(() => setTick((n) => n + 1), left + 50);
+    return () => window.clearTimeout(t);
+  }, [driver, driverWorking]);
+  const drivingRef = useRef(driving);
+  drivingRef.current = driving;
+
   // The wheel is a native listener: React's is passive, and the panel's own
   // scrolling must not happen as well as the page's.
   const sizeRef = useRef(size);
@@ -162,6 +187,7 @@ export function BrowserPanel({ taskId, visible, onClose }: { taskId: string; vis
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
+      if (drivingRef.current) return;
       const page = sizeRef.current;
       if (page) send(wheel(e, pagePoint(e, el.getBoundingClientRect(), page)));
     };
@@ -205,6 +231,11 @@ export function BrowserPanel({ taskId, visible, onClose }: { taskId: string; vis
 
   async function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     const k = e.nativeEvent;
+    // The agent has the page; the user takes it over first (BRW-15).
+    if (driving) {
+      e.preventDefault();
+      return;
+    }
     // An input method is composing: its text comes whole, at the end.
     if (k.isComposing || k.keyCode === 229) return;
     const cmd = k.metaKey && !k.ctrlKey && !k.altKey;
@@ -335,18 +366,15 @@ export function BrowserPanel({ taskId, visible, onClose }: { taskId: string; vis
             Close window
           </button>
         )}
-        <button
-          className={`btn btn-sm${view?.held ? " btn-primary" : ""}`}
-          title={
-            view?.held
-              ? "Let agents use this tab again"
-              : "Keep agents out of this tab while you use it: to sign in, or to look at something"
-          }
-          disabled={!tab}
-          onClick={() => void hold(!view?.held)}
-        >
-          {view?.held ? "Hand back" : "Take over"}
-        </button>
+        {view?.held && (
+          <button
+            className="btn btn-sm btn-primary"
+            title="Let this task's agents use the browser again"
+            onClick={() => void hold(false)}
+          >
+            Hand back
+          </button>
+        )}
         <button
           className="btn btn-sm btn-icon"
           title="Open this page in your own browser"
@@ -434,6 +462,26 @@ export function BrowserPanel({ taskId, visible, onClose }: { taskId: string; vis
             />
             {!tab && (
               <div className="browser-starting"><Spinner /> Starting the browser…</div>
+            )}
+            {driving && driver && (
+              // Over the page and taking its clicks: the user's input would
+              // land in the middle of the agent's.
+              <div className="browser-driving" onMouseDown={(e) => e.preventDefault()}>
+                <div className="browser-driving-card">
+                  <span className="dot live" />
+                  <span>
+                    <b>{driver.agent}</b> is using this browser
+                    {last && <span className="muted"> · {last.text}</span>}
+                  </span>
+                  <button
+                    className="btn btn-sm btn-primary"
+                    title="Keep agents out of this tab until you hand it back: to sign in, or to look at something"
+                    onClick={() => void hold(true)}
+                  >
+                    Take over
+                  </button>
+                </div>
+              </div>
             )}
             {marker && size && (
               <span

@@ -1235,8 +1235,8 @@ ring marks where it clicked.
   The tool waits up to two minutes and says what the user chose, or that
   no answer came yet; the same request again waits on the one already
   asked. No `confirm` an agent passes can stand in for the user's answer.
-- **BRW-12** "Take over" in the panel MUST keep the task's agents out of
-  its tab until "Hand back": every browser tool is refused while the user
+- **BRW-12** "Take over" (offered while an agent is using the tab,
+  BRW-15) MUST keep the task's agents out of its tab until "Hand back": every browser tool is refused while the user
   holds it, reads included, so nothing an agent does or reads overlaps the
   user signing in. The tool says why, so the agent can tell the user what
   it was about to do. Holding outlives the tab: a browser started again is
@@ -1253,6 +1253,14 @@ ring marks where it clicked.
   it (the panel's "Close window", `browser_close_window`, or the page
   closing itself, as sign-in windows do) shows the page under it again.
   Only the task's own page is kept for next time (BRW-6).
+- **BRW-15** While an agent is using the tab, the panel MUST say so: an
+  overlay over the page names the agent and what it last did, takes the
+  user's clicks, keys and wheel so they do not land in the middle of the
+  agent's, and offers "Take over". An agent is using the tab while one of
+  its browser calls runs, and between calls for as long as its pane is
+  still working on its turn, up to a minute after its last call: an agent
+  thinks between calls, and an overlay that came and went with each call
+  said nothing. With no agent using it, the page is simply the user's.
 - **BRW-6** The tab MUST come back where it was: each task's last page is
   kept in `config.json`, and opened when the task's tab is next needed.
   Deleting or finishing a task closes its tab.

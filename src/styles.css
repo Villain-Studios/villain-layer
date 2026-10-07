@@ -316,7 +316,7 @@ textarea { resize: vertical; font-family: var(--mono); }
 .browser-marker {
   position: absolute; width: 26px; height: 26px; margin: -13px 0 0 -13px; border-radius: 50%;
   border: 2px solid var(--accent); background: color-mix(in srgb, var(--accent) 25%, transparent);
-  pointer-events: none; animation: browser-ping 1.2s ease-out forwards;
+  pointer-events: none; z-index: 2; animation: browser-ping 1.2s ease-out forwards;
 }
 @keyframes browser-ping { from { transform: scale(0.4); opacity: 1; } to { transform: scale(1.6); opacity: 0; } }
 .browser-status {
@@ -333,6 +333,18 @@ textarea { resize: vertical; font-family: var(--mono); }
 .browser-dialog { background: color-mix(in srgb, var(--accent) 14%, var(--panel)); }
 .browser-dialog input { width: 180px; font-size: 12.5px; padding: 3px 6px; }
 .browser-held { color: var(--accent); }
+/* An agent has the page (BRW-15): a tint and a frame, so the page still reads. */
+.browser-driving {
+  position: absolute; inset: 0; z-index: 1; display: flex; justify-content: center; align-items: flex-start;
+  padding-top: 12px; background: color-mix(in srgb, var(--accent) 7%, transparent);
+  box-shadow: inset 0 0 0 2px var(--accent-dim); cursor: not-allowed;
+}
+.browser-driving-card {
+  display: flex; align-items: center; gap: 10px; padding: 7px 8px 7px 12px; max-width: calc(100% - 24px);
+  border-radius: 8px; background: var(--panel); border: 1px solid var(--accent-dim); color: var(--text);
+  font-size: 12.5px; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35); cursor: default;
+}
+.browser-driving-card > span:nth-child(2) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .site-row { padding: 2px 0; }
 .btn-add.active { color: var(--text); border-color: var(--accent-dim); background: var(--panel-2); }
 .btn-add .browser-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); margin-left: 4px; }

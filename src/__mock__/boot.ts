@@ -77,7 +77,7 @@ function newPane(args: Args, kind: PaneInfo["kind"], task: string): PaneInfo {
 const browsers = new Map<string, BrowserView>();
 const noTab = (): BrowserView => ({
   chrome: true, tab: null, url: "", title: "", loading: false, agents_may: false, last_action: null, requests: [],
-  dialog: null, held: false, window: false,
+  dialog: null, held: false, window: false, driver: null,
 });
 if (world.panes.some((p) => p.task_id === "t-login")) {
   browsers.set("t-login", {
@@ -95,6 +95,8 @@ if (world.panes.some((p) => p.task_id === "t-login")) {
     dialog: null,
     held: false,
     window: false,
+    // The login task's Claude, still at work, between browser calls.
+    driver: { pane: "pane-claude", agent: "Claude Code", calls: 0, last_at: Date.now() - 5_000 },
   });
 }
 function tabOf(task: string): BrowserView {

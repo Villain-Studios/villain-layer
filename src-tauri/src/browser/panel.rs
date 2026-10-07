@@ -46,6 +46,8 @@ pub struct TabView {
     pub held: bool,
     /// What is shown is a window the page opened, over it (BRW-14).
     pub window: bool,
+    /// The agent using the tab, or that last did (BRW-15).
+    pub driver: Option<super::Driver>,
 }
 
 /// The tab on screen in the panel, which alone is sent frames (BRW-9).
@@ -62,6 +64,7 @@ impl Browser {
     pub fn view(&self, task: &str) -> TabView {
         let inner = self.inner.lock();
         let held = inner.held.contains(task);
+        let driver = inner.drivers.get(task).cloned();
         inner
             .tabs
             .get(task)
@@ -74,8 +77,9 @@ impl Browser {
                 dialog: t.dialog.clone(),
                 held,
                 window: t.opener.is_some(),
+                driver: driver.clone(),
             })
-            .unwrap_or(TabView { held, ..TabView::default() })
+            .unwrap_or(TabView { held, driver, ..TabView::default() })
     }
 
     /// Send the task's tab to the panel: sized to it, and its frames as they

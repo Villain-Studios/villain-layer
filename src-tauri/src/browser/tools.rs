@@ -179,8 +179,9 @@ fn text(t: impl Into<String>) -> Vec<Value> {
     vec![json!({ "type": "text", "text": t.into() })]
 }
 
-/// The calling agent's task: its tab is the one it uses (BRW-2).
-fn task_of(state: &AppState, caller: Option<&str>) -> Result<String> {
+/// The calling agent's task, its pane and what it is: its tab is the one
+/// it uses (BRW-2).
+fn task_of(state: &AppState, caller: Option<&str>) -> Result<(String, String, String)> {
     let pane = caller.ok_or_else(|| {
         Error::Other("only an agent the app started has a browser tab: it is found by the pane the agent runs in".into())
     })?;
@@ -191,7 +192,12 @@ fn task_of(state: &AppState, caller: Option<&str>) -> Result<String> {
     if info.task_id == CHAT_TASK_ID {
         return Err(Error::Other("a chat has no browser: the browser is per task, for the agents working on it".into()));
     }
-    Ok(info.task_id)
+    let agent = info
+        .agent_id
+        .as_deref()
+        .and_then(crate::agents::find)
+        .map_or_else(|| "An agent".to_string(), |a| a.name.to_string());
+    Ok((info.task_id, pane.to_string(), agent))
 }
 
 /// The refusal for a page on a site agents may not use.
@@ -265,7 +271,7 @@ fn node(args: &Value) -> Result<i64> {
 
 pub async fn call<R: Runtime>(app: &AppHandle<R>, name: &str, args: Value, caller: Option<&str>) -> Result<Vec<Value>> {
     let state = app.state::<AppState>();
-    let task = task_of(&state, caller)?;
+    let (task, pane, agent) = task_of(&state, caller)?;
     let browser: &Browser = &state.browser;
     // A question for the user, not the browser: nothing to start for it.
     if name == "browser_request_site" {
@@ -275,6 +281,8 @@ pub async fn call<R: Runtime>(app: &AppHandle<R>, name: &str, args: Value, calle
     if browser.held(&task) {
         return Err(Error::Other(super::control::HELD.into()));
     }
+    // The tab is the agent's until this call ends (BRW-15).
+    let _driving = browser.drive(app, &task, &pane, &agent);
     let page = browser.page(app, &task).await?;
     // The page does nothing else until its dialog is answered, and a call
     // into it would wait as long. Reading the outline still says so.

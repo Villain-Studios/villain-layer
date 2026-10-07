@@ -28,7 +28,7 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 use crate::commands::AppState;
 use crate::error::{Error, Result};
 use cdp::Cdp;
-pub use control::Dialog;
+pub use control::{Dialog, Driver};
 pub use page::Page;
 pub use panel::AgentAction;
 pub use requests::SiteRequest;
@@ -90,6 +90,8 @@ struct Inner {
     /// Tasks whose tab the user has taken over (BRW-12). Kept apart from
     /// the tabs, so a tab made again is still held.
     held: HashSet<String>,
+    /// The agent using each task's tab, or that last did (BRW-15).
+    drivers: HashMap<String, control::Driver>,
 }
 
 /// Tell the panel a task's tab changed; an empty task is every tab.

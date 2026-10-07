@@ -7,7 +7,7 @@ use tauri::{AppHandle, Manager};
 
 use super::AppState;
 use crate::browser::input::BrowserInput;
-use crate::browser::{sites, AgentAction, Dialog, SiteRequest, Viewport};
+use crate::browser::{sites, AgentAction, Dialog, Driver, SiteRequest, Viewport};
 use crate::error::{Error, Result};
 
 /// A task's tab, as the panel shows it.
@@ -31,6 +31,8 @@ pub struct BrowserView {
     pub held: bool,
     /// What is shown is a window the page opened (BRW-14).
     pub window: bool,
+    /// The agent using the tab, or that last did (BRW-15).
+    pub driver: Option<Driver>,
 }
 
 /// The task's tab, as last heard. Makes nothing: a task whose panel was
@@ -54,6 +56,7 @@ pub async fn browser_view(app: AppHandle, task_id: String) -> Result<BrowserView
         dialog: view.dialog,
         held: view.held,
         window: view.window,
+        driver: view.driver,
     })
 }
 

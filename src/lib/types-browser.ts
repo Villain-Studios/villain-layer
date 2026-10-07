@@ -29,6 +29,20 @@ export interface BrowserView {
   held: boolean;
   /** What is shown is a window the page opened, over it (BRW-14). */
   window: boolean;
+  /** The agent using the tab, or that last did (BRW-15). */
+  driver: Driver | null;
+}
+
+/** The agent using a task's tab, or that last did (BRW-15). */
+export interface Driver {
+  /** Its pane, whose state says whether it is still at work. */
+  pane: string;
+  /** "Claude Code". */
+  agent: string;
+  /** Its browser calls running now. */
+  calls: number;
+  /** When its last call began or ended, in milliseconds since the epoch. */
+  last_at: number;
 }
 
 /** An alert, confirm or prompt the page opened. Headless Chrome draws none. */

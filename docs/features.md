@@ -1217,8 +1217,9 @@ ring marks where it clicked.
   own input MUST reach it as real input: mouse buttons, moves and the
   wheel, keys, paste, dictation and an input method's text. The page is
   laid out at the panel's size, so the user and the agents see the same
-  page. Frames are sent only while the panel is on screen, at most 15 a
-  second; a hidden panel costs nothing. ⌘C and ⌘X put the page's
+  page. Frames are sent only while the panel is on screen, at most 30 a
+  second, as sharp as a Retina screen (two device pixels to a CSS
+  pixel); a hidden panel costs nothing. ⌘C and ⌘X put the page's
   selection on the Mac's clipboard (a headless Chrome copies to one of its
   own); ⌘L, ⌘R, ⌘[ and ⌘] are the address bar, reload, back and forward.
   The user may open any page; BRW-3 is about what agents may read, and the

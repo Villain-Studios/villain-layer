@@ -195,8 +195,11 @@ the config folder, started by the first call that needs a tab.
   picture of it: `Page.startScreencast` frames, JPEGs, sent raw over a
   Tauri `Channel` (an event would carry them as base64 inside JSON) and
   drawn on a canvas, newest only. Only the watched tab is sent frames, and
-  each is acknowledged no sooner than 66ms after the last, which is how
-  Chrome is held to 15 a second. The user's input goes back through
+  each is acknowledged no sooner than 33ms after the last, which is how
+  Chrome is held to 30 a second. Chrome runs with
+  `--force-device-scale-factor=2`: a screencast is drawn at the window's
+  scale, not the one a tab emulates, and without it a Retina panel showed
+  half its pixels, stretched. The user's input goes back through
   `browser_input` without waiting for Chrome's answer, mouse moves
   coalesced to one per animation frame. Keys arrive at an off-screen
   textarea, so the window's paste and input methods have somewhere to land.

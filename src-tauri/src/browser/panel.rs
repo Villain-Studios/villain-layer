@@ -13,10 +13,11 @@ use super::cdp::Event;
 use super::{changed, input, Browser, Viewport};
 use crate::error::{Error, Result};
 
-/// The least time between two frames sent to the panel: 15 a second
+/// The least time between two frames sent to the panel: 30 a second
 /// (BRW-9). A video plays in the page at Chrome's rate, and each frame is
-/// a JPEG crossing into the webview.
-const FRAME_GAP: Duration = Duration::from_millis(66);
+/// a JPEG crossing into the webview. At 15 a second, scrolling and typing
+/// in the panel felt like lag; Chrome itself kept up with 60.
+const FRAME_GAP: Duration = Duration::from_millis(33);
 
 /// What an agent last did in a tab, for the panel to show (BRW-10).
 #[derive(Clone, Debug, Serialize)]
@@ -111,7 +112,7 @@ impl Browser {
         let device = |css: u32| (css as f64 * viewport.scale).round() as u32;
         page.call(
             "Page.startScreencast",
-            json!({ "format": "jpeg", "quality": 75, "maxWidth": device(viewport.width), "maxHeight": device(viewport.height), "everyNthFrame": 1 }),
+            json!({ "format": "jpeg", "quality": 85, "maxWidth": device(viewport.width), "maxHeight": device(viewport.height), "everyNthFrame": 1 }),
         )
         .await?;
         Ok(())
@@ -196,6 +197,14 @@ mod tests {
     use crate::commands::AppState;
     use tauri::Manager;
 
+    /// A JPEG's width and height, from its frame header.
+    fn jpeg_size(jpeg: &[u8]) -> Option<(u16, u16)> {
+        let at = jpeg.windows(2).position(|w| w[0] == 0xFF && (w[1] == 0xC0 || w[1] == 0xC2))?;
+        let h = u16::from_be_bytes([*jpeg.get(at + 5)?, *jpeg.get(at + 6)?]);
+        let w = u16::from_be_bytes([*jpeg.get(at + 7)?, *jpeg.get(at + 8)?]);
+        Some((w, h))
+    }
+
     /// The panel's way, against a real Chrome: watching the tab sends it
     /// JPEG frames at the panel's size, and the user's click and keys reach
     /// the page as real input.
@@ -219,6 +228,7 @@ mod tests {
 
         let jpeg = frames.recv_timeout(Duration::from_secs(10)).expect("a frame");
         assert_eq!(&jpeg[..2], &[0xFF, 0xD8], "a JPEG");
+        assert_eq!(jpeg_size(&jpeg), Some((1280, 960)), "as sharp as the panel: a device pixel each");
         let size = page.eval("[innerWidth, innerHeight, devicePixelRatio]").await.unwrap();
         assert_eq!(size, json!([640, 480, 2]), "laid out at the panel's size");
 

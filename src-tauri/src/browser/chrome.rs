@@ -69,6 +69,11 @@ pub fn launch(binary: &Path, profile: &Path) -> Result<(Process, PipeWriter, Pip
             "--disable-features=Translate,MediaRouter,OptimizationHints",
             "--mute-audio",
             "--window-size=1280,800",
+            // A screencast is drawn at the window's scale, not the one a tab
+            // emulates: without this, the panel on a Retina screen showed a
+            // picture of half its pixels, stretched, and text was soft. A
+            // tab's own scale still decides what an agent's screenshot is.
+            "--force-device-scale-factor=2",
             "about:blank",
         ])
         .stdin(Stdio::null())

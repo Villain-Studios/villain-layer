@@ -13,7 +13,10 @@ export interface AgentAction {
 export interface BrowserView {
   /** A Chrome is installed to run. */
   chrome: boolean;
-  /** The tab's session; null while the task has no tab. A new one is a new tab. */
+  /**
+   * The active tab's session; null while the task has no tab. A new one is
+   * another tab, or the tab made again: the panel watches it afresh.
+   */
   tab: string | null;
   url: string;
   title: string;
@@ -27,8 +30,8 @@ export interface BrowserView {
   dialog: PageDialog | null;
   /** The user has taken the tab over, and agents wait (BRW-12). */
   held: boolean;
-  /** What is shown is a window the page opened, over it (BRW-14). */
-  window: boolean;
+  /** Every tab, in order; the active one is what is shown (BRW-16). */
+  tabs: TabInfo[];
   /** The agent using the tab, or that last did (BRW-15). */
   driver: Driver | null;
 }
@@ -86,3 +89,14 @@ export type BrowserInput =
       location: number;
     }
   | { kind: "text"; text: string };
+
+/** One of a task's tabs (BRW-16). */
+export interface TabInfo {
+  /** Chrome's id for the page. */
+  id: string;
+  /** Its title, else its site, else "New tab" (BRW-17). */
+  name: string;
+  url: string;
+  active: boolean;
+  loading: boolean;
+}

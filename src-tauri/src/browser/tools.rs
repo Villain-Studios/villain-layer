@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, Runtime};
 
-use super::{sites, snapshot, Browser, Page, SiteRequest};
+use super::{sites, snapshot, Browser, Page};
 use crate::commands::{AppState, CHAT_TASK_ID};
 use crate::error::{Error, Result};
 use crate::mcp::{arg, bool_prop, required, str_prop, tool};
@@ -136,10 +136,33 @@ pub fn list() -> Vec<Value> {
             vec![],
         ),
         tool(
-            "browser_close_window",
-            "Close the window the page opened (a sign-in popup, a link that opened a new \
-             tab), going back to the page that opened it.",
+            "browser_tabs",
+            "Your task's browser tabs, numbered, with which one is active. Everything else \
+             acts on the active tab. A link that opens a new tab opens it next to its own \
+             and makes it active.",
             json!({}),
+            vec![],
+        ),
+        tool(
+            "browser_new_tab",
+            "Open a page in a new tab, next to the active one, and make it active. The same \
+             sites as browser_navigate.",
+            json!({ "url": str_prop("The address, e.g. localhost:3000/admin") }),
+            vec!["url"],
+        ),
+        tool(
+            "browser_switch_tab",
+            "Make another tab the active one, by its number from browser_tabs. The user \
+             sees the same tab you do.",
+            json!({ "tab": { "type": "integer", "description": "The tab's number, from 1" } }),
+            vec!["tab"],
+        ),
+        tool(
+            "browser_close_tab",
+            "Close a tab, the active one unless you give its number. Closing a tab a page \
+             opened makes the tab that opened it active again. The last tab is left open, \
+             empty.",
+            json!({ "tab": { "type": "integer", "description": "The tab's number, from 1; default the active one" } }),
             vec![],
         ),
         tool(
@@ -175,7 +198,7 @@ pub fn list() -> Vec<Value> {
     ]
 }
 
-fn text(t: impl Into<String>) -> Vec<Value> {
+pub(super) fn text(t: impl Into<String>) -> Vec<Value> {
     vec![json!({ "type": "text", "text": t.into() })]
 }
 
@@ -243,19 +266,15 @@ async fn report<R: Runtime>(app: &AppHandle<R>, state: &AppState, task: &str, di
         return Ok(text(format!("{did}\n\nPage: {title}\nURL: {url}\n\n{}", d.describe())));
     }
     let outline = page.outline().await?;
-    let window = if state.browser.in_window(task) {
-        "This is a window the page opened, over the page that opened it; \
-         browser_close_window goes back to that page.\n"
-    } else {
-        ""
-    };
-    Ok(text(format!("{did}\n\nPage: {title}\nURL: {url}\n{window}\n{outline}")))
+    let tabs = state.browser.tabs(task);
+    let tabs = if tabs.len() > 1 { format!("{}\n", super::tabs::tab_list(&tabs, state)) } else { String::new() };
+    Ok(text(format!("{did}\n\nPage: {title}\nURL: {url}\n{tabs}\n{outline}")))
 }
 
 /// How the panel names an element an agent acted on: its label, not its
 /// value, which for a password field is the password.
 async fn label(page: &Page, n: i64) -> String {
-    page.call_on(n, LABEL, vec![])
+    page.call_on(n, super::page::LABEL, vec![])
         .await
         .ok()
         .and_then(|v| v.as_str().map(str::to_string))
@@ -275,7 +294,7 @@ pub async fn call<R: Runtime>(app: &AppHandle<R>, name: &str, args: Value, calle
     let browser: &Browser = &state.browser;
     // A question for the user, not the browser: nothing to start for it.
     if name == "browser_request_site" {
-        return request_site(app, &state, &task, &args).await;
+        return super::requests::request_site(app, &state, &task, &args).await;
     }
     // Reads too: what the user types while signing in is theirs.
     if browser.held(&task) {
@@ -286,7 +305,13 @@ pub async fn call<R: Runtime>(app: &AppHandle<R>, name: &str, args: Value, calle
     let page = browser.page(app, &task).await?;
     // The page does nothing else until its dialog is answered, and a call
     // into it would wait as long. Reading the outline still says so.
-    if !matches!(name, "browser_dialog" | "browser_snapshot" | "browser_console") {
+    // Tabs are the browser's, not the page's: another one can be opened or
+    // switched to while this one waits.
+    if !matches!(
+        name,
+        "browser_dialog" | "browser_snapshot" | "browser_console" | "browser_tabs" | "browser_new_tab"
+            | "browser_switch_tab" | "browser_close_tab"
+    ) {
         if let Some(d) = browser.dialog(&task) {
             return Err(Error::Other(format!("Nothing was done. {}", d.describe())));
         }
@@ -359,7 +384,7 @@ pub async fn call<R: Runtime>(app: &AppHandle<R>, name: &str, args: Value, calle
                 .until_dialog(async {
                     page.focus(n).await?;
                     if clear {
-                        page.call_on(n, SELECT_ALL, vec![]).await?;
+                        page.call_on(n, super::page::SELECT_ALL, vec![]).await?;
                         page.key("Backspace").await?;
                     }
                     if !typed.is_empty() {
@@ -389,7 +414,7 @@ pub async fn call<R: Runtime>(app: &AppHandle<R>, name: &str, args: Value, calle
             let n = node(&args)?;
             let values: Vec<Value> = args.get("values").and_then(Value::as_array).cloned().unwrap_or_default();
             browser.record(app, &task, &format!("Chose an option in {}", label(&page, n).await), page.center(n).await.ok());
-            match browser.until_dialog(page.call_on(n, SELECT_OPTIONS, vec![Value::Array(values)])).await? {
+            match browser.until_dialog(page.call_on(n, super::page::SELECT_OPTIONS, vec![Value::Array(values)])).await? {
                 Some(chosen) => Ok(text(format!("Chosen in e{n}: {chosen}"))),
                 None => report(app, &state, &task, &format!("Chose in e{n}.")).await,
             }
@@ -465,18 +490,32 @@ pub async fn call<R: Runtime>(app: &AppHandle<R>, name: &str, args: Value, calle
             Ok(text(shown.chars().take(40_000).collect::<String>()))
         }
 
-        "browser_close_window" => {
-            if !browser.close_window(&task) {
-                return Err(Error::Other("this is the task's own tab, not a window a page opened: there is nothing to close".into()));
+        "browser_tabs" => Ok(text(super::tabs::tab_list(&browser.tabs(&task), &state))),
+
+        "browser_new_tab" => {
+            let url = sites::complete(required(&args, "url")?);
+            if !sites::allowed(&url, &state.config.read().browser.sites) {
+                return Err(not_allowed(&url));
             }
-            browser.record(app, &task, "Closed the window the page opened", None);
-            for _ in 0..40 {
-                if !browser.in_window(&task) {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(50)).await;
-            }
-            report(app, &state, &task, "Closed the window.").await
+            browser.record(app, &task, &format!("Opened a new tab at {url}"), None);
+            let page = browser.new_tab(app, &task, Some(&url)).await?;
+            page.settle(browser).await;
+            report(app, &state, &task, &format!("Opened {url} in a new tab.")).await
+        }
+
+        "browser_switch_tab" => {
+            let tab = super::tabs::tab_numbered(&browser.tabs(&task), &args)?;
+            let name = browser.switch_tab(app, &task, &tab.id)?;
+            let shown = if sites::allowed(&tab.url, &state.config.read().browser.sites) { name } else { "a tab".into() };
+            browser.record(app, &task, &format!("Switched to “{shown}”"), None);
+            report(app, &state, &task, &format!("Switched to “{shown}”.")).await
+        }
+
+        "browser_close_tab" => {
+            let tab = super::tabs::tab_numbered(&browser.tabs(&task), &args)?;
+            browser.record(app, &task, "Closed a tab", None);
+            browser.close_tab(app, &task, &tab.id).await?;
+            report(app, &state, &task, "Closed the tab.").await
         }
 
         "browser_dialog" => {
@@ -494,90 +533,6 @@ pub async fn call<R: Runtime>(app: &AppHandle<R>, name: &str, args: Value, calle
         other => Err(Error::NotFound(format!("tool {other}"))),
     }
 }
-
-/// How long `browser_request_site` waits on the user before saying there is
-/// no answer yet.
-const ANSWER_WAIT: Duration = Duration::from_secs(120);
-
-/// Ask the user for a site, and wait for the answer (BRW-11).
-async fn request_site<R: Runtime>(app: &AppHandle<R>, state: &AppState, task: &str, args: &Value) -> Result<Vec<Value>> {
-    let asked = required(args, "site")?;
-    let site = sites::normalize(asked)
-        .ok_or_else(|| Error::Other(format!("{asked} is not a site: give one like github.com")))?;
-    let reason = required(args, "reason")?;
-    if sites::allowed(&format!("https://{site}/"), &state.config.read().browser.sites) {
-        return Ok(text(format!("Agents may already use {site}.")));
-    }
-    let (request, mut answer, new) = state.browser.ask(app, task, &site, reason);
-    if new {
-        tell_user(app, state, &request);
-    }
-    let said = tokio::time::timeout(ANSWER_WAIT, answer.wait_for(Option::is_some)).await;
-    Ok(text(match said.ok().and_then(|r| r.ok().and_then(|a| *a)) {
-        Some(true) => format!("The user allowed {site}. browser_navigate there now."),
-        Some(false) => format!(
-            "The user said no to {site}. Do not ask for it again in this task unless they say otherwise."
-        ),
-        None => format!(
-            "No answer yet: the request for {site} stays in the task's Browser panel. Tell the user \
-             what you need it for, and carry on with something else; browser_navigate there will \
-             work once they allow it."
-        ),
-    }))
-}
-
-/// A request goes to the message center, and to a banner while the window
-/// is away: the agent asking is waiting on the user, like one at a prompt.
-fn tell_user<R: Runtime>(app: &AppHandle<R>, state: &AppState, r: &SiteRequest) {
-    let target = crate::target::Target::Task(&r.task).to_string();
-    let title = format!("An agent asks to use {} in its browser", r.site);
-    crate::messages::record_all(app, vec![crate::messages::New {
-        kind: crate::messages::Kind::Agent,
-        level: crate::messages::Level::Info,
-        title: title.clone(),
-        body: r.reason.clone(),
-        target: Some(target.clone()),
-    }]);
-    let away = !app.get_webview_window("main").and_then(|w| w.is_focused().ok()).unwrap_or(false);
-    if away && state.config.read().ui.notify_waiting_agents {
-        let _ = crate::commands::banner(app, title, r.reason.clone(), target);
-    }
-}
-
-/// An element's name for a person: what it says or is labelled, never its
-/// value.
-const LABEL: &str = "function () {
-  const t = (this.getAttribute('aria-label') || (this.labels && this.labels[0] && this.labels[0].innerText)
-    || this.placeholder || this.innerText || this.title || this.alt || this.name || '').trim().split('\\n')[0];
-  return t.length > 40 ? t.slice(0, 40) + '…' : t;
-}";
-
-/// Select everything in a field, or in an editable element.
-const SELECT_ALL: &str = "function () {
-  if (typeof this.select === 'function') { this.select(); return; }
-  const range = document.createRange();
-  range.selectNodeContents(this);
-  const s = window.getSelection();
-  s.removeAllRanges();
-  s.addRange(range);
-}";
-
-/// Choose a list's options by value or text, as a person's choice would:
-/// with input and change events, which is what frameworks listen to.
-///
-/// Matched first and set after: in a single-choice list, unselecting the
-/// chosen option makes the browser select the first one, which then read
-/// as chosen.
-const SELECT_OPTIONS: &str = "function (wanted) {
-  if (!(this instanceof HTMLSelectElement)) throw new Error('that element is not a <select> list');
-  const matches = [...this.options].filter((o) => wanted.includes(o.value) || wanted.includes(o.label.trim()));
-  if (matches.length === 0) throw new Error('no option is called ' + wanted.join(' or '));
-  if (this.multiple) for (const o of this.options) o.selected = matches.includes(o);
-  else matches[0].selected = true;
-  this.dispatchEvent(new Event('input', { bubbles: true }));
-  this.dispatchEvent(new Event('change', { bubbles: true }));
-  return [...this.selectedOptions].map((o) => o.label.trim());
-}";
 
 #[cfg(test)]
 mod tests {
@@ -690,8 +645,8 @@ mod tests {
         assert!(refused.to_string().contains("example.com is not a site agents may use"), "{refused}");
 
         assert_eq!(
-            state.config.read().tasks[0].browser_url.as_deref(),
-            Some(format!("{base}/").as_str()),
+            state.config.read().tasks[0].browser.clone().map(|b| b.urls),
+            Some(vec![format!("{base}/")]),
             "the tab's page is kept for next time"
         );
 

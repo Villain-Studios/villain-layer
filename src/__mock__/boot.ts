@@ -77,12 +77,12 @@ function newPane(args: Args, kind: PaneInfo["kind"], task: string): PaneInfo {
 const browsers = new Map<string, BrowserView>();
 const noTab = (): BrowserView => ({
   chrome: true, tab: null, url: "", title: "", loading: false, agents_may: false, last_action: null, requests: [],
-  dialog: null, held: false, window: false, driver: null,
+  dialog: null, held: false, tabs: [], driver: null,
 });
 if (world.panes.some((p) => p.task_id === "t-login")) {
   browsers.set("t-login", {
     chrome: true,
-    tab: "tab-t-login",
+    tab: "tab-t-login-2",
     url: "http://localhost:5173/login",
     title: "Sign in · Acme",
     loading: false,
@@ -94,7 +94,12 @@ if (world.panes.some((p) => p.task_id === "t-login")) {
     }],
     dialog: null,
     held: false,
-    window: false,
+    // Three tabs, the sign-in page active (BRW-16).
+    tabs: [
+      { id: "tab-t-login-1", name: "Acme", url: "http://localhost:5173/", active: false, loading: false },
+      { id: "tab-t-login-2", name: "Sign in · Acme", url: "http://localhost:5173/login", active: true, loading: false },
+      { id: "tab-t-login-3", name: "localhost", url: "http://localhost:5173/admin", active: false, loading: true },
+    ],
     // The login task's Claude, still at work, between browser calls.
     driver: { pane: "pane-claude", agent: "Claude Code", calls: 0, last_at: Date.now() - 5_000 },
   });
@@ -102,12 +107,25 @@ if (world.panes.some((p) => p.task_id === "t-login")) {
 function tabOf(task: string): BrowserView {
   let b = browsers.get(task);
   if (!b) {
-    b = { ...noTab(), tab: `tab-${task}`, url: "about:blank" };
+    b = { ...noTab(), tab: `tab-${task}-1`, url: "about:blank" };
+    b.tabs = [{ id: `tab-${task}-1`, name: "New tab", url: "about:blank", active: true, loading: false }];
     browsers.set(task, b);
     void emit("browser:changed", task);
   }
   return b;
 }
+
+/** Make the tab `id` the active one, as the backend's view would show it. */
+function activate(task: string, id: string) {
+  const b = tabOf(task);
+  b.tabs = b.tabs.map((t) => ({ ...t, active: t.id === id }));
+  const t = b.tabs.find((x) => x.active)!;
+  b.tab = t.id;
+  b.url = t.url;
+  b.title = t.name;
+  void emit("browser:changed", task);
+}
+let mockTabs = 10;
 
 /** A page as Chrome would draw it into a frame: a sign-in form. */
 async function frameOf(b: BrowserView, width: number, height: number, scale: number): Promise<ArrayBuffer> {
@@ -497,10 +515,32 @@ const answer: Record<string, Answer> = {
     void emit("browser:changed", a.taskId);
     return null;
   },
-  browser_close_window: (a) => {
-    const b = tabOf(a.taskId as string);
-    b.window = false;
-    void emit("browser:changed", a.taskId);
+  browser_new_tab: (a) => {
+    const task = a.taskId as string;
+    const b = tabOf(task);
+    const id = `tab-${task}-${++mockTabs}`;
+    const url = (a.url as string | null) ?? "about:blank";
+    const at = b.tabs.findIndex((t) => t.active) + 1;
+    b.tabs.splice(at, 0, { id, name: url === "about:blank" ? "New tab" : new URL(url.includes("://") ? url : `http://${url}`).hostname, url, active: false, loading: false });
+    activate(task, id);
+    return null;
+  },
+  browser_switch_tab: (a) => {
+    activate(a.taskId as string, a.tab as string);
+    return null;
+  },
+  browser_close_tab: (a) => {
+    const task = a.taskId as string;
+    const b = tabOf(task);
+    if (b.tabs.length === 1) {
+      b.tabs = [{ ...b.tabs[0], name: "New tab", url: "about:blank" }];
+      activate(task, b.tabs[0].id);
+      return null;
+    }
+    const at = b.tabs.findIndex((t) => t.id === a.tab);
+    const wasActive = b.tabs[at]?.active;
+    b.tabs.splice(at, 1);
+    activate(task, wasActive ? b.tabs[Math.max(0, at - 1)].id : b.tabs.find((t) => t.active)!.id);
     return null;
   },
   browser_dialog: (a) => {

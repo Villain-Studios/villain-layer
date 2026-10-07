@@ -299,6 +299,21 @@ textarea { resize: vertical; font-family: var(--mono); }
    draws, so the screen is plain: the canvas is the page's own size. */
 .browser-side { flex: none; min-width: 320px; display: flex; overflow: hidden; }
 .browser { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--panel); }
+.browser-tabs { display: flex; align-items: center; gap: 2px; padding: 5px 6px 0; overflow-x: auto; border-bottom: 1px solid var(--border-soft); }
+.browser-tabs.locked { opacity: 0.55; }
+.browser-tabs.locked .browser-tab { cursor: not-allowed; }
+.browser-tab {
+  display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 200px; flex: 0 1 auto;
+  padding: 4px 4px 4px 10px; border: 1px solid transparent; border-bottom: none; border-radius: 6px 6px 0 0;
+  font-size: 12px; color: var(--dim); cursor: pointer; white-space: nowrap;
+}
+.browser-tab:hover { background: var(--panel-2); }
+.browser-tab.active { color: var(--text); background: var(--bg); border-color: var(--border-soft); }
+.browser-tab .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.browser-tab .x { display: inline-flex; padding: 2px; border-radius: 4px; color: var(--dimmer); opacity: 0; }
+.browser-tab:hover .x, .browser-tab.active .x { opacity: 1; }
+.browser-tab .x:hover:not(:disabled) { color: var(--red); background: var(--panel-2); }
+.browser-tab-new { margin: 0 0 3px 2px; flex: none; }
 .browser-bar { display: flex; align-items: center; gap: 4px; padding: 5px 6px; border-bottom: 1px solid var(--border-soft); }
 .btn-icon { display: inline-flex; align-items: center; justify-content: center; padding: 4px 6px; }
 .browser-address { flex: 1; min-width: 0; display: flex; }

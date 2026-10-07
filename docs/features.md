@@ -934,7 +934,10 @@ credentials themselves.
 | `browser_evaluate` | run JavaScript in the page | |
 | `browser_request_site` | ask the user to let agents use a site (BRW-11) | |
 | `browser_dialog` | answer the page's alert, confirm or prompt (BRW-13) | |
-| `browser_close_window` | close a window the page opened, back to the page under it (BRW-14) | |
+| `browser_tabs` | the task's tabs, and which is active (BRW-16) | |
+| `browser_new_tab` | open a page in a new tab (BRW-3, BRW-16) | |
+| `browser_switch_tab` | make another tab the active one | |
+| `browser_close_tab` | close a tab, the active one by default | |
 
 - **MCP-1** Every request MUST carry the bearer token. Loopback is not
   authorisation.
@@ -1174,17 +1177,18 @@ Known gaps:
 
 ## 18. Browser
 
-Each task has a tab in a browser its agents can use: to open the dev
+Each task has tabs in a browser its agents can use: to open the dev
 server, read the page, fill in a form and click through it, as a person
 trying the change would. It is one Chrome for the app, run in the
-background with a profile of its own, and one tab in it per task. Agents
+background with a profile of its own, and a set of tabs in it per task,
+one of them active, which the user and the task's agents share. Agents
 drive it with the `browser_*` tools (§12): they read a page as an outline
 of numbered elements, act on those, and get the page back as it is
 afterwards.
 
-The globe in a task's pane bar shows its tab beside the terminals (a dot
-on it says the task's agents have used the browser). The panel has an
-address bar, back, forward and reload, and the page itself, live: the user
+The globe in a task's pane bar shows its browser beside the terminals (a
+dot on it says the task's agents have used it). The panel has a tab strip,
+an address bar, back, forward and reload, and the active tab's page, live: the user
 clicks, scrolls, types and pastes in it as in any browser, to sign in or
 to help an agent that is stuck. Under it is what an agent last did, and a
 ring marks where it clicked.
@@ -1235,9 +1239,9 @@ ring marks where it clicked.
   The tool waits up to two minutes and says what the user chose, or that
   no answer came yet; the same request again waits on the one already
   asked. No `confirm` an agent passes can stand in for the user's answer.
-- **BRW-12** "Take over" (offered while an agent is using the tab,
-  BRW-15) MUST keep the task's agents out of its tab until "Hand back": every browser tool is refused while the user
-  holds it, reads included, so nothing an agent does or reads overlaps the
+- **BRW-12** "Take over" (offered while an agent is using the browser,
+  BRW-15) MUST keep the task's agents out of its tabs until "Hand back":
+  every browser tool is refused while the user holds it, reads included, so nothing an agent does or reads overlaps the
   user signing in. The tool says why, so the agent can tell the user what
   it was about to do. Holding outlives the tab: a browser started again is
   still held.
@@ -1247,23 +1251,37 @@ ring marks where it clicked.
   scripts wait on it: an agent's action that opened one comes back at once
   saying so, rather than waiting on a page that cannot answer, and nothing
   else is done until it is answered.
-- **BRW-14** A window a page opens (a sign-in popup, a link that opens a
-  new tab) MUST be shown in the task's tab, over the page that opened it,
-  for the user and the agents alike; agents are told it is one. Closing
-  it (the panel's "Close window", `browser_close_window`, or the page
-  closing itself, as sign-in windows do) shows the page under it again.
-  Only the task's own page is kept for next time (BRW-6).
-- **BRW-15** While an agent is using the tab, the panel MUST say so: an
-  overlay over the page names the agent and what it last did, takes the
-  user's clicks, keys and wheel so they do not land in the middle of the
-  agent's, and offers "Take over". An agent is using the tab while one of
+- **BRW-14** A window a page opens (a link with `target=_blank`,
+  `window.open`, a sign-in popup) MUST become a tab of the task, next to
+  the tab that opened it, and the active one. When it closes, by the
+  page closing itself as sign-in windows do or by the user or an agent
+  closing it, the tab that opened it is active again if it is still open.
+- **BRW-15** While an agent is using the browser, the panel MUST say so,
+  and the user MUST be kept out of the whole panel: an overlay over the
+  page names the agent and what it last did, tab changes included
+  ("Switched to “Admin”"), and takes the user's clicks, keys and wheel;
+  the tab strip (switch, new, close), the address bar and back, forward
+  and reload do nothing. Only "Take over" lets the user in, and "Hand
+  back" gives the browser back. An agent is using the tab while one of
   its browser calls runs, and between calls for as long as its pane is
   still working on its turn, up to a minute after its last call: an agent
   thinks between calls, and an overlay that came and went with each call
   said nothing. With no agent using it, the page is simply the user's.
-- **BRW-6** The tab MUST come back where it was: each task's last page is
-  kept in `config.json`, and opened when the task's tab is next needed.
-  Deleting or finishing a task closes its tab.
+- **BRW-16** A task MUST have one or more tabs, one of them active,
+  shared by the user and the task's agents: everything acts on the active
+  one (the panel, the agents' tools, input, dialogs). When an agent
+  switches tab, the panel follows. Agents list, open, switch and close
+  tabs with `browser_tabs`, `browser_new_tab`, `browser_switch_tab` and
+  `browser_close_tab`, and every outline lists the tabs. Closing the last
+  tab leaves an empty one: a task's browser never has none.
+- **BRW-17** A tab MUST be named by its page's title, and by its site
+  while it has none (loading, or a page without one); "New tab" when it
+  has neither. Nobody names a tab.
+- **BRW-6** The tabs MUST come back where they were: each task's tabs'
+  pages and which was active are kept in `config.json`, and opened when
+  the task's browser is next needed. A config from before tabs had one
+  page, which comes back as one tab. Deleting or finishing a task closes
+  its tabs.
 - **BRW-7** The browser MUST stop with the app: asked to close, then its
   process group killed after 3 seconds, alongside the agents' own grace
   period. A browser that dies is started again when next needed.
@@ -1276,8 +1294,8 @@ ring marks where it clicked.
 Code: `browser/` (`chrome.rs` finding and running it, `cdp.rs` the
 protocol, `page.rs` a tab's actions, `snapshot.rs` the outline, `sites.rs`
 BRW-3, `tools.rs` the tools, `panel.rs` and `input.rs` the panel's side,
-`requests.rs` BRW-11, `control.rs` BRW-12 and BRW-13, `events.rs` Chrome's
-events and BRW-14),
+`requests.rs` BRW-11, `control.rs` BRW-12, BRW-13 and BRW-15, `tabs.rs`
+BRW-16 and BRW-17, `events.rs` Chrome's events and BRW-14),
 `commands/browser.rs`, `mcp.rs` (`dispatch`), `BrowserPanel.tsx`,
 `BrowserSettings.tsx`, `lib/browserInput.ts`, `Terminals.tsx`.
 

@@ -1,4 +1,5 @@
-//! One browser for the app, one tab in it per task (§18 in features.md).
+//! One browser for the app, a set of tabs in it per task (§18 in
+//! features.md).
 //!
 //! Chrome runs headless with a profile of its own (BRW-1), started the first
 //! time anything needs a tab and stopped with the app (BRW-7). Agents drive
@@ -15,6 +16,7 @@ mod panel;
 mod requests;
 pub mod sites;
 mod snapshot;
+mod tabs;
 pub mod tools;
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -32,6 +34,8 @@ pub use control::{Dialog, Driver};
 pub use page::Page;
 pub use panel::AgentAction;
 pub use requests::SiteRequest;
+pub use tabs::TabInfo;
+use tabs::Tabs;
 use panel::Watch;
 use requests::Asked;
 
@@ -72,18 +76,17 @@ struct Tab {
     loading: bool,
     viewport: Viewport,
     console: VecDeque<String>,
-    last_action: Option<AgentAction>,
     dialog: Option<Dialog>,
-    /// The page this one covers: it is a window that page opened (BRW-14),
-    /// and closing it shows that page again.
-    opener: Option<Box<Tab>>,
+    /// The tab whose page opened this one (BRW-14), by its target id: it is
+    /// active again when this one closes.
+    opener: Option<String>,
 }
 
 #[derive(Default)]
 struct Inner {
     running: Option<Running>,
     /// By task id.
-    tabs: HashMap<String, Tab>,
+    tabs: HashMap<String, Tabs>,
     watch: Option<Watch>,
     requests: Vec<Asked>,
     next_request: u64,
@@ -92,6 +95,19 @@ struct Inner {
     held: HashSet<String>,
     /// The agent using each task's tab, or that last did (BRW-15).
     drivers: HashMap<String, control::Driver>,
+    /// Windows pages opened, being attached as tabs (BRW-14).
+    adopting: u32,
+}
+
+impl Inner {
+    /// The task's active tab, which everything acts on (BRW-16).
+    fn active(&self, task: &str) -> Option<&Tab> {
+        self.tabs.get(task)?.active()
+    }
+
+    fn active_mut(&mut self, task: &str) -> Option<&mut Tab> {
+        self.tabs.get_mut(task)?.active_mut()
+    }
 }
 
 /// Tell the panel a task's tab changed; an empty task is every tab.
@@ -110,7 +126,9 @@ pub struct Browser {
 }
 
 impl Browser {
-    /// The task's tab, made (and Chrome started) if there is none yet.
+    /// The task's active tab, its tabs made (and Chrome started) if it has
+    /// none yet: those it had when the app last closed (BRW-6), or one
+    /// empty one.
     pub async fn page<R: Runtime>(&self, app: &AppHandle<R>, task: &str) -> Result<Page> {
         if let Some(page) = self.existing(task) {
             return Ok(page);
@@ -120,23 +138,31 @@ impl Browser {
             return Ok(page);
         }
         let (cdp, user_agent) = self.running(app).await?;
-        let made = make_tab(&cdp, user_agent.as_deref(), Viewport::default()).await?;
-        let page = Page::new(cdp.clone(), made.session.clone(), task.to_string());
-        self.inner.lock().tabs.insert(task.to_string(), made);
-        changed(app, task);
-
-        // Where it was when the app last closed (BRW-6).
-        let saved = app.state::<AppState>().config.task(task).ok().and_then(|t| t.browser_url);
-        if let Some(url) = saved.filter(|u| sites::host_of(u).is_some()) {
-            page.send("Page.navigate", json!({ "url": url }));
+        let saved = app.state::<AppState>().config.task(task).map(|t| t.saved_tabs()).unwrap_or_default();
+        let urls = if saved.urls.is_empty() { vec![String::new()] } else { saved.urls };
+        let mut list = Vec::with_capacity(urls.len());
+        for url in &urls {
+            let mut tab = make_tab(&cdp, user_agent.as_deref(), Viewport::default()).await?;
+            if sites::host_of(url).is_some() {
+                cdp.send("Page.navigate", json!({ "url": url }), Some(&tab.session));
+                tab.url = url.clone();
+            }
+            list.push(tab);
         }
+        let tabs = Tabs::new(list, saved.active);
+        let page = tabs
+            .active()
+            .map(|t| Page::new(cdp.clone(), t.session.clone(), task.to_string()))
+            .ok_or_else(|| Error::Other("the browser made no tab".into()))?;
+        self.inner.lock().tabs.insert(task.to_string(), tabs);
+        changed(app, task);
         Ok(page)
     }
 
     fn existing(&self, task: &str) -> Option<Page> {
         let inner = self.inner.lock();
         let running = inner.running.as_ref().filter(|r| !r.cdp.is_closed())?;
-        let tab = inner.tabs.get(task)?;
+        let tab = inner.active(task)?;
         Some(Page::new(running.cdp.clone(), tab.session.clone(), task.to_string()))
     }
 
@@ -223,19 +249,16 @@ impl Browser {
         }
     }
 
-    /// Close a task's tab, when the task is deleted or finished (BRW-6).
+    /// Close a task's tabs, when the task is deleted or finished (BRW-6).
     pub fn close_task(&self, task: &str) {
         let mut inner = self.inner.lock();
         if inner.watch.as_ref().is_some_and(|w| w.task == task) {
             inner.watch = None;
         }
-        let Some(tab) = inner.tabs.remove(task) else { return };
+        let Some(tabs) = inner.tabs.remove(task) else { return };
         let Some(r) = inner.running.as_ref() else { return };
-        // The windows its pages opened too: each is a page of its own.
-        let mut page = Some(&tab);
-        while let Some(p) = page {
-            r.cdp.send("Target.closeTarget", json!({ "targetId": p.target }), None);
-            page = p.opener.as_deref();
+        for t in tabs.list {
+            r.cdp.send("Target.closeTarget", json!({ "targetId": t.target }), None);
         }
     }
 
@@ -251,17 +274,17 @@ impl Browser {
     /// The tab's address, title and whether it is loading, as last heard.
     pub fn state_of(&self, task: &str) -> Option<(String, String, bool)> {
         let inner = self.inner.lock();
-        inner.tabs.get(task).map(|t| (t.url.clone(), t.title.clone(), t.loading))
+        inner.active(task).map(|t| (t.url.clone(), t.title.clone(), t.loading))
     }
 
     pub fn viewport(&self, task: &str) -> Viewport {
-        self.inner.lock().tabs.get(task).map(|t| t.viewport).unwrap_or_default()
+        self.inner.lock().active(task).map(|t| t.viewport).unwrap_or_default()
     }
 
     /// The last lines the page logged, oldest first; emptied when `clear`.
     pub fn console(&self, task: &str, clear: bool) -> Vec<String> {
         let mut inner = self.inner.lock();
-        let Some(tab) = inner.tabs.get_mut(task) else { return Vec::new() };
+        let Some(tab) = inner.active_mut(task) else { return Vec::new() };
         let lines = tab.console.iter().cloned().collect();
         if clear {
             tab.console.clear();
@@ -312,7 +335,6 @@ async fn attach(cdp: &Arc<Cdp>, target: String, user_agent: Option<&str>, viewpo
         loading: false,
         viewport,
         console: VecDeque::new(),
-        last_action: None,
         dialog: None,
         opener: None,
     })
@@ -412,6 +434,7 @@ mod tests {
             chat: None,
             review: None,
             browser_url: None,
+            browser: None,
         };
         let cfg = AppConfig { tasks: vec![task], ..Default::default() };
         let app = tauri::test::mock_app();

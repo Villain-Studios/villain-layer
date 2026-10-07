@@ -332,7 +332,11 @@ export const api = {
   browserCopy: (taskId: string) => invoke<string>("browser_copy", { taskId }),
   browserAnswerSite: (id: number, allow: boolean) => invoke<void>("browser_answer_site", { id, allow }),
   browserHold: (taskId: string, held: boolean) => invoke<void>("browser_hold", { taskId, held }),
-  browserCloseWindow: (taskId: string) => invoke<void>("browser_close_window", { taskId }),
+  /** A new tab beside the active one, made active (BRW-16). */
+  browserNewTab: (taskId: string, url?: string) => invoke<void>("browser_new_tab", { taskId, url: url ?? null }),
+  browserSwitchTab: (taskId: string, tab: string) => invoke<void>("browser_switch_tab", { taskId, tab }),
+  /** The last tab is left open, empty. */
+  browserCloseTab: (taskId: string, tab: string) => invoke<void>("browser_close_tab", { taskId, tab }),
   browserDialog: (taskId: string, accept: boolean, text?: string) =>
     invoke<void>("browser_dialog", { taskId, accept, text: text ?? null }),
   /** Returns the list as kept: each site as its host, what is not one dropped. */

@@ -79,10 +79,34 @@ pub struct Task {
     /// a task is never pushed, opens no pull request and moves no ticket.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review: Option<ReviewOf>,
-    /// The page its browser tab was last on (BRW-6), opened again the next
-    /// time the tab is needed.
+    /// Its browser tabs' pages and which was active (BRW-6), opened again
+    /// the next time its browser is needed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser: Option<SavedTabs>,
+    /// The one page its browser had before tabs (BRW-6): read, as one tab,
+    /// and never written again.
+    #[serde(default, skip_serializing)]
     pub browser_url: Option<String>,
+}
+
+/// A task's browser tabs, as kept for next time (BRW-6).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SavedTabs {
+    /// Each tab's page, in order; one that had none is `about:blank`.
+    pub urls: Vec<String>,
+    pub active: usize,
+}
+
+impl Task {
+    /// Its tabs as kept, whether written before tabs or since.
+    pub fn saved_tabs(&self) -> SavedTabs {
+        match (&self.browser, &self.browser_url) {
+            (Some(tabs), _) => tabs.clone(),
+            (None, Some(url)) => SavedTabs { urls: vec![url.clone()], active: 0 },
+            (None, None) => SavedTabs::default(),
+        }
+    }
 }
 
 /// The pull request a review task is of.
@@ -337,6 +361,7 @@ impl AppConfig {
                 chat: None,
                 review: None,
                 browser_url: None,
+                browser: None,
             });
             self.checkouts.push(Checkout {
                 id: uuid::Uuid::new_v4().to_string(),

@@ -1,9 +1,16 @@
 //! Agents asking for sites, until the user answers (BRW-11).
 
-use serde::Serialize;
-use tauri::{AppHandle, Runtime};
+use std::time::Duration;
 
-use super::{changed, Browser};
+use serde::Serialize;
+use serde_json::Value;
+use tauri::{AppHandle, Manager, Runtime};
+
+use super::{changed, sites, Browser};
+use crate::commands::AppState;
+use crate::error::{Error, Result};
+use crate::mcp::required;
+use super::tools::text;
 
 /// An agent asking for a site, until the user answers (BRW-11).
 #[derive(Clone, Debug, Serialize)]
@@ -76,4 +83,53 @@ impl Browser {
         inner.requests.iter().filter(|a| a.request.task == task).map(|a| a.request.clone()).collect()
     }
 
+}
+
+/// How long `browser_request_site` waits on the user before saying there is
+/// no answer yet.
+const ANSWER_WAIT: Duration = Duration::from_secs(120);
+
+/// Ask the user for a site, and wait for the answer (BRW-11).
+pub(super) async fn request_site<R: Runtime>(app: &AppHandle<R>, state: &AppState, task: &str, args: &Value) -> Result<Vec<Value>> {
+    let asked = required(args, "site")?;
+    let site = sites::normalize(asked)
+        .ok_or_else(|| Error::Other(format!("{asked} is not a site: give one like github.com")))?;
+    let reason = required(args, "reason")?;
+    if sites::allowed(&format!("https://{site}/"), &state.config.read().browser.sites) {
+        return Ok(text(format!("Agents may already use {site}.")));
+    }
+    let (request, mut answer, new) = state.browser.ask(app, task, &site, reason);
+    if new {
+        tell_user(app, state, &request);
+    }
+    let said = tokio::time::timeout(ANSWER_WAIT, answer.wait_for(Option::is_some)).await;
+    Ok(text(match said.ok().and_then(|r| r.ok().and_then(|a| *a)) {
+        Some(true) => format!("The user allowed {site}. browser_navigate there now."),
+        Some(false) => format!(
+            "The user said no to {site}. Do not ask for it again in this task unless they say otherwise."
+        ),
+        None => format!(
+            "No answer yet: the request for {site} stays in the task's Browser panel. Tell the user \
+             what you need it for, and carry on with something else; browser_navigate there will \
+             work once they allow it."
+        ),
+    }))
+}
+
+/// A request goes to the message center, and to a banner while the window
+/// is away: the agent asking is waiting on the user, like one at a prompt.
+fn tell_user<R: Runtime>(app: &AppHandle<R>, state: &AppState, r: &SiteRequest) {
+    let target = crate::target::Target::Task(&r.task).to_string();
+    let title = format!("An agent asks to use {} in its browser", r.site);
+    crate::messages::record_all(app, vec![crate::messages::New {
+        kind: crate::messages::Kind::Agent,
+        level: crate::messages::Level::Info,
+        title: title.clone(),
+        body: r.reason.clone(),
+        target: Some(target.clone()),
+    }]);
+    let away = !app.get_webview_window("main").and_then(|w| w.is_focused().ok()).unwrap_or(false);
+    if away && state.config.read().ui.notify_waiting_agents {
+        let _ = crate::commands::banner(app, title, r.reason.clone(), target);
+    }
 }

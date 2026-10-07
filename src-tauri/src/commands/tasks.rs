@@ -514,6 +514,7 @@ pub(crate) fn new_task(state: &AppState, req: NewTask) -> Result<Task> {
         chat: None,
         review: None,
         browser_url: None,
+        browser: None,
     };
     state.config.update(|c| c.tasks.push(task.clone()))?;
 

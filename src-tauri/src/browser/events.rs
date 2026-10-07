@@ -1,67 +1,38 @@
-//! What Chrome says without being asked, routed to the page it is about.
-//!
-//! A task's tab is a stack: the page shown, and under it the page that
-//! opened it, if it is a window a page opened (BRW-14). An event finds its
-//! page anywhere in the stack, by the page's session or its target id.
+//! What Chrome says without being asked, routed to the tab it is about,
+//! wherever it is among its task's tabs: by the tab's session, or its
+//! target id.
 
 use std::sync::Arc;
 
-use serde_json::{json, Value};
+use serde_json::Value;
 use tauri::{AppHandle, Manager, Runtime};
 
 use super::cdp::{Cdp, Event};
-use super::{attach, changed, console_line, sites, Browser, Dialog, Inner, Tab, Viewport, CONSOLE_LINES};
+use super::{attach, changed, console_line, Browser, Dialog, Inner, Viewport, CONSOLE_LINES};
 use crate::commands::AppState;
 
-/// The page in `tab`'s stack, itself or one it covers, that `is` picks.
-fn find<'a>(tab: &'a mut Tab, is: &dyn Fn(&Tab) -> bool) -> Option<&'a mut Tab> {
-    if is(tab) {
-        return Some(tab);
-    }
-    tab.opener.as_deref_mut().and_then(|under| find(under, is))
+/// The task, and the target id, of the tab an event is about.
+fn tab_of(inner: &Inner, session: Option<&str>, target: Option<&str>) -> Option<(String, String)> {
+    inner.tabs.iter().find_map(|(task, tabs)| {
+        tabs.list
+            .iter()
+            .find(|t| match (session, target) {
+                (Some(s), _) => t.session == s,
+                (None, Some(id)) => t.target == id,
+                (None, None) => false,
+            })
+            .map(|t| (task.clone(), t.target.clone()))
+    })
 }
 
-fn holds(tab: &Tab, is: &dyn Fn(&Tab) -> bool) -> bool {
-    is(tab) || tab.opener.as_deref().is_some_and(|under| holds(under, is))
-}
-
-/// The task whose stack holds the page `is` picks.
-fn task_with(inner: &Inner, is: &dyn Fn(&Tab) -> bool) -> Option<String> {
-    inner.tabs.iter().find(|(_, t)| holds(t, is)).map(|(task, _)| task.clone())
-}
-
-/// Take the page `target` out of `tab`'s stack, below the top.
-fn remove_below(tab: &mut Tab, target: &str) {
-    let Some(under) = tab.opener.as_mut() else { return };
-    if under.target == target {
-        let next = under.opener.take();
-        tab.opener = next;
-    } else {
-        remove_below(under, target);
-    }
-}
-
-/// Take the page `target` out of the task's stack. The top one gone, the
-/// page it covered is shown again; the last one gone, the task has no tab.
-fn unstack(inner: &mut Inner, task: &str, target: &str) {
-    let Some(mut top) = inner.tabs.remove(task) else { return };
-    if top.target == target {
-        if let Some(under) = top.opener.take() {
-            inner.tabs.insert(task.to_string(), *under);
-        }
-        return;
-    }
-    remove_below(&mut top, target);
-    inner.tabs.insert(task.to_string(), top);
-}
-
-/// A window a page opened, to be attached.
+/// A window a page opened, to be attached as a tab.
 struct Opened {
     cdp: Arc<Cdp>,
     user_agent: Option<String>,
-    /// The opener's: the window is shown where it was.
+    /// The opener's: the tab is laid out at the panel's size, as it was.
     viewport: Viewport,
     target: String,
+    opener: String,
     url: String,
 }
 
@@ -74,35 +45,39 @@ impl Browser {
         if e.method == "Target.targetCreated" {
             return self.on_window(app, &e.params);
         }
-        let mut save: Option<(String, String)> = None;
-        let mut tell: Option<String> = None;
-        {
+        let mut save = false;
+        let mut tell = false;
+        let mut ask = None;
+        let task = {
             let mut inner = self.inner.lock();
-            let session = e.session.clone();
+            // Shutting down: Chrome says each tab is destroyed as it closes,
+            // and taken at its word, quitting the app forgot every tab it
+            // was to bring back (BRW-6).
+            if inner.running.is_none() {
+                return;
+            }
             let target = e
                 .params
                 .pointer("/targetInfo/targetId")
                 .or_else(|| e.params.get("targetId"))
-                .and_then(Value::as_str)
-                .map(str::to_string);
-            let is = move |t: &Tab| match (&session, &target) {
-                (Some(s), _) => &t.session == s,
-                (None, Some(id)) => &t.target == id,
-                (None, None) => false,
-            };
-            let Some(task) = task_with(&inner, &is) else { return };
-            let shown = |inner: &Inner| inner.tabs.get(&task).map(|t| (t.session.clone(), t.url.clone(), t.title.clone(), t.loading));
-            let before = shown(&inner);
+                .and_then(Value::as_str);
+            let Some((task, id)) = tab_of(&inner, e.session.as_deref(), target) else { return };
+            let Some(tabs) = inner.tabs.get_mut(&task) else { return };
 
-            if matches!(e.method.as_str(), "Target.targetDestroyed" | "Target.targetCrashed" | "Target.detachedFromTarget") {
-                let gone = inner.tabs.get_mut(&task).and_then(|t| find(t, &is)).map(|t| t.target.clone());
-                if let Some(gone) = gone {
-                    unstack(&mut inner, &task, &gone);
+            // Not a crash: a tab whose page crashed is still a tab, and a
+            // reload brings it back.
+            if matches!(e.method.as_str(), "Target.targetDestroyed" | "Target.detachedFromTarget") {
+                tabs.remove(&id);
+                // The last tab gone (a page closing itself): the task has
+                // none until its browser is next needed, which makes one.
+                if tabs.list.is_empty() {
+                    inner.tabs.remove(&task);
                 }
-            } else if let Some(page) = inner.tabs.get_mut(&task).and_then(|t| find(t, &is)) {
-                // Only the task's own tab is kept for next time, not a
-                // window a page opened over it.
-                let own = page.opener.is_none();
+                save = true;
+                tell = true;
+            } else if let Some(at) = tabs.position(&id) {
+                let active = at == tabs.active;
+                let tab = &mut tabs.list[at];
                 match e.method.as_str() {
                     "Page.frameNavigated" if e.params.pointer("/frame/parentId").is_none() => {
                         // A page that could not load is shown as Chrome's own
@@ -115,125 +90,174 @@ impl Browser {
                             .or_else(|| e.params.pointer("/frame/url"))
                             .and_then(Value::as_str)
                             .unwrap_or_default();
-                        if page.url != url {
-                            page.url = url.to_string();
-                            if own && sites::host_of(url).is_some() {
-                                save = Some((task.clone(), url.to_string()));
-                            }
+                        if tab.url != url {
+                            tab.url = url.to_string();
+                            save = true;
+                            tell = true;
                         }
                     }
                     "Page.frameStartedLoading" | "Page.frameStoppedLoading" => {
-                        if e.params.get("frameId").and_then(Value::as_str) == Some(page.target.as_str()) {
-                            page.loading = e.method == "Page.frameStartedLoading";
+                        if e.params.get("frameId").and_then(Value::as_str) == Some(tab.target.as_str()) {
+                            tab.loading = e.method == "Page.frameStartedLoading";
+                            tell = true;
+                            if !tab.loading {
+                                ask = Some(tab.target.clone());
+                            }
+                        }
+                    }
+                    // A route change in a page that changes its own address.
+                    "Page.navigatedWithinDocument" => {
+                        if e.params.get("frameId").and_then(Value::as_str) == Some(tab.target.as_str()) {
+                            ask = Some(tab.target.clone());
                         }
                     }
                     "Target.targetInfoChanged" => {
-                        if let Some(title) = e.params.pointer("/targetInfo/title").and_then(Value::as_str) {
-                            page.title = title.to_string();
+                        let title = e.params.pointer("/targetInfo/title").and_then(Value::as_str).unwrap_or_default();
+                        if tab.title != title {
+                            tab.title = title.to_string();
+                            tell = true;
                         }
                     }
                     "Runtime.consoleAPICalled" | "Runtime.exceptionThrown" => {
-                        page.console.push_back(console_line(&e.method, &e.params));
-                        while page.console.len() > CONSOLE_LINES {
-                            page.console.pop_front();
+                        tab.console.push_back(console_line(&e.method, &e.params));
+                        while tab.console.len() > CONSOLE_LINES {
+                            tab.console.pop_front();
                         }
                     }
                     "Page.javascriptDialogOpening" => {
-                        page.dialog = Some(Dialog::from_event(&e.params));
-                        self.dialog_opened.notify_waiters();
-                        tell = Some(task.clone());
+                        tab.dialog = Some(Dialog::from_event(&e.params));
+                        // Only the active tab's dialog is anyone's to answer
+                        // now; an action waits on no other.
+                        if active {
+                            self.dialog_opened.notify_waiters();
+                        }
+                        tell = true;
                     }
                     "Page.javascriptDialogClosed" => {
-                        page.dialog = None;
-                        tell = Some(task.clone());
+                        tab.dialog = None;
+                        tell = true;
                     }
                     _ => {}
                 }
             }
-            if before != shown(&inner) {
-                tell = Some(task);
-            }
-        }
-        if let Some(task) = tell {
+            task
+        };
+        if tell {
             changed(app, &task);
         }
         // Outside the lock: a config write waits on the disk.
-        if let Some((task, url)) = save {
-            let _ = app.state::<AppState>().config.update(|c| {
-                if let Some(t) = c.tasks.iter_mut().find(|t| t.id == task) {
-                    t.browser_url = Some(url);
-                }
-            });
+        if save {
+            self.save(app, &task);
+        }
+        if let Some(target) = ask {
+            self.ask_about(app, task, target);
         }
     }
 
-    /// A page opened a window: a sign-in popup, or a link to a new tab. It
-    /// is shown in the opener's place, over it (BRW-14). Attached off this
-    /// thread, which must not wait on Chrome's answers: it is the one that
-    /// reads them.
+    /// Ask Chrome what a tab is called and where it is, off this thread.
+    /// Chrome says when a tab's address changes, but its title as it does is
+    /// only the address again: the page's own title, read from the page as
+    /// it loads, is never announced.
+    fn ask_about<R: Runtime>(&self, app: &AppHandle<R>, task: String, target: String) {
+        let Some(cdp) = self.inner.lock().running.as_ref().map(|r| r.cdp.clone()) else { return };
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            let Ok(info) = cdp.call("Target.getTargetInfo", serde_json::json!({ "targetId": target }), None).await else { return };
+            let get = |k: &str| info.pointer(&format!("/targetInfo/{k}")).and_then(Value::as_str).unwrap_or_default().to_string();
+            let (title, url) = (get("title"), get("url"));
+            let browser = &app.state::<AppState>().browser;
+            let moved = {
+                let mut inner = browser.inner.lock();
+                let Some(tab) = inner.tabs.get_mut(&task).and_then(|t| t.list.iter_mut().find(|t| t.target == target)) else { return };
+                let moved = !url.is_empty() && !url.starts_with("chrome-error:") && tab.url != url;
+                if tab.title == title && !moved {
+                    return;
+                }
+                tab.title = title;
+                if moved {
+                    tab.url = url;
+                }
+                moved
+            };
+            changed(&app, &task);
+            if moved {
+                browser.save(&app, &task);
+            }
+        });
+    }
+
+    /// A page opened a window: a link to a new tab, `window.open`, a sign-in
+    /// popup. It becomes a tab, next to its opener and active (BRW-14).
+    /// Attached off this thread, which must not wait on Chrome's answers:
+    /// it is the one that reads them.
     fn on_window<R: Runtime>(&self, app: &AppHandle<R>, p: &Value) {
         let info = |k: &str| p.pointer(&format!("/targetInfo/{k}")).and_then(Value::as_str).map(str::to_string);
         let (Some("page"), Some(opener), Some(target)) = (info("type").as_deref(), info("openerId"), info("targetId")) else {
             return;
         };
-        let (task, cdp, user_agent, viewport) = {
+        let (task, opened) = {
             let inner = self.inner.lock();
-            let Some(task) = task_with(&inner, &|t: &Tab| t.target == opener) else { return };
+            let Some((task, _)) = tab_of(&inner, None, Some(&opener)) else { return };
+            // Already one of the app's: a tab it made itself.
+            if tab_of(&inner, None, Some(&target)).is_some() {
+                return;
+            }
             let Some(r) = inner.running.as_ref() else { return };
-            let viewport = inner.tabs.get(&task).map(|t| t.viewport).unwrap_or_default();
-            (task, r.cdp.clone(), r.user_agent.clone(), viewport)
+            let viewport = inner.active(&task).map(|t| t.viewport).unwrap_or_default();
+            let opened = Opened {
+                cdp: r.cdp.clone(),
+                user_agent: r.user_agent.clone(),
+                viewport,
+                target,
+                opener,
+                url: info("url").unwrap_or_default(),
+            };
+            (task, opened)
         };
-        let opened = Opened { cdp, user_agent, viewport, target, url: info("url").unwrap_or_default() };
+        self.inner.lock().adopting += 1;
         let app = app.clone();
         tauri::async_runtime::spawn(async move {
-            app.state::<AppState>().browser.adopt(&app, &task, opened).await;
+            let browser = &app.state::<AppState>().browser;
+            let target = opened.target.clone();
+            let adopted = browser.adopt(&task, opened).await;
+            browser.inner.lock().adopting -= 1;
+            if adopted {
+                browser.save(&app, &task);
+                changed(&app, &task);
+                // It may have loaded while it was being attached, unheard.
+                browser.ask_about(&app, task, target);
+            }
         });
     }
 
-    async fn adopt<R: Runtime>(&self, app: &AppHandle<R>, task: &str, o: Opened) {
-        // Closed already, as some sign-in windows are once they are done.
-        let Ok(mut window) = attach(&o.cdp, o.target, o.user_agent.as_deref(), o.viewport).await else { return };
+    /// Attach a window a page opened as a tab, beside its opener. False when
+    /// it was closed first, as some sign-in windows are once they are done.
+    async fn adopt(&self, task: &str, o: Opened) -> bool {
+        let Ok(mut tab) = attach(&o.cdp, o.target, o.user_agent.as_deref(), o.viewport).await else { return false };
         if !o.url.is_empty() {
-            window.url = o.url;
+            tab.url = o.url;
         }
-        {
-            let mut inner = self.inner.lock();
-            if let Some(under) = inner.tabs.remove(task) {
-                window.opener = Some(Box::new(under));
-            }
-            inner.tabs.insert(task.to_string(), window);
-        }
-        changed(app, task);
-    }
-
-    /// Close the window a page opened, showing the page under it again.
-    /// False when the task's tab is its own, not such a window.
-    pub fn close_window(&self, task: &str) -> bool {
-        let inner = self.inner.lock();
-        let (Some(r), Some(top)) = (inner.running.as_ref(), inner.tabs.get(task)) else { return false };
-        if top.opener.is_none() {
-            return false;
-        }
-        r.cdp.send("Target.closeTarget", json!({ "targetId": top.target }), None);
+        tab.opener = Some(o.opener.clone());
+        let mut inner = self.inner.lock();
+        let Some(tabs) = inner.tabs.get_mut(task) else { return false };
+        tabs.open_next_to(tab, Some(&o.opener));
         true
     }
 
-    /// Whether the task's tab shows a window a page opened.
-    pub fn in_window(&self, task: &str) -> bool {
-        self.inner.lock().tabs.get(task).is_some_and(|t| t.opener.is_some())
+    /// Whether a window a page opened is still being made a tab: an action
+    /// that opened one has not finished until it is (`Page::settle`).
+    pub fn adopting(&self) -> bool {
+        self.inner.lock().adopting > 0
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::browser::tests::{app_with_task, serve};
+    use crate::browser::tests::app_with_task;
+    use serde_json::json;
     use crate::browser::tools::call;
     use std::time::Duration;
-
-    const OPENS: &str = r#"<html><head><title>Opener</title></head><body>
-        <button onclick="window.open('/two', 'signin', 'width=400,height=500')">Sign in</button>
-    </body></html>"#;
 
     fn text(content: &[Value]) -> String {
         content.iter().filter_map(|c| c.get("text").and_then(Value::as_str)).collect()
@@ -264,34 +288,80 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// Against a real Chrome: a window the page opens is shown in the task's
-    /// tab, over the page that opened it; the agent reads it and is told
-    /// what it is; closing it shows the opener again, and the opener is
-    /// what is kept for next time.
+    const TABS: &str = r#"<html><head><title>Home</title></head><body>
+        <a href="/two" target="_blank">Next page</a>
+        <button onclick="window.open('/bye', 'signin', 'width=400,height=500')">Sign in</button>
+    </body></html>"#;
+
+    /// Against a real Chrome, the whole of BRW-14 and BRW-16: a link that
+    /// opens a new tab opens it beside its own and active; switching, a new
+    /// tab, closing one; a sign-in window that closes itself returns to its
+    /// opener; the tabs come back after the browser does; and the last tab
+    /// closed is left open, empty.
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_window_the_page_opens_is_shown_over_it_until_it_closes() {
+    async fn tabs_open_beside_their_opener_switch_close_and_come_back() {
+        use axum::{response::Html, routing::get, Router};
         let Some((app, root, pane)) = app_with_task() else { return };
         let state = app.state::<AppState>();
-        let base = serve(OPENS).await;
+        let router = Router::new()
+            .route("/", get(|| async { Html(TABS) }))
+            .route("/two", get(|| async { Html("<html><head><title>Two</title></head><body><p>The second page</p></body></html>") }))
+            .route("/bye", get(|| async { Html("<html><head><title>Signing in</title></head><body><script>setTimeout(() => window.close(), 300)</script></body></html>") }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://localhost:{}", listener.local_addr().unwrap().port());
+        tokio::spawn(async move { axum::serve(listener, router).await });
         let handle = app.handle();
         let tool = |name: &'static str, args: Value| call(handle, name, args, Some(&pane));
+        let names = || state.browser.tabs("t1").iter().map(|t| format!("{}{}", t.name, if t.active { "*" } else { "" })).collect::<Vec<_>>();
+        let ref_of = |outline: &str, what: &str| {
+            let at = outline.find(what).unwrap() + what.len();
+            outline[at..].split("[ref=").nth(1).unwrap().split(']').next().unwrap().to_string()
+        };
 
-        let opened = text(&tool("browser_navigate", json!({ "url": format!("{base}/") })).await.unwrap());
-        let at = opened.find("button \"Sign in\" [ref=").unwrap() + "button \"Sign in\" [ref=".len();
-        let button = opened[at..].split(']').next().unwrap().to_string();
+        let home = text(&tool("browser_navigate", json!({ "url": format!("{base}/") })).await.unwrap());
+        let clicked = text(&tool("browser_click", json!({ "ref": ref_of(&home, "link \"Next page\"") })).await.unwrap());
+        assert!(clicked.contains("Page: Two"), "the new tab is the active one: {clicked}");
+        assert!(clicked.contains("Tabs:\n  1. Home"), "the outline lists the tabs: {clicked}");
+        assert_eq!(names(), ["Home", "Two*"]);
 
-        let clicked = text(&tool("browser_click", json!({ "ref": button })).await.unwrap());
-        assert!(clicked.contains("The second page"), "the window is what is shown: {clicked}");
-        assert!(clicked.contains("This is a window the page opened"), "{clicked}");
-        assert!(state.browser.view("t1").window);
+        let back = text(&tool("browser_switch_tab", json!({ "tab": 1 })).await.unwrap());
+        assert!(back.contains("Page: Home"), "{back}");
+        assert_eq!(state.browser.view("t1").last_action.unwrap().text, "Switched to “Home”");
 
-        let closed = text(&tool("browser_close_window", json!({})).await.unwrap());
-        assert!(closed.contains("Page: Opener"), "{closed}");
-        assert!(!state.browser.view("t1").window);
-        assert_eq!(state.config.read().tasks[0].browser_url.as_deref(), Some(format!("{base}/").as_str()));
+        tool("browser_new_tab", json!({ "url": format!("{base}/two") })).await.unwrap();
+        assert_eq!(names(), ["Home", "Two*", "Two"], "beside the active tab");
+        tool("browser_close_tab", json!({})).await.unwrap();
+        assert_eq!(names(), ["Home*", "Two"]);
 
-        let none = tool("browser_close_window", json!({})).await.unwrap_err();
-        assert!(none.to_string().contains("nothing to close"), "{none}");
+        let home = text(&tool("browser_snapshot", json!({})).await.unwrap());
+        tool("browser_click", json!({ "ref": ref_of(&home, "button \"Sign in\"") })).await.unwrap();
+        let mut seen = Vec::new();
+        for _ in 0..60 {
+            let now = names();
+            if seen.last() != Some(&now) {
+                seen.push(now.clone());
+            }
+            if seen.len() > 1 && now == ["Home*", "Two"] {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(seen.iter().any(|n| n.len() == 3), "the sign-in window was a tab: {seen:?}");
+        assert_eq!(names(), ["Home*", "Two"], "and closing itself, returned to its opener: {seen:?}");
+
+        let kept = state.config.read().tasks[0].browser.clone().unwrap();
+        assert_eq!(kept.urls, [format!("{base}/"), format!("{base}/two")]);
+        assert_eq!(kept.active, 0);
+
+        state.browser.shutdown(Duration::from_secs(3));
+        let listed = text(&tool("browser_tabs", json!({})).await.unwrap());
+        assert!(listed.contains(&format!("1. Home — {base}/ (active)")) || listed.contains(&format!("1. localhost — {base}/ (active)")), "{listed}");
+        assert_eq!(state.browser.tabs("t1").len(), 2, "both came back");
+
+        tool("browser_close_tab", json!({ "tab": 2 })).await.unwrap();
+        tool("browser_close_tab", json!({})).await.unwrap();
+        let left = state.browser.tabs("t1");
+        assert_eq!((left.len(), left[0].url.as_str()), (1, "about:blank"), "the last is left, empty");
 
         state.browser.shutdown(Duration::from_secs(3));
         state.ptys.shutdown(Duration::from_secs(1));

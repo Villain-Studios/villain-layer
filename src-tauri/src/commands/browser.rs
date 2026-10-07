@@ -7,7 +7,7 @@ use tauri::{AppHandle, Manager};
 
 use super::AppState;
 use crate::browser::input::BrowserInput;
-use crate::browser::{sites, AgentAction, Dialog, Driver, SiteRequest, Viewport};
+use crate::browser::{sites, AgentAction, Dialog, Driver, SiteRequest, TabInfo, Viewport};
 use crate::error::{Error, Result};
 
 /// A task's tab, as the panel shows it.
@@ -29,8 +29,8 @@ pub struct BrowserView {
     pub dialog: Option<Dialog>,
     /// The user has taken the tab over, and agents wait (BRW-12).
     pub held: bool,
-    /// What is shown is a window the page opened (BRW-14).
-    pub window: bool,
+    /// Every tab, in order; the active one is what is shown (BRW-16).
+    pub tabs: Vec<TabInfo>,
     /// The agent using the tab, or that last did (BRW-15).
     pub driver: Option<Driver>,
 }
@@ -55,7 +55,7 @@ pub async fn browser_view(app: AppHandle, task_id: String) -> Result<BrowserView
         requests: state.browser.requests(&task_id),
         dialog: view.dialog,
         held: view.held,
-        window: view.window,
+        tabs: view.tabs,
         driver: view.driver,
     })
 }
@@ -168,10 +168,27 @@ pub fn browser_hold(app: AppHandle, task_id: String, held: bool) {
     app.state::<AppState>().browser.hold(&app, &task_id, held);
 }
 
-/// Close the window a page opened, showing the page under it (BRW-14).
+/// A new tab from the panel's +, next to the active one and made active
+/// (BRW-16), at `url` if one is given.
 #[tauri::command]
-pub fn browser_close_window(app: AppHandle, task_id: String) {
-    app.state::<AppState>().browser.close_window(&task_id);
+pub async fn browser_new_tab(app: AppHandle, task_id: String, url: Option<String>) -> Result<()> {
+    let state = app.state::<AppState>();
+    let url = url.as_deref().map(str::trim).filter(|u| !u.is_empty()).map(address).transpose()?;
+    state.browser.new_tab(&app, &task_id, url.as_deref()).await.map(|_| ())
+}
+
+/// Make a tab the active one, from the panel's tab strip.
+#[tauri::command]
+pub fn browser_switch_tab(app: AppHandle, task_id: String, tab: String) -> Result<()> {
+    app.state::<AppState>().browser.switch_tab(&app, &task_id, &tab).map(|_| ())
+}
+
+/// Close a tab, from its ✕ in the panel's tab strip. The last one is left
+/// open and empty (BRW-16).
+#[tauri::command]
+pub async fn browser_close_tab(app: AppHandle, task_id: String, tab: String) -> Result<()> {
+    let state = app.state::<AppState>();
+    state.browser.close_tab(&app, &task_id, &tab).await
 }
 
 /// Answer the dialog the page opened, from the panel (BRW-13).

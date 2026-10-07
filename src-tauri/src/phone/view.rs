@@ -126,6 +126,7 @@ mod tests {
             chat: None,
             review: None,
             browser_url: None,
+            browser: None,
         }
     }
 

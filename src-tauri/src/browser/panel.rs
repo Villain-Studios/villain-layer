@@ -30,11 +30,11 @@ pub struct AgentAction {
     pub at: i64,
 }
 
-/// A task's tab as the panel shows it.
+/// A task's browser as the panel shows it: its active tab, and the rest.
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct TabView {
-    /// The tab's session: a new one means the tab was made again, and the
-    /// panel watches it afresh.
+    /// The active tab's session: a new one means another tab, or the tab
+    /// made again, and the panel watches it afresh.
     pub tab: Option<String>,
     pub url: String,
     pub title: String,
@@ -44,8 +44,8 @@ pub struct TabView {
     pub dialog: Option<super::Dialog>,
     /// The user has taken the tab over (BRW-12).
     pub held: bool,
-    /// What is shown is a window the page opened, over it (BRW-14).
-    pub window: bool,
+    /// Every tab, in order (BRW-16).
+    pub tabs: Vec<super::TabInfo>,
     /// The agent using the tab, or that last did (BRW-15).
     pub driver: Option<super::Driver>,
 }
@@ -62,24 +62,25 @@ pub(super) struct Watch {
 impl Browser {
     /// The task's tab for the panel; a default one when there is no tab.
     pub fn view(&self, task: &str) -> TabView {
+        let tabs = self.tabs(task);
         let inner = self.inner.lock();
         let held = inner.held.contains(task);
         let driver = inner.drivers.get(task).cloned();
+        let last_action = inner.tabs.get(task).and_then(|t| t.last_action.clone());
         inner
-            .tabs
-            .get(task)
+            .active(task)
             .map(|t| TabView {
                 tab: Some(t.session.clone()),
                 url: t.url.clone(),
                 title: t.title.clone(),
                 loading: t.loading,
-                last_action: t.last_action.clone(),
+                last_action: last_action.clone(),
                 dialog: t.dialog.clone(),
                 held,
-                window: t.opener.is_some(),
+                tabs: tabs.clone(),
                 driver: driver.clone(),
             })
-            .unwrap_or(TabView { held, driver, ..TabView::default() })
+            .unwrap_or(TabView { held, driver, last_action, ..TabView::default() })
     }
 
     /// Send the task's tab to the panel: sized to it, and its frames as they
@@ -94,7 +95,7 @@ impl Browser {
         let page = self.page(app, task).await?;
         let resize = {
             let mut inner = self.inner.lock();
-            let tab = inner.tabs.get_mut(task).ok_or_else(|| Error::Other("the tab closed".into()))?;
+            let tab = inner.active_mut(task).ok_or_else(|| Error::Other("the tab closed".into()))?;
             let resize = tab.viewport != viewport;
             tab.viewport = viewport;
             let session = tab.session.clone();
@@ -135,7 +136,7 @@ impl Browser {
     /// one of many, and the next must not wait on this one's answer.
     pub fn input(&self, task: &str, event: &input::BrowserInput) -> Result<()> {
         let inner = self.inner.lock();
-        let (Some(r), Some(tab)) = (inner.running.as_ref(), inner.tabs.get(task)) else {
+        let (Some(r), Some(tab)) = (inner.running.as_ref(), inner.active(task)) else {
             return Err(Error::Other("this task's tab is not open".into()));
         };
         if let Some((method, params)) = input::to_cdp(event) {
@@ -146,8 +147,8 @@ impl Browser {
 
     /// Say what an agent did, for the panel (BRW-10).
     pub fn record<R: Runtime>(&self, app: &AppHandle<R>, task: &str, text: &str, at: Option<(f64, f64)>) {
-        if let Some(tab) = self.inner.lock().tabs.get_mut(task) {
-            tab.last_action = Some(AgentAction {
+        if let Some(tabs) = self.inner.lock().tabs.get_mut(task) {
+            tabs.last_action = Some(AgentAction {
                 text: text.to_string(),
                 x: at.map(|a| a.0),
                 y: at.map(|a| a.1),
@@ -230,7 +231,12 @@ mod tests {
         page.navigate(&format!("{base}/")).await.unwrap();
         page.settle(&state.browser).await;
 
-        let jpeg = frames.recv_timeout(Duration::from_secs(10)).expect("a frame");
+        // The newest frame: one drawn before the tab took the panel's size
+        // can still arrive first.
+        let mut jpeg = frames.recv_timeout(Duration::from_secs(10)).expect("a frame");
+        while let Ok(newer) = frames.recv_timeout(Duration::from_millis(500)) {
+            jpeg = newer;
+        }
         assert_eq!(&jpeg[..2], &[0xFF, 0xD8], "a JPEG");
         assert_eq!(jpeg_size(&jpeg), Some((1280, 960)), "as sharp as the panel: a device pixel each");
         let size = page.eval("[innerWidth, innerHeight, devicePixelRatio]").await.unwrap();

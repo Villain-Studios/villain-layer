@@ -492,6 +492,7 @@ mod tests {
             chat: None,
             review: None,
             browser_url: None,
+            browser: None,
         });
         cfg.checkouts.push(Checkout {
             id: "c1".into(),

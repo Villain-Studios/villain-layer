@@ -179,13 +179,20 @@ the config folder, started by the first call that needs a tab.
   oneshot, so the async side awaits without blocking; `send` does not wait
   at all, for input and for anything sent from the reader itself.
 - **Tabs.** `Target.attachToTarget` with `flatten` gives each tab a session
-  id that every message about it carries. `Browser` keeps a task's tab by
-  that id, and the reader routes events by it (`events.rs`): navigations
-  (saved to the task, BRW-6), loading, titles, the console, dialogs. A
-  task's tab is a stack: a window a page opens (`Target.targetCreated`
-  with an `openerId`, reported even for a `noopener` link) is attached and
-  shown over its opener, and its closing shows the opener again (BRW-14).
-  Everything that acts on "the task's tab" acts on the top of the stack.
+  id that every message about it carries. A task has a list of tabs and an
+  active one (`tabs.rs`); everything that acts on "the task's tab" (the
+  tools, the panel's view, frames and input, dialogs) acts on the active
+  one. The reader routes each event to its tab wherever it is among a
+  task's tabs (`events.rs`): navigations, loading, the console, dialogs. A
+  window a page opens (`Target.targetCreated` with an `openerId`, reported
+  even for a `noopener` link) is attached off the reader and becomes a tab
+  beside its opener (BRW-14); an action that opened one waits for it
+  (`adopting`), so its answer is the new tab. Chrome never announces a
+  page's own title, only its address as one, so a tab is asked for both
+  when it stops loading, when it changes route, and once adopted. Each
+  change of a task's tabs is saved to it (BRW-6), except while the browser
+  shuts down: Chrome reports every tab destroyed as it closes, and taken at
+  its word, quitting forgot them all.
 - **Tools** (`tools.rs`) find the task from the calling pane, check the
   page's site against `sites.rs` before reading or acting, and answer with
   the page's outline (`snapshot.rs`), built from the accessibility tree:

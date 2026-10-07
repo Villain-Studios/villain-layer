@@ -435,6 +435,7 @@ mod tests {
             chat: None,
             review: None,
             browser_url: None,
+            browser: None,
         };
         let app = tauri::test::mock_app();
         app.manage(state(&root, vec![task]));

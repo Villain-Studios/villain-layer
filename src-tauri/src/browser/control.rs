@@ -122,7 +122,7 @@ impl Browser {
 
     /// The dialog open in the task's tab, if one is.
     pub fn dialog(&self, task: &str) -> Option<Dialog> {
-        self.inner.lock().tabs.get(task).and_then(|t| t.dialog.clone())
+        self.inner.lock().active(task).and_then(|t| t.dialog.clone())
     }
 
     /// Answer the task's open dialog: accept it (OK), or dismiss it
@@ -130,7 +130,7 @@ impl Browser {
     pub async fn answer_dialog(&self, task: &str, accept: bool, text: Option<&str>) -> Result<Dialog> {
         let (cdp, session, dialog) = {
             let inner = self.inner.lock();
-            let tab = inner.tabs.get(task);
+            let tab = inner.active(task);
             let dialog = tab.and_then(|t| t.dialog.clone()).ok_or_else(|| Error::Other("no dialog is open".into()))?;
             let cdp = inner.running.as_ref().map(|r| r.cdp.clone()).ok_or_else(|| Error::Other("the browser closed".into()))?;
             (cdp, tab.map(|t| t.session.clone()).unwrap_or_default(), dialog)
@@ -141,7 +141,7 @@ impl Browser {
         }
         cdp.call("Page.handleJavaScriptDialog", params, Some(&session)).await?;
         // Closed now, whether or not Chrome's word of it has been read yet.
-        if let Some(tab) = self.inner.lock().tabs.get_mut(task) {
+        if let Some(tab) = self.inner.lock().active_mut(task) {
             tab.dialog = None;
         }
         Ok(dialog)

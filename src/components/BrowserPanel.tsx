@@ -8,6 +8,7 @@ import { copyText } from "../lib/clipboard";
 import { ago } from "../lib/time";
 import type { BrowserInput, BrowserView } from "../lib/types";
 import { useStore } from "../store";
+import { BrowserTabs } from "./BrowserTabs";
 import { BackIcon, CloseIcon, ExternalIcon, ForwardIcon, ReloadIcon } from "./icons";
 import { Spinner } from "./ui";
 
@@ -303,6 +304,7 @@ export function BrowserPanel({ taskId, visible, onClose }: { taskId: string; vis
   }
 
   async function go(to: "back" | "forward" | "reload") {
+    if (drivingRef.current) return;
     try {
       await api.browserGo(taskId, to);
     } catch (e) {
@@ -312,6 +314,7 @@ export function BrowserPanel({ taskId, visible, onClose }: { taskId: string; vis
 
   async function open(e: React.FormEvent) {
     e.preventDefault();
+    if (drivingRef.current) return;
     const url = address.trim();
     if (!url) return;
     addressRef.current?.blur();
@@ -335,18 +338,30 @@ export function BrowserPanel({ taskId, visible, onClose }: { taskId: string; vis
 
   return (
     <div className="browser">
+      {/* The whole panel is the agent's while it uses the browser (BRW-15):
+          tabs, address and navigation too, not only the page. */}
+      <BrowserTabs
+        tabs={view?.tabs ?? []}
+        locked={driving}
+        onSwitch={(id) => void api.browserSwitchTab(taskId, id).catch(fail)}
+        onClose={(id) => void api.browserCloseTab(taskId, id).catch(fail)}
+        onNew={() => {
+          void api.browserNewTab(taskId).then(() => addressRef.current?.focus()).catch(fail);
+        }}
+      />
       <div className="browser-bar">
-        <button className="btn btn-sm btn-icon" title="Back (⌘[)" onClick={() => void go("back")} disabled={!tab}>
+        <button className="btn btn-sm btn-icon" title="Back (⌘[)" onClick={() => void go("back")} disabled={!tab || driving}>
           <BackIcon />
         </button>
-        <button className="btn btn-sm btn-icon" title="Forward (⌘])" onClick={() => void go("forward")} disabled={!tab}>
+        <button className="btn btn-sm btn-icon" title="Forward (⌘])" onClick={() => void go("forward")} disabled={!tab || driving}>
           <ForwardIcon />
         </button>
-        <button className="btn btn-sm btn-icon" title="Reload (⌘R)" onClick={() => void go("reload")} disabled={!tab}>
+        <button className="btn btn-sm btn-icon" title="Reload (⌘R)" onClick={() => void go("reload")} disabled={!tab || driving}>
           {view?.loading ? <Spinner /> : <ReloadIcon />}
         </button>
         <form className="browser-address" onSubmit={(e) => void open(e)}>
           <input
+            disabled={driving}
             ref={addressRef}
             value={address}
             placeholder="localhost:3000, an address, or words to search for"
@@ -357,15 +372,6 @@ export function BrowserPanel({ taskId, visible, onClose }: { taskId: string; vis
             onKeyDown={(e) => { if (e.key === "Escape") { setEditing(false); keysRef.current?.focus(); } }}
           />
         </form>
-        {view?.window && (
-          <button
-            className="btn btn-sm"
-            title="Close this window, which the page opened, and go back to the page under it"
-            onClick={() => void api.browserCloseWindow(taskId).catch(fail)}
-          >
-            Close window
-          </button>
-        )}
         {view?.held && (
           <button
             className="btn btn-sm btn-primary"

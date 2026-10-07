@@ -24,10 +24,6 @@ impl Page {
         Self { cdp, session, task }
     }
 
-    pub fn send(&self, method: &str, params: Value) {
-        self.cdp.send(method, params, Some(&self.session));
-    }
-
     pub async fn call(&self, method: &str, params: Value) -> Result<Value> {
         self.cdp.call(method, params, Some(&self.session)).await.map_err(stale)
     }
@@ -98,7 +94,8 @@ impl Page {
             if browser.dialog(&self.task).is_some() {
                 return;
             }
-            let loading = browser.state_of(&self.task).is_some_and(|s| s.2);
+            // A tab the action opened is the page it led to, once it is one.
+            let loading = browser.adopting() || browser.state_of(&self.task).is_some_and(|s| s.2);
             if !loading {
                 if let Ok(Value::String(s)) = self.eval("document.readyState").await {
                     if s != "loading" {
@@ -235,3 +232,38 @@ fn stale(e: Error) -> Error {
     }
     e
 }
+
+/// An element's name for a person: what it says or is labelled, never its
+/// value.
+pub(super) const LABEL: &str = "function () {
+  const t = (this.getAttribute('aria-label') || (this.labels && this.labels[0] && this.labels[0].innerText)
+    || this.placeholder || this.innerText || this.title || this.alt || this.name || '').trim().split('\\n')[0];
+  return t.length > 40 ? t.slice(0, 40) + '…' : t;
+}";
+
+/// Select everything in a field, or in an editable element.
+pub(super) const SELECT_ALL: &str = "function () {
+  if (typeof this.select === 'function') { this.select(); return; }
+  const range = document.createRange();
+  range.selectNodeContents(this);
+  const s = window.getSelection();
+  s.removeAllRanges();
+  s.addRange(range);
+}";
+
+/// Choose a list's options by value or text, as a person's choice would:
+/// with input and change events, which is what frameworks listen to.
+///
+/// Matched first and set after: in a single-choice list, unselecting the
+/// chosen option makes the browser select the first one, which then read
+/// as chosen.
+pub(super) const SELECT_OPTIONS: &str = "function (wanted) {
+  if (!(this instanceof HTMLSelectElement)) throw new Error('that element is not a <select> list');
+  const matches = [...this.options].filter((o) => wanted.includes(o.value) || wanted.includes(o.label.trim()));
+  if (matches.length === 0) throw new Error('no option is called ' + wanted.join(' or '));
+  if (this.multiple) for (const o of this.options) o.selected = matches.includes(o);
+  else matches[0].selected = true;
+  this.dispatchEvent(new Event('input', { bubbles: true }));
+  this.dispatchEvent(new Event('change', { bubbles: true }));
+  return [...this.selectedOptions].map((o) => o.label.trim());
+}";

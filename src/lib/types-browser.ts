@@ -21,6 +21,18 @@ export interface BrowserView {
   /** Agents may use the page as it is now (BRW-3). */
   agents_may: boolean;
   last_action: AgentAction | null;
+  /** Sites the task's agents asked for, waiting on the user (BRW-11). */
+  requests: SiteRequest[];
+}
+
+/** An agent asking to use a site in the browser (BRW-11). */
+export interface SiteRequest {
+  id: number;
+  task: string;
+  site: string;
+  /** What the agent wants there, in its own words. */
+  reason: string;
+  at: number;
 }
 
 /** The user's own input in the panel. Coordinates are the page's CSS pixels. */

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Runtime, State};
 
 use crate::config::{GithubConfig, JiraConfig, SlackConfig, UiPrefs};
 use crate::error::{Error, Result};
@@ -28,6 +28,8 @@ pub struct Settings {
     pub slack_connected: bool,
     /// A phone's way in is open, which widens Keep awake (PHONE-8).
     pub phone_open: bool,
+    /// Sites agents may use in the browser besides this machine's (BRW-3).
+    pub browser_sites: Vec<String>,
 }
 
 #[tauri::command]
@@ -41,6 +43,7 @@ pub fn get_settings(state: State<AppState>) -> Settings {
         github_connected: c.github.is_some(),
         slack_connected: c.slack.is_some(),
         phone_open: c.phone.tailscale || c.phone.home,
+        browser_sites: c.browser.sites.clone(),
         worktree_root: state.config.worktree_root().to_string_lossy().to_string(),
         worktree_root_is_default: c.worktree_root.is_none(),
         jira: c.jira,
@@ -85,7 +88,7 @@ pub fn set_ui_prefs(state: State<AppState>, ui: UiPrefs) -> Result<()> {
 /// click — `show` never waits for it — so a click could focus the app and
 /// still leave you on whichever view you had left. This shows it itself and
 /// emits `system-notify-click` only for the activation, not a dismissal.
-pub(crate) fn banner(app: &AppHandle, title: String, body: String, target: String) -> Result<()> {
+pub(crate) fn banner<R: Runtime>(app: &AppHandle<R>, title: String, body: String, target: String) -> Result<()> {
     // A dev build has no bundle id macOS will attribute a notification to.
     // Borrowing Terminal's is what the plugin does, and without it a `tauri
     // dev` banner is delivered to nobody.

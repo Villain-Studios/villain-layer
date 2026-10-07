@@ -8,8 +8,9 @@ import type { SlackConfig, UiPrefs } from "../lib/types";
 import { Field, Modal, Switch } from "./ui";
 import { TicketFlowSettings } from "./TicketFlow";
 import { PhoneSettings } from "./PhoneSettings";
+import { BrowserSettings } from "./BrowserSettings";
 
-type Section = "appearance" | "jira" | "github" | "slack" | "phone" | "general";
+type Section = "appearance" | "jira" | "github" | "slack" | "phone" | "browser" | "general";
 
 /// Pasteable at api.slack.com/apps -> Create New App -> From an app manifest.
 const SLACK_MANIFEST = `display_information:
@@ -240,6 +241,7 @@ export function Settings() {
             ["github", "GitHub"],
             ["slack", "Slack"],
             ["phone", "Phone"],
+            ["browser", "Browser"],
             ["general", "General"],
           ] as [Section, string][]).map(([id, label]) => (
             <button
@@ -629,6 +631,7 @@ export function Settings() {
       )}
 
       {section === "phone" && <PhoneSettings />}
+      {section === "browser" && <BrowserSettings />}
 
       {section === "general" && (
         <>

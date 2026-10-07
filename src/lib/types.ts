@@ -391,6 +391,8 @@ export interface Settings {
   slack_connected: boolean;
   /** A phone's way in is open, which widens Keep awake (PHONE-8). */
   phone_open: boolean;
+  /** Sites agents may use in the browser besides this machine's (BRW-3). */
+  browser_sites: string[];
 }
 
 /** Settings → Phone (PHONE-*), as `phone::status` reports it. */

@@ -330,6 +330,9 @@ export const api = {
   browserInput: (taskId: string, input: BrowserInput) =>
     invoke<void>("browser_input", { taskId, input }),
   browserCopy: (taskId: string) => invoke<string>("browser_copy", { taskId }),
+  browserAnswerSite: (id: number, allow: boolean) => invoke<void>("browser_answer_site", { id, allow }),
+  /** Returns the list as kept: each site as its host, what is not one dropped. */
+  setBrowserSites: (sites: string[]) => invoke<string[]>("set_browser_sites", { sites }),
 };
 
 export function errMessage(e: unknown): string {

@@ -1,5 +1,5 @@
 //! Which pages agents may use (BRW-3): this machine's, always, and the sites
-//! the user allowed.
+//! the user allowed (Settings → Browser, or a request answered, BRW-11).
 //!
 //! A page's text is written by whoever runs the site, and an agent reads it
 //! the way it reads a ticket: as something that may tell it what to do. So
@@ -28,6 +28,21 @@ pub fn host_of(url: &str) -> Option<String> {
 /// This machine, by any of its names.
 pub fn is_local(host: &str) -> bool {
     host == "localhost" || host.ends_with(".localhost") || host == "127.0.0.1" || host == "::1"
+}
+
+/// A site as the user or an agent wrote it, as it is kept: a bare host,
+/// lowercased, from a host or a URL. None for anything that is not one.
+pub fn normalize(site: &str) -> Option<String> {
+    let site = site.trim();
+    let host = if site.contains("://") {
+        host_of(site)?
+    } else {
+        host_of(&format!("https://{site}"))?
+    };
+    let host = host.strip_prefix("*.").unwrap_or(&host).to_string();
+    let valid = host.contains('.') || host == "localhost";
+    let clean = host.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':'));
+    (valid && clean && !host.starts_with('.') && !host.starts_with('-')).then_some(host)
 }
 
 /// Whether agents may use the page at `url`. A site covers its subdomains:
@@ -97,6 +112,16 @@ mod tests {
         assert!(!allowed("http://localhost@evil.test/", &[]));
         assert!(!allowed("http://localhost:80@evil.test/", &[]));
         assert_eq!(host_of("http://user:pw@LOCALHOST:3000/x").as_deref(), Some("localhost"));
+    }
+
+    #[test]
+    fn a_site_is_kept_as_its_host_from_whatever_it_was_written_as() {
+        assert_eq!(normalize("https://GitHub.com/org/repo").as_deref(), Some("github.com"));
+        assert_eq!(normalize("*.example.com").as_deref(), Some("example.com"));
+        assert_eq!(normalize("docs.example.com:8443").as_deref(), Some("docs.example.com"));
+        assert_eq!(normalize("not a site"), None);
+        assert_eq!(normalize("com"), None);
+        assert_eq!(normalize("file:///etc"), None);
     }
 
     #[test]

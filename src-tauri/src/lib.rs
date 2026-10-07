@@ -302,6 +302,8 @@ pub fn run() {
             commands::browser_unwatch,
             commands::browser_input,
             commands::browser_copy,
+            commands::browser_answer_site,
+            commands::set_browser_sites,
         ])
         .build(tauri::generate_context!())
         // guard: allow panic — startup, before any agent exists; without a window there is nothing to run.

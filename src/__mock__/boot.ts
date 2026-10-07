@@ -76,7 +76,7 @@ function newPane(args: Args, kind: PaneInfo["kind"], task: string): PaneInfo {
  */
 const browsers = new Map<string, BrowserView>();
 const noTab = (): BrowserView => ({
-  chrome: true, tab: null, url: "", title: "", loading: false, agents_may: false, last_action: null,
+  chrome: true, tab: null, url: "", title: "", loading: false, agents_may: false, last_action: null, requests: [],
 });
 if (world.panes.some((p) => p.task_id === "t-login")) {
   browsers.set("t-login", {
@@ -87,6 +87,10 @@ if (world.panes.some((p) => p.task_id === "t-login")) {
     loading: false,
     agents_may: true,
     last_action: { text: "Clicked “Sign in”", x: 160, y: 236, at: Date.now() - 40_000 },
+    requests: [{
+      id: 1, task: "t-login", site: "github.com", at: Date.now() - 20_000,
+      reason: "Read the OAuth app's callback URL settings, to see why the redirect loops",
+    }],
   });
 }
 function tabOf(task: string): BrowserView {
@@ -482,6 +486,25 @@ const answer: Record<string, Answer> = {
     return null;
   },
   browser_unwatch: () => null,
+  browser_answer_site: (a) => {
+    for (const [task, b] of browsers) {
+      const r = b.requests.find((x) => x.id === a.id);
+      if (!r) continue;
+      if (a.allow && !world.settings.browser_sites.includes(r.site)) world.settings.browser_sites.push(r.site);
+      b.requests = b.requests.filter((x) => x !== r);
+      void emit("browser:changed", task);
+      return null;
+    }
+    throw "that request was already answered";
+  },
+  set_browser_sites: (a) => {
+    const kept = [...new Set((a.sites as string[])
+      .map((x) => x.trim().toLowerCase().replace(/^[a-z]+:\/\//, "").split(/[/:?#]/)[0].replace(/^\*\./, ""))
+      .filter((x) => x.includes(".")))].sort();
+    world.settings.browser_sites = kept;
+    void emit("browser:changed", "");
+    return kept;
+  },
   browser_input: () => null,
   browser_copy: () => "copied from the page",
 

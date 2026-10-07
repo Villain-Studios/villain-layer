@@ -51,6 +51,8 @@ type Size = { width: number; height: number };
 export function BrowserPanel({ taskId, visible, onClose }: { taskId: string; visible: boolean; onClose: () => void }) {
   const view = useBrowserView(taskId);
   const fail = useStore((s) => s.fail);
+  const refreshSettings = useStore((s) => s.refreshSettings);
+  const allowed = useStore((s) => s.settings?.browser_sites);
   const [address, setAddress] = useState("");
   const [editing, setEditing] = useState(false);
   const [size, setSize] = useState<Size | null>(null);
@@ -225,6 +227,26 @@ export function BrowserPanel({ taskId, visible, onClose }: { taskId: string; vis
     send(key("keyDown", k));
   }
 
+  /** An agent's request answered (BRW-11). */
+  async function answer(id: number, allow: boolean) {
+    try {
+      await api.browserAnswerSite(id, allow);
+      if (allow) await refreshSettings();
+    } catch (e) {
+      fail(e);
+    }
+  }
+
+  /** The page's site, allowed for agents from the panel itself (BRW-3). */
+  async function allowHere(site: string) {
+    try {
+      await api.setBrowserSites([...(allowed ?? []), site]);
+      await refreshSettings();
+    } catch (e) {
+      fail(e);
+    }
+  }
+
   async function go(to: "back" | "forward" | "reload") {
     try {
       await api.browserGo(taskId, to);
@@ -246,11 +268,12 @@ export function BrowserPanel({ taskId, visible, onClose }: { taskId: string; vis
     }
   }
 
-  const host = (() => {
+  const [host, hostname] = (() => {
     try {
-      return view?.url ? new URL(view.url).host : "";
+      const u = new URL(view?.url ?? "");
+      return [u.host, u.hostname];
     } catch {
-      return "";
+      return ["", ""];
     }
   })();
 
@@ -290,6 +313,20 @@ export function BrowserPanel({ taskId, visible, onClose }: { taskId: string; vis
           <CloseIcon />
         </button>
       </div>
+
+      {view?.requests.map((r) => (
+        <div key={r.id} className="browser-ask">
+          <span>
+            <b>An agent asks to use {r.site}</b>
+            {r.reason && <> — {r.reason}</>}
+          </span>
+          <div className="spacer" />
+          <button className="btn btn-sm" onClick={() => void answer(r.id, false)}>No</button>
+          <button className="btn btn-sm btn-primary" onClick={() => void answer(r.id, true)}>
+            Allow {r.site}
+          </button>
+        </div>
+      ))}
 
       <div className={`browser-screen${focused ? " focused" : ""}`} ref={screenRef}>
         {view && !view.chrome ? (
@@ -383,9 +420,18 @@ export function BrowserPanel({ taskId, visible, onClose }: { taskId: string; vis
         )}
         <div className="spacer" />
         {tab && host && !view?.agents_may && (
-          <span className="browser-off" title="Agents may use only this machine's pages (BRW-3)">
-            Agents cannot use {host}
-          </span>
+          <>
+            <span className="browser-off" title="Agents use only this machine's pages and the sites you allowed (BRW-3)">
+              Agents cannot use {host}
+            </span>
+            <button
+              className="btn btn-sm"
+              title={`Let agents use ${hostname} and its subdomains. Settings → Browser lists the sites allowed.`}
+              onClick={() => void allowHere(hostname)}
+            >
+              Allow
+            </button>
+          </>
         )}
       </div>
     </div>

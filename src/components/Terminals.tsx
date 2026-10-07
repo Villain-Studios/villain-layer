@@ -81,6 +81,15 @@ export function Terminals({ task }: { task: TaskView }) {
     write(`browserOpen.${task.id}`, open);
   };
   const browser = useBrowserView(task.id);
+  // An agent asking for a site is waiting on the answer, which is given in
+  // the panel (BRW-11): it opens when a request comes.
+  const asking = browser?.requests.length ?? 0;
+  useEffect(() => {
+    if (asking > 0) {
+      setBrowserOpen(true);
+      write(`browserOpen.${task.id}`, true);
+    }
+  }, [asking, task.id]);
   /** The browser's share of the width, dragged. */
   const [browserShare, setBrowserShare] = useState(() => read<number>("browserShare", 0.5));
   const splitRef = useRef<HTMLDivElement>(null);

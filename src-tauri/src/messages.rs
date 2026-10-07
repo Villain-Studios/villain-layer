@@ -12,7 +12,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::commands::AppState;
 use crate::error::Result;
@@ -257,12 +257,12 @@ impl Messages {
 }
 
 /// Say the log changed, so the bell and the list follow.
-pub fn changed(app: &AppHandle) {
+pub fn changed<R: Runtime>(app: &AppHandle<R>) {
     let _ = app.emit("messages:changed", ());
 }
 
 /// Record each, then announce once.
-pub fn record_all(app: &AppHandle, news: Vec<New>) {
+pub fn record_all<R: Runtime>(app: &AppHandle<R>, news: Vec<New>) {
     if news.is_empty() {
         return;
     }

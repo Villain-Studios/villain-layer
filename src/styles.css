@@ -325,6 +325,12 @@ textarea { resize: vertical; font-family: var(--mono); }
 }
 .browser-status > span { overflow: hidden; text-overflow: ellipsis; }
 .browser-off { color: var(--amber); }
+.browser-ask {
+  display: flex; align-items: center; gap: 8px; padding: 6px 8px; font-size: 12.5px;
+  background: color-mix(in srgb, var(--amber) 12%, var(--panel)); border-bottom: 1px solid var(--border-soft);
+}
+.browser-ask > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.site-row { padding: 2px 0; }
 .btn-add.active { color: var(--text); border-color: var(--accent-dim); background: var(--panel-2); }
 .btn-add .browser-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); margin-left: 4px; }
 

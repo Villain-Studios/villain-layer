@@ -7,7 +7,7 @@ use tauri::{AppHandle, Manager};
 
 use super::AppState;
 use crate::browser::input::BrowserInput;
-use crate::browser::{sites, AgentAction, Viewport};
+use crate::browser::{sites, AgentAction, SiteRequest, Viewport};
 use crate::error::{Error, Result};
 
 /// A task's tab, as the panel shows it.
@@ -23,6 +23,8 @@ pub struct BrowserView {
     /// Whether agents may use the page as it is now (BRW-3).
     pub agents_may: bool,
     pub last_action: Option<AgentAction>,
+    /// Sites the task's agents asked for, waiting on the user (BRW-11).
+    pub requests: Vec<SiteRequest>,
 }
 
 /// The task's tab, as last heard. Makes nothing: a task whose panel was
@@ -42,6 +44,7 @@ pub async fn browser_view(app: AppHandle, task_id: String) -> Result<BrowserView
         title: view.title,
         loading: view.loading,
         last_action: view.last_action,
+        requests: state.browser.requests(&task_id),
     })
 }
 
@@ -145,6 +148,53 @@ pub async fn browser_copy(app: AppHandle, task_id: String) -> Result<String> {
         )
         .await?;
     Ok(v.as_str().unwrap_or_default().to_string())
+}
+
+/// The user's answer to an agent's request for a site (BRW-11). Allowed,
+/// the site joins the list before the agent hears, so its next call works.
+#[tauri::command]
+pub async fn browser_answer_site(app: AppHandle, id: u64, allow: bool) -> Result<()> {
+    let state = app.state::<AppState>();
+    let site = state
+        .browser
+        .requests_all()
+        .into_iter()
+        .find(|r| r.id == id)
+        .map(|r| r.site)
+        .ok_or_else(|| Error::NotFound("that request was already answered".into()))?;
+    if allow {
+        super::blocking(app.clone(), move |state| add_site(state, &site)).await?;
+    }
+    state.browser.answer(&app, id, allow);
+    Ok(())
+}
+
+fn add_site(state: &AppState, site: &str) -> Result<()> {
+    state.config.update(|c| {
+        if !c.browser.sites.iter().any(|s| s == site) {
+            c.browser.sites.push(site.to_string());
+            c.browser.sites.sort();
+        }
+    })
+}
+
+/// Settings → Browser: the sites agents may use besides this machine's
+/// (BRW-3), as the user listed them. Each is kept as its host; what is not
+/// a site is dropped. Returns the list as kept.
+#[tauri::command]
+pub async fn set_browser_sites(app: AppHandle, sites: Vec<String>) -> Result<Vec<String>> {
+    let kept = super::blocking(app.clone(), move |state| {
+        let mut kept: Vec<String> = sites.iter().filter_map(|s| sites::normalize(s)).collect();
+        kept.sort();
+        kept.dedup();
+        let out = kept.clone();
+        state.config.update(|c| c.browser.sites = kept)?;
+        Ok(out)
+    })
+    .await?;
+    // Whether agents may use the page a panel shows can have changed.
+    let _ = tauri::Emitter::emit(&app, "browser:changed", "");
+    Ok(kept)
 }
 
 #[cfg(test)]

@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, Runtime};
 
-use super::{sites, snapshot, Browser, Page};
+use super::{sites, snapshot, Browser, Page, SiteRequest};
 use crate::commands::{AppState, CHAT_TASK_ID};
 use crate::error::{Error, Result};
 use crate::mcp::{arg, bool_prop, required, str_prop, tool};
@@ -29,7 +29,8 @@ pub fn list() -> Vec<Value> {
             "browser_navigate",
             "Open a page in your task's browser tab and get its outline. The tab is shared \
              with the user, who can watch it and use it. Only this machine's pages \
-             (localhost and the like, http unless you say https) are allowed. Use it to \
+             (localhost and the like, http unless you say https) and the sites the user \
+             allowed are open to you; browser_request_site asks for another. Use it to \
              try what you built: the dev server, a page, a form.",
             json!({ "url": str_prop("The address, e.g. localhost:3000/login") }),
             vec!["url"],
@@ -135,6 +136,18 @@ pub fn list() -> Vec<Value> {
             vec![],
         ),
         tool(
+            "browser_request_site",
+            "Ask the user to let agents use a site in the browser, saying what for. The user \
+             answers in the app; this waits up to two minutes and says what they chose. Ask \
+             only for what the task needs, and once: asking again waits on the same question. \
+             A site covers its subdomains.",
+            json!({
+                "site": str_prop("The site, e.g. github.com, or a URL on it"),
+                "reason": str_prop("What you need it for, in a sentence the user reads before answering"),
+            }),
+            vec!["site", "reason"],
+        ),
+        tool(
             "browser_evaluate",
             "Run JavaScript in the page and get its value back, as JSON. An expression, or \
              an async one: await works. For what the outline does not show: a value in \
@@ -168,8 +181,8 @@ fn task_of(state: &AppState, caller: Option<&str>) -> Result<String> {
 fn not_allowed(url: &str) -> Error {
     let site = sites::host_of(url).unwrap_or_else(|| url.chars().take(80).collect());
     Error::Other(format!(
-        "{site} is not a site agents may use: only this machine's pages (localhost) are. \
-         Tell the user what you wanted there, and they can open it themselves."
+        "{site} is not a site agents may use: only this machine's pages (localhost) and the \
+         sites the user allowed are. Ask with browser_request_site, saying what you need it for."
     ))
 }
 
@@ -215,6 +228,10 @@ pub async fn call<R: Runtime>(app: &AppHandle<R>, name: &str, args: Value, calle
     let state = app.state::<AppState>();
     let task = task_of(&state, caller)?;
     let browser: &Browser = &state.browser;
+    // A question for the user, not the browser: nothing to start for it.
+    if name == "browser_request_site" {
+        return request_site(app, &state, &task, &args).await;
+    }
     let page = browser.page(app, &task).await?;
 
     match name {
@@ -383,6 +400,55 @@ pub async fn call<R: Runtime>(app: &AppHandle<R>, name: &str, args: Value, calle
     }
 }
 
+/// How long `browser_request_site` waits on the user before saying there is
+/// no answer yet.
+const ANSWER_WAIT: Duration = Duration::from_secs(120);
+
+/// Ask the user for a site, and wait for the answer (BRW-11).
+async fn request_site<R: Runtime>(app: &AppHandle<R>, state: &AppState, task: &str, args: &Value) -> Result<Vec<Value>> {
+    let asked = required(args, "site")?;
+    let site = sites::normalize(asked)
+        .ok_or_else(|| Error::Other(format!("{asked} is not a site: give one like github.com")))?;
+    let reason = required(args, "reason")?;
+    if sites::allowed(&format!("https://{site}/"), &state.config.read().browser.sites) {
+        return Ok(text(format!("Agents may already use {site}.")));
+    }
+    let (request, mut answer, new) = state.browser.ask(app, task, &site, reason);
+    if new {
+        tell_user(app, state, &request);
+    }
+    let said = tokio::time::timeout(ANSWER_WAIT, answer.wait_for(Option::is_some)).await;
+    Ok(text(match said.ok().and_then(|r| r.ok().and_then(|a| *a)) {
+        Some(true) => format!("The user allowed {site}. browser_navigate there now."),
+        Some(false) => format!(
+            "The user said no to {site}. Do not ask for it again in this task unless they say otherwise."
+        ),
+        None => format!(
+            "No answer yet: the request for {site} stays in the task's Browser panel. Tell the user \
+             what you need it for, and carry on with something else; browser_navigate there will \
+             work once they allow it."
+        ),
+    }))
+}
+
+/// A request goes to the message center, and to a banner while the window
+/// is away: the agent asking is waiting on the user, like one at a prompt.
+fn tell_user<R: Runtime>(app: &AppHandle<R>, state: &AppState, r: &SiteRequest) {
+    let target = crate::target::Target::Task(&r.task).to_string();
+    let title = format!("An agent asks to use {} in its browser", r.site);
+    crate::messages::record_all(app, vec![crate::messages::New {
+        kind: crate::messages::Kind::Agent,
+        level: crate::messages::Level::Info,
+        title: title.clone(),
+        body: r.reason.clone(),
+        target: Some(target.clone()),
+    }]);
+    let away = !app.get_webview_window("main").and_then(|w| w.is_focused().ok()).unwrap_or(false);
+    if away && state.config.read().ui.notify_waiting_agents {
+        let _ = crate::commands::banner(app, title, r.reason.clone(), target);
+    }
+}
+
 /// An element's name for a person: what it says or is labelled, never its
 /// value.
 const LABEL: &str = "function () {
@@ -421,7 +487,7 @@ const SELECT_OPTIONS: &str = "function (wanted) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::browser::tests::{app_with_task, serve, HOME};
+    use crate::browser::tests::{app_in_task, app_with_task, serve, HOME};
 
     fn texts(content: &[Value]) -> String {
         content.iter().filter_map(|c| c.get("text").and_then(Value::as_str)).collect::<Vec<_>>().join("\n")
@@ -432,6 +498,54 @@ mod tests {
         let line = outline.lines().find(|l| l.contains(what)).unwrap_or_else(|| panic!("no {what} in\n{outline}"));
         let at = line.find("[ref=").unwrap() + 5;
         line[at..].split(']').next().unwrap().to_string()
+    }
+
+    /// An agent asks for a site and waits; the user's Allow adds it to the
+    /// list and is the agent's answer. Asking again while it waits is the
+    /// same question, not a second one, and a site already allowed is not
+    /// asked about at all.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_site_an_agent_asks_for_is_allowed_only_by_the_user() {
+        let (app, root, pane) = app_in_task();
+        // No banner from a test: the mock app has no window, so it reads as away.
+        app.state::<AppState>().config.update(|c| c.ui.notify_waiting_agents = false).unwrap();
+        let handle = app.handle().clone();
+        let ask = |pane: String| {
+            let handle = handle.clone();
+            tokio::spawn(async move {
+                let args = json!({ "site": "https://Docs.Example.com/guide", "reason": "Read the API guide" });
+                texts(&call(&handle, "browser_request_site", args, Some(&pane)).await.unwrap())
+            })
+        };
+        let first = ask(pane.clone());
+        let second = ask(pane.clone());
+        let state = app.state::<AppState>();
+        let mut asked = Vec::new();
+        for _ in 0..100 {
+            asked = state.browser.requests("t1");
+            if !asked.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let asked_now = state.browser.requests("t1");
+        assert_eq!(asked_now.len(), 1, "one question, however often it is asked");
+        assert_eq!((asked[0].site.as_str(), asked[0].reason.as_str()), ("docs.example.com", "Read the API guide"));
+        assert!(state.messages.list().iter().any(|m| m.title == "An agent asks to use docs.example.com in its browser"));
+
+        state.config.update(|c| c.browser.sites.push("docs.example.com".into())).unwrap();
+        state.browser.answer(app.handle(), asked[0].id, true);
+        for answer in [first.await.unwrap(), second.await.unwrap()] {
+            assert_eq!(answer, "The user allowed docs.example.com. browser_navigate there now.");
+        }
+        assert!(state.browser.requests("t1").is_empty());
+
+        let again = texts(&call(app.handle(), "browser_request_site", json!({ "site": "docs.example.com", "reason": "again" }), Some(&pane)).await.unwrap());
+        assert_eq!(again, "Agents may already use docs.example.com.");
+
+        state.ptys.shutdown(Duration::from_secs(1));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// The whole way, against a real Chrome: an agent in a task opens this

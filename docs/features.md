@@ -932,6 +932,7 @@ credentials themselves.
 | `browser_screenshot` | an image of the tab | |
 | `browser_console` | the page's console messages and uncaught errors | |
 | `browser_evaluate` | run JavaScript in the page | |
+| `browser_request_site` | ask the user to let agents use a site (BRW-11) | |
 
 - **MCP-1** Every request MUST carry the bearer token. Loopback is not
   authorisation.
@@ -968,6 +969,7 @@ Known gaps:
 | Phone: Tailscale | off | PHONE-1, PHONE-2 |
 | Phone: Home network and router VPN | off | PHONE-1, PHONE-2 |
 | Phone: Let phones type into agents | off | PHONE-7 |
+| Browser: sites agents may use | none: this machine's pages only | BRW-3, BRW-11 |
 | Tickets follow the work (Jira) | not chosen | TKT-8, per Jira project |
 | Trust the folders this app creates | on | PANE-10 |
 | Terminal text | 13px | 9–24px |
@@ -1195,11 +1197,13 @@ ring marks where it clicked.
   is not a credential (CHAT-3): an agent could name another task's pane and
   drive that task's tab, which is no more than it could do by asking.
 - **BRW-3** Agents MUST use only pages on this machine (`localhost`,
-  `*.localhost`, `127.0.0.1`, `[::1]`), over `http` or `https`. Opening any
-  other page is refused, and so is reading or acting on a tab that a link
-  or a redirect took elsewhere. A page's text is written by whoever runs
-  the site, and an agent reads it as it reads a ticket: as something that
-  may tell it what to do.
+  `*.localhost`, `127.0.0.1`, `[::1]`) and on the sites the user allowed
+  (Settings → Browser, the panel's Allow, or a request answered, BRW-11),
+  over `http` or `https`. A site covers its subdomains, and is kept as its
+  host whatever was typed. Opening any other page is refused, and so is
+  reading or acting on a tab that a link or a redirect took elsewhere. A
+  page's text is written by whoever runs the site, and an agent reads it
+  as it reads a ticket: as something that may tell it what to do.
 - **BRW-4** An action MUST be real input: mouse events at the element's
   middle, scrolled into view, and keys as key events, so a page cannot tell
   an agent's click from a person's. Each action waits for a page load it
@@ -1221,6 +1225,13 @@ ring marks where it clicked.
   person would say it ("Clicked “Save”"), and where it clicked is marked
   for a moment. An element is named by its label, never its value, which
   for a password field is the password.
+- **BRW-11** An agent MAY ask for a site with `browser_request_site`,
+  saying what for. Only the user's Allow adds it: the request shows over
+  the task's browser, which opens for it, and in the message center, with
+  a banner while the window is away (when "Agents waiting on you" is on).
+  The tool waits up to two minutes and says what the user chose, or that
+  no answer came yet; the same request again waits on the one already
+  asked. No `confirm` an agent passes can stand in for the user's answer.
 - **BRW-6** The tab MUST come back where it was: each task's last page is
   kept in `config.json`, and opened when the task's tab is next needed.
   Deleting or finishing a task closes its tab.
@@ -1235,9 +1246,10 @@ ring marks where it clicked.
 
 Code: `browser/` (`chrome.rs` finding and running it, `cdp.rs` the
 protocol, `page.rs` a tab's actions, `snapshot.rs` the outline, `sites.rs`
-BRW-3, `tools.rs` the tools, `input.rs` the panel's input),
+BRW-3, `tools.rs` the tools, `panel.rs` and `input.rs` the panel's side,
+`requests.rs` BRW-11),
 `commands/browser.rs`, `mcp.rs` (`dispatch`), `BrowserPanel.tsx`,
-`lib/browserInput.ts`, `Terminals.tsx`.
+`BrowserSettings.tsx`, `lib/browserInput.ts`, `Terminals.tsx`.
 
 Known gaps:
 - Agents cannot see the page's frames from another site (an embedded

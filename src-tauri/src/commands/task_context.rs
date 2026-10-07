@@ -221,8 +221,9 @@ This task reviews pull request {}#{}{}, at commit `{}`: {}.              `{}` is
         "The `browser_*` tools on the `villain-layer` MCP server drive this task's own ",
         "tab in a browser the user can watch and use too. Try what you build in it: ",
         "start the dev server, `browser_navigate` to it, and read the page with ",
-        "`browser_snapshot`. Only this machine's pages (localhost) are allowed. Never ",
-        "type the user's passwords or other secrets: ask them to sign in themselves.\n",
+        "`browser_snapshot`. This machine's pages (localhost) and the sites the user ",
+        "allowed are open to you; `browser_request_site` asks for another. Never type ",
+        "the user's passwords or other secrets: ask them to sign in themselves.\n",
     ));
     md
 }

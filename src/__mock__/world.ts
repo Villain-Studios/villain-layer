@@ -80,6 +80,7 @@ const disconnected: Settings = {
   github_connected: false,
   slack_connected: false,
   phone_open: false,
+  browser_sites: [],
 };
 
 const agents: AgentStatus[] = [
@@ -380,6 +381,7 @@ function busy(): World {
       jira_connected: true,
       github_connected: true,
       slack_connected: true,
+      browser_sites: ["docs.acme.dev"],
     },
     prs,
     reviews: {

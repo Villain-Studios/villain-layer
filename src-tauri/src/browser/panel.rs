@@ -22,6 +22,12 @@ const FRAME_GAP: Duration = Duration::from_millis(16);
 /// How long the page is still before a sharp picture of it is sent.
 const STILL_AFTER: Duration = Duration::from_millis(150);
 
+/// How often the panel's size is set again while frames come at another.
+const RESIZE_AGAIN: Duration = Duration::from_millis(250);
+
+/// How long the sharp frame may take before a picture is taken instead.
+const SHARP_WAIT: Duration = Duration::from_millis(400);
+
 /// Changes this close together are the page moving (a scroll, an
 /// animation): `MOVING.0` of them within `MOVING.1`. One change on its own
 /// is drawn sharp. A caret blinks twice a second, and with every change
@@ -80,6 +86,8 @@ pub(super) struct Watch {
     /// When the last changes came while sharp: only a run of them is the
     /// page moving (`MOVING`).
     recent: std::collections::VecDeque<Instant>,
+    /// When the panel's size was last set again for a frame of another one.
+    resized: Option<Instant>,
 }
 
 impl Browser {
@@ -136,6 +144,7 @@ impl Browser {
                 switching: false,
                 still_due: None,
                 recent: Default::default(),
+                resized: None,
             });
         }
         // Every time, not only when the panel's size changed: a tab shown
@@ -227,6 +236,9 @@ impl Browser {
     pub(super) fn on_frame<R: Runtime>(&self, app: &AppHandle<R>, e: Event) {
         let ack_id = e.params.get("sessionId").cloned().unwrap_or(Value::Null);
         let Some(data) = e.params.get("data").and_then(Value::as_str) else { return };
+        // The size of what Chrome drew, in CSS pixels.
+        let drawn = |k: &str| e.params.pointer(&format!("/metadata/{k}")).and_then(Value::as_f64);
+        let (drawn_w, drawn_h) = (drawn("deviceWidth"), drawn("deviceHeight"));
         let (frames, cdp, session, wait, soften, wait_still) = {
             let mut inner = self.inner.lock();
             let Some(cdp) = inner.running.as_ref().map(|r| r.cdp.clone()) else { return };
@@ -236,6 +248,30 @@ impl Browser {
                 return;
             };
             let now = Instant::now();
+            // Drawn at another size than the panel's: Chrome sometimes drops
+            // the size a tab was given when it comes to the front again (after
+            // the tab before it closed), and draws it at its window's size,
+            // which the panel stretched out of shape. Not shown; the size is
+            // set again, and the next frame is right.
+            let off = |drawn: Option<f64>, want: u32| drawn.is_some_and(|d| (d - f64::from(want)).abs() > 1.5);
+            if off(drawn_w, w.viewport.width) || off(drawn_h, w.viewport.height) {
+                let v = w.viewport;
+                let again = w.resized.is_none_or(|t| now.duration_since(t) > RESIZE_AGAIN);
+                if again {
+                    w.resized = Some(now);
+                }
+                let session = w.session.clone();
+                drop(inner);
+                cdp.send("Page.screencastFrameAck", json!({ "sessionId": ack_id }), Some(&session));
+                if again {
+                    cdp.send(
+                        "Emulation.setDeviceMetricsOverride",
+                        json!({ "width": v.width, "height": v.height, "deviceScaleFactor": v.scale, "mobile": false }),
+                        Some(&session),
+                    );
+                }
+                return;
+            }
             let wait = w.next.saturating_duration_since(now);
             w.next = now + wait + FRAME_GAP;
             let moved = !std::mem::take(&mut w.switching);
@@ -306,15 +342,55 @@ impl Browser {
                 tokio::time::sleep(due - now).await;
                 continue;
             }
-            let mut inner = self.inner.lock();
-            let Some(w) = inner.watch.as_mut().filter(|w| w.session == session) else { return };
-            w.still_due = None;
-            if !w.sharp {
+            {
+                let mut inner = self.inner.lock();
+                let Some(w) = inner.watch.as_mut().filter(|w| w.session == session) else { return };
+                w.still_due = None;
+                if w.sharp {
+                    return;
+                }
                 w.sharp = true;
                 w.switching = true;
                 restart(cdp, session, w.viewport, true);
             }
+            return self.make_sure_sharp(cdp, session).await;
+        }
+    }
+
+    /// A restarted screencast sends a frame of a still page, but not always:
+    /// on a busy machine none came, and the page stayed blurred until it
+    /// next changed. Then a picture of it is taken instead. The frame that
+    /// taking it draws is the one `switching` waits for, so it does not
+    /// start the page moving again.
+    async fn make_sure_sharp(&self, cdp: &Cdp, session: &str) {
+        tokio::time::sleep(SHARP_WAIT).await;
+        let missing = |inner: &super::Inner| {
+            inner.watch.as_ref().is_some_and(|w| w.session == session && w.sharp && w.switching)
+        };
+        if !missing(&self.inner.lock()) {
             return;
+        }
+        let Some(v) = self.inner.lock().watch.as_ref().map(|w| w.viewport) else { return };
+        // The panel's part of the page, where it is scrolled to: without a
+        // clip, Chrome takes its own window's size, and the panel stretched
+        // that out of shape.
+        let Ok(m) = cdp.call("Page.getLayoutMetrics", json!({}), Some(session)).await else { return };
+        let at = |k: &str| m.pointer(&format!("/cssVisualViewport/{k}")).and_then(Value::as_f64).unwrap_or(0.0);
+        let clip = json!({ "x": at("pageX"), "y": at("pageY"), "width": v.width, "height": v.height, "scale": 1 });
+        let Ok(shot) = cdp
+            .call("Page.captureScreenshot", json!({ "format": "jpeg", "quality": 90, "clip": clip }), Some(session))
+            .await
+        else {
+            return;
+        };
+        let inner = self.inner.lock();
+        let Some(w) = inner.watch.as_ref().filter(|w| w.session == session && w.sharp) else { return };
+        if let Some(jpeg) = shot
+            .get("data")
+            .and_then(Value::as_str)
+            .and_then(|d| base64::engine::general_purpose::STANDARD.decode(d).ok())
+        {
+            let _ = w.frames.send(InvokeResponseBody::Raw(jpeg));
         }
     }
 }

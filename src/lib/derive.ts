@@ -76,7 +76,9 @@ export function paneScope(pane: PaneInfo): string | null {
 
 /** An agent whose CLI can be restarted on its own conversation (PANE-14). */
 export function canRestart(pane: PaneInfo, agents: AgentStatus[]): boolean {
-  return pane.kind === "agent" && !!agents.find((a) => a.id === pane.agent_id)?.resumes;
+  const agent = agents.find((a) => a.id === pane.agent_id);
+  // Over ACP, any agent picks its conversation up by id (ACP-9).
+  return pane.kind === "agent" && !!(pane.acp ? agent?.acp : agent?.resumes);
 }
 
 /** A running agent — what every "N running" in the app counts. */

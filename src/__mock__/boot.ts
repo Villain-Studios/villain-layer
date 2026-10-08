@@ -28,6 +28,7 @@ import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import type { BrowserView, Catchup, Cleaned, FlowStatus, Message, PaneInfo, PhoneStatus, Project, RepoUpdate, Spec, Synced, TaskView } from "../lib/types";
 import { ago, SCENARIOS } from "./world";
+import { acpAnswers, seedAcp } from "./acp";
 
 type Args = Record<string, unknown>;
 type Answer = (args: Args) => unknown;
@@ -38,6 +39,7 @@ const params = new URLSearchParams(location.search);
 const scenarios = new Map(Object.entries(SCENARIOS));
 const world = (scenarios.get(params.get("scenario") ?? "busy") ?? SCENARIOS.busy)();
 const calls: { cmd: string; args: Args }[] = [];
+for (const p of world.panes) if (p.acp) seedAcp(p.id);
 const overrides = new Map<string, Answer>();
 
 /** Base64 of the UTF-8 bytes, as the backend sends it, and how many bytes that was. */
@@ -64,6 +66,7 @@ function newPane(args: Args, kind: PaneInfo["kind"], task: string): PaneInfo {
     activity: kind === "agent" ? "working" : "idle",
     activity_since: ago(0),
     topic: null,
+    acp: !!args.acp,
   };
   world.panes.push(p);
   world.output[p.id] = kind === "agent" ? `${p.title} starting…\r\n` : "you@mac % ";
@@ -250,6 +253,7 @@ const answer: Record<string, Answer> = {
   pty_write: () => null,
   pty_resize: () => null,
   pty_detach: () => null,
+  ...acpAnswers,
   resumable_agents: () => [],
   task_prompt: (a) =>
     "Work on ACME-123: Fix login race.\n\nThe ticket says…" +
@@ -277,7 +281,12 @@ const answer: Record<string, Answer> = {
     }
     return sent;
   },
-  spawn_agent: (a) => newPane(a, "agent", a.taskId as string),
+  spawn_agent: (a) => {
+    const p = newPane(a, "agent", a.taskId as string);
+    // An ACP agent is sent its opening prompt once its conversation opens.
+    if (a.acp && a.prompt) acpAnswers.acp_prompt({ paneId: p.id, text: a.prompt });
+    return p;
+  },
   spawn_shell: (a) => newPane(a, "shell", a.taskId as string),
   spawn_chat: (a) => newPane(a, "agent", "chat"),
   waiting_panes: () => world.waiting,

@@ -67,10 +67,15 @@ impl Feed {
 
     /// The terminal's size as the window last set it: a reader elsewhere
     /// draws at this size and never changes it.
+    /// A conversation (§20) has no terminal: its text copy is drawn at the
+    /// size a new terminal starts at.
     pub fn size(&self) -> (u16, u16) {
-        match self.pane.master.lock().get_size() {
-            Ok(s) => (s.rows, s.cols),
-            Err(_) => (30, 100),
+        match &self.pane.io {
+            super::Io::Pty { master, .. } => match master.lock().get_size() {
+                Ok(s) => (s.rows, s.cols),
+                Err(_) => (30, 100),
+            },
+            super::Io::Acp(_) => (30, 100),
         }
     }
 

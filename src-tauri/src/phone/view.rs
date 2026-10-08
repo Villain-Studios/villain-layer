@@ -148,6 +148,7 @@ mod tests {
             activity,
             activity_since: now,
             topic: topic.map(str::to_string),
+            acp: false,
         }
     }
 

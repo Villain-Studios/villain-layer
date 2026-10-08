@@ -116,6 +116,7 @@ mod cleanup_remote;
 mod tasks;
 mod panes;
 mod panes_restore;
+mod acp_panes;
 mod diff;
 mod jira;
 mod github;
@@ -140,6 +141,7 @@ pub use cleanup::*;
 pub use tasks::*;
 pub use panes::*;
 pub use panes_restore::*;
+pub use acp_panes::*;
 pub use diff::*;
 pub use jira::*;
 pub use github::*;
@@ -310,6 +312,8 @@ mod tests {
             cwd: Some(cwd.into()),
             failed: 0,
             waiting: false,
+            acp: false,
+            session: None,
         }
     }
 

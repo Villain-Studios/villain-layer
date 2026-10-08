@@ -1,3 +1,4 @@
+mod acp;
 mod agents;
 mod attention;
 mod awake;
@@ -231,6 +232,11 @@ pub fn run() {
             commands::forget_waiting_pane,
             commands::kill_pane,
             commands::restart_pane,
+            commands::acp_view,
+            commands::acp_prompt,
+            commands::acp_cancel,
+            commands::acp_answer,
+            commands::acp_set,
             commands::diff_files,
             commands::diff_file,
             commands::task_commits,

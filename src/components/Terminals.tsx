@@ -10,9 +10,9 @@ import { ChatLink } from "./ChatLink";
 import { PaneNotice } from "./PaneNotice";
 import { PaneExited, RestartButton, useRestart } from "./Restart";
 import { WaitingTaskPanes } from "./WaitingPanes";
-import { TerminalPane } from "./Terminal";
+import { PaneView } from "./AcpPane";
 import { CloseIcon, GlobeIcon, PlusIcon, SwapIcon } from "./icons";
-import { ContextMenu, Field, Modal, Spinner } from "./ui";
+import { ContextMenu, Field, Modal, Spinner, Switch } from "./ui";
 import type { MenuItem } from "./ui";
 
 function ago(unixSeconds: number): string {
@@ -40,6 +40,8 @@ export function Terminals({ task }: { task: TaskView }) {
   const [launching, setLaunching] = useState<string | null>(null);
   const [prompt, setPrompt] = useState("");
   const [promptLoading, setPromptLoading] = useState(false);
+  /** Start it as a conversation over ACP (§20); remembered for the next launch. */
+  const [asAcp, setAsAcp] = useState(() => read<boolean>("launchAcp", false));
   const [handoff, setHandoff] = useState<{ from: PaneInfo; agentId: string } | null>(null);
   const [handoffPrompt, setHandoffPrompt] = useState("");
   const [handoffLoading, setHandoffLoading] = useState(false);
@@ -216,7 +218,8 @@ export function Terminals({ task }: { task: TaskView }) {
 
   const launchAgent = (agentId: string) => once(async () => {
     try {
-      const pane = await api.spawnAgent(task.id, agentId, scope, prompt.trim() || null);
+      const acp = asAcp && !!agents.find((a) => a.id === agentId)?.acp;
+      const pane = await api.spawnAgent(task.id, agentId, scope, prompt.trim() || null, false, acp);
       setLaunching(null);
       setPrompt("");
       await refreshPanes();
@@ -448,7 +451,7 @@ export function Terminals({ task }: { task: TaskView }) {
           // container had no height keeps those rows: the process draws into a
           // short terminal inside a tall one, which is the black band under a
           // full-screen editor. Toggling this re-fits when the tab comes back.
-          <TerminalPane
+          <PaneView
             key={p.id}
             pane={p}
             visible={p.id === active && tab === "terminals"}
@@ -669,6 +672,14 @@ export function Terminals({ task }: { task: TaskView }) {
               placeholder="What should this agent do?"
             />
           </Field>
+          {agents.find((a) => a.id === launching)?.acp && (
+            <Switch
+              label="As a conversation (ACP)"
+              detail="The app draws it instead of a terminal: questions as buttons, prompts of any length."
+              checked={asAcp}
+              onChange={(v) => { setAsAcp(v); write("launchAcp", v); }}
+            />
+          )}
           <div className="muted" style={{ fontSize: 11 }}>
             Starts in <code>{scope
               ? task.checkouts.find((c) => c.id === scope)?.path

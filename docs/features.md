@@ -21,7 +21,8 @@ How to use it:
 The words: a **repository** (repo) is a git clone the user registered. A
 **task** is one piece of work, usually one Jira ticket, spanning one or more
 repos. A **checkout** is one repo's git worktree inside a task. A **pane**
-is a terminal running an agent CLI or a shell.
+is a terminal running an agent CLI or a shell, or an agent's conversation
+over ACP (§20).
 
 ---
 
@@ -246,6 +247,8 @@ ones that need you first.
 | `opencode` | OpenCode | a JS plugin posting its state | `OPENCODE_CONFIG_CONTENT` + `VILLAIN_MCP_TOKEN` | no |
 | `gemini` | Gemini CLI | the mark in its window title | `.gemini/settings.json` in the app's own folders | no |
 
+Each of them can also run as a conversation the app draws, over ACP (§20).
+
 - **PANE-1** Only a CLI that can report its own state MUST be offered.
   Output alone cannot tell working from idle: Claude Code repaints every
   few seconds while idle. CLIs dropped for this are in git history.
@@ -303,7 +306,8 @@ ones that need you first.
   typed) is written whole to a file in the task folder, and only a
   pointer to it is typed. macOS throws away a typed line much over 1 KB
   while the program is not reading in raw mode: a rebase hand-off reached
-  Claude Code as its last 68 bytes. Longer is refused, never cut.
+  Claude Code as its last 68 bytes. Longer is refused, never cut. An agent
+  over ACP is sent it whole instead (ACP-4).
 - **PANE-12** An agent pane MUST be called by what its conversation is
   about once the CLI names it, in its tab, the chat list, All agents and
   the pickers that send it something. The name is the CLI's own, read from
@@ -371,7 +375,8 @@ limit is reached) or `trust_prompt`. A notice counts as needing you, and
 shows as a banner above the terminals.
 
 - **STATE-1** State MUST come from what the CLI reports (hooks, plugin,
-  title), never from resize, refresh or polling. Output timing decides only
+  title, the protocol for an agent over ACP: ACP-2), never from resize,
+  refresh or polling. Output timing decides only
   for a CLI that reports nothing, and not right after the app sent the pane
   something.
 - **STATE-2** Esc or Ctrl-C at a question or during a turn MUST make the
@@ -926,7 +931,7 @@ credentials themselves.
 - **MCP-1** Every request MUST carry the bearer token. Loopback is not
   authorisation.
 - **MCP-2** The tools' token MUST NOT appear on any command line. It goes
-  in a 0600 file or an environment variable. Status reports (`/hook`) use
+  in a 0600 file, an environment variable, or an ACP agent's stdin (ACP-3). Status reports (`/hook`) use
   a separate token that can do nothing but set a pane's state.
 - **MCP-3** A tool that changes shared state irreversibly MUST need
   `confirm: true`, and says so in its schema.
@@ -1138,7 +1143,7 @@ the home network). How to set either up is in `docs/phone.md`.
   one line and stripped of control characters, at most 512 bytes (PANE-11),
   and Enter; or one key of the key bar: Enter, Esc, Up, Down, Tab,
   Shift-Tab, Ctrl-C, 1, 2, 3. Esc and Ctrl-C end a turn as at the Mac
-  (STATE-2).
+  (STATE-2). An agent over ACP takes the keys as ACP-10 says.
 - **PHONE-8** With Keep awake on and a way in open, the Mac MUST stay
   awake while any agent runs, not only while one works: one asking for
   permission is exactly the one you would answer from the phone. Closing
@@ -1396,6 +1401,109 @@ Known gaps:
   afterwards reads it.
 - What the editor holds and has not saved is lost when the app quits.
 - A draft cannot be stopped once started.
+
+## 20. Agents over ACP
+
+An agent can run as a conversation instead of in a terminal. The app
+starts the CLI as an [Agent Client Protocol](https://agentclientprotocol.com)
+server, speaks JSON-RPC to it over its stdin and stdout, and draws what it
+says: replies as Markdown, each tool call with its output or diff, its
+plan, and its permission questions as buttons. It is chosen when starting
+an agent ("As a conversation (ACP)" in the launch dialog, "· conversation
+(ACP)" in the Chat view's menu), beside the terminal, which stays the
+default. Otherwise the pane is an ordinary one: it counts toward PANE-2,
+is stopped as PANE-5 says, comes back as PANE-7 says, and every list,
+count and banner treats it like any other.
+
+| Agent | ACP command | Picks a conversation up by | Checked against |
+|---|---|---|---|
+| `claude` | `claude-agent-acp`, Zed's adapter, installed separately | load, resume, list | adapter 0.22.2 |
+| `copilot` | `copilot --acp` | load, list | 1.0.93 |
+| `opencode` | `opencode acp` | load, resume, list | 1.18.35 |
+| `gemini` | `gemini --acp` | load | 0.63.0, `initialize` only: it would not open a conversation for a personal Google account |
+
+- **ACP-1** ACP MUST be offered only for an agent whose catalogue entry
+  has an ACP command, and only when that command is on the PATH. The
+  launch dialog remembers the last choice.
+- **ACP-2** An ACP pane's state MUST come from the protocol, never from
+  its output: a `session/prompt` in flight is working, an unanswered
+  `session/request_permission` is asking, the prompt's answer is done
+  (idle when it was cancelled), and an error ends the turn as done, with
+  the error shown. Started or picked up and given nothing yet, it is idle.
+- **ACP-3** The app's MCP server MUST reach the agent in `session/new`
+  (and load, resume) as an `http` server, with the bearer token and
+  `X-Villain-Pane` as headers: over the agent's stdin, never on a command
+  line or in a file (MCP-2). Nothing is written for the CLI to load: no
+  hooks, no plugin, no settings. An agent that takes no MCP server over
+  HTTP starts without the app's tools, and the pane says so.
+- **ACP-4** Text MUST reach an ACP agent whole, however long: the opening
+  prompt, a handoff, review comments, conflicts, a line from the phone.
+  PANE-11's limit and its files are for typing into a terminal. A prompt
+  sent while a turn runs waits for it to end, and the conversation shows
+  it waiting.
+- **ACP-5** A permission question MUST show the agent's own options as
+  buttons, and be answered only by the user. The app never answers one
+  itself, and never chooses "always".
+- **ACP-6** Esc or Stop MUST cancel the running turn (`session/cancel`),
+  answer every open question "cancelled", as the protocol requires, and
+  drop the prompts that were waiting, marked as not sent. The pane is idle
+  once the agent says the turn was cancelled. Closing a pane stops the
+  process as PANE-5 says.
+- **ACP-7** The pane MUST keep the conversation (its last 2,000 entries),
+  and the window MUST be told of a change (`acp:update`) only while the
+  pane is on screen; one coming on screen asks for what changed since it
+  last looked. A plain-text copy goes into the pane's scrollback, so a
+  handoff's briefing (PANE-9), `pane_output` (MCP-4) and the phone
+  (PHONE-6) read an ACP pane as they read a terminal. Thinking is left out
+  of the copy.
+- **ACP-8** An ACP pane MUST be called by the title its agent gives the
+  conversation (`session_info_update`), cut as PANE-12 cuts one.
+- **ACP-9** An ACP agent MUST pick a conversation up by its id. Restart
+  (PANE-14) and a restore (PANE-7) use the id the agent gave, kept with the
+  saved pane: `session/load`, which replays it into the pane, or else
+  `session/resume`. Resume with no id takes the newest the agent lists for
+  the folder (`session/list`). One that cannot be picked up is started
+  new, and the pane says why. So two agents in one folder never pick up
+  the same conversation, and Restart works for every ACP agent.
+- **ACP-10** On the phone, an ACP pane's keys MUST mean: Esc and Ctrl-C
+  stop the turn; 1 to 9 choose the oldest open question's options in
+  order, as the text copy numbers them. A line typed is a prompt (ACP-4).
+- **ACP-11** An agent that will not open a conversation MUST say why in
+  the pane, with how it says to sign in (its `authMethods`). The app never
+  signs in for it.
+- **ACP-12** The settings the agent offers for the session
+  (`configOptions`: its mode, its model) MUST be shown and changed from the
+  pane, and only by the user.
+- **ACP-13** The app MUST offer the agent none of the protocol's client
+  methods: the agent reads, writes and runs commands itself, as it does in
+  a terminal, and an `fs/*` or `terminal/*` request is refused, not left
+  waiting.
+- **ACP-14** A turn that fails on a usage limit MUST raise the
+  usage-limit notice (STATE-6), read from the error's message; it clears
+  when the agent next works.
+
+Code: `acp/` (`conn.rs` the protocol, `user.rs`, `conversation.rs`,
+`entry.rs`, `read.rs`, `process.rs`), `pty/acp.rs`,
+`commands/acp_panes.rs`, `agents.rs` (`AcpCommand`), `AcpPane.tsx`,
+`lib/acpUpdates.ts`, `lib/types-acp.ts`. A real agent is checked with
+`VILLAIN_ACP_AGENT="opencode acp" cargo test --lib real_agent -- --ignored`.
+
+Known gaps:
+- Claude Code runs over ACP only through Zed's `claude-agent-acp`
+  adapter, which bundles its own Claude Agent SDK: its models and features
+  are that version's, not those of the `claude` on the PATH. Picked up
+  again, its conversation replays the adapter's own `/model` command as if
+  the user had typed it.
+- Copilot's ACP mode is in public preview. Gemini CLI was checked only as
+  far as `initialize`.
+- Codex (`codex-acp`), Cursor, Goose and the rest of the ACP registry are
+  not in the catalogue: each needs checking against a real install first,
+  as PANE-1 asks.
+- Only the launch dialog and the Chat view offer ACP. Start work, Start
+  agent on a spec, the Diff tab's "send to an agent" and a handoff start a
+  terminal.
+- Drafting PR and ticket descriptions still runs `claude -p` (§3).
+- The slash commands an agent offers are only suggested as `/` is typed.
 
 ---
 

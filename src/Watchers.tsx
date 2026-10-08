@@ -288,6 +288,15 @@ export function Watchers() {
     return () => { void p.then((un) => un()); };
   }, [refreshPanes]);
 
+  // A spec being drafted (SPEC-2), into whichever task's editor asked for it,
+  // shown or not.
+  useEffect(() => {
+    const p = listen<{ request_id: string; text: string }>("spec:draft", (e) => {
+      useStore.getState().specChunk(e.payload.request_id, e.payload.text);
+    });
+    return () => { void p.then((un) => un()); };
+  }, []);
+
   // Hitting a usage limit is the one thing worth interrupting for: the agent
   // has stopped working and will not say so again.
   useEffect(() => {

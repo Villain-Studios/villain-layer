@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../../lib/api";
 import { useStore } from "../../store";
-import type { AgentStatus, JiraIssue, JiraTransition, Project } from "../../lib/types";
+import type { AgentStatus, JiraIssue, Project } from "../../lib/types";
 import { Combo, Field, Modal } from "../ui";
 import { RepoPicker } from "../RepoPicker";
 import { suggestBase } from "../../lib/derive";
+import { read, write } from "../../lib/persist";
 import { IssueTypeIcon, type TypeMap } from "../IssueType";
 
 export function StartWorkDialog({
@@ -24,10 +25,11 @@ export function StartWorkDialog({
   const refreshTasks = useStore((s) => s.refreshTasks);
   const refreshPanes = useStore((s) => s.refreshPanes);
   const select = useStore((s) => s.select);
+  const setTab = useStore((s) => s.setTab);
+  const setPendingSpec = useStore((s) => s.setPendingSpec);
   const toast = useStore((s) => s.toast);
   const fail = useStore((s) => s.fail);
 
-  const [transitions, setTransitions] = useState<JiraTransition[]>([]);
   const [picked, setPicked] = useState<string[]>([]);
   const [reason, setReason] = useState<string | null>(null);
   /** Null until a default is picked; "" is the choice of no agent at all. */
@@ -38,6 +40,8 @@ export function StartWorkDialog({
   /** The base this dialog last filled in itself, as opposed to one typed. */
   const autoBase = useRef("");
   const [starting, setStarting] = useState(false);
+  /** SPEC-6: start the agent from the Spec tab, once its spec is agreed. */
+  const [specFirst, setSpecFirst] = useState(() => read("specFirst", true));
 
   const installed = agents.filter((a) => a.installed);
   const selected = projects.filter((p) => picked.includes(p.id));
@@ -51,16 +55,12 @@ export function StartWorkDialog({
   }, [firstInstalled, agentId]);
 
   useEffect(() => {
-    setTransitions([]);
     setReason(null);
     setSuffix("");
     setBase("");
     setBaseOptions([]);
     setPicked([]);
     let stop = false;
-    api.jiraTransitions(issue.key)
-      .then((t) => { if (!stop) setTransitions(t); })
-      .catch(() => { if (!stop) setTransitions([]); });
     // A suggestion, so it gives way to what was picked while it was out.
     api.suggestRepos({ issueKey: issue.key, epicKey: issue.epic_key })
       .then((s) => {
@@ -113,11 +113,12 @@ export function StartWorkDialog({
   async function startWork() {
     if (picked.length === 0) return;
     setStarting(true);
+    const spec = specFirst && !!agentId;
     try {
       const task = await api.jiraStartWork(
         issue.key,
         picked,
-        agentId || null,
+        spec ? null : agentId || null,
         suffix || null,
         base.trim() || null,
       );
@@ -125,6 +126,10 @@ export function StartWorkDialog({
       // status on the card is the thing the move was meant to correct.
       await Promise.all([refreshTasks(), refreshPanes(), refreshIssues()]);
       select(task.id);
+      if (spec) {
+        setPendingSpec({ taskId: task.id, agentId: agentId || null });
+        setTab("spec");
+      }
       onClose();
       toast(
         "success",
@@ -135,17 +140,6 @@ export function StartWorkDialog({
       fail(e);
     } finally {
       setStarting(false);
-    }
-  }
-
-  async function doTransition(t: JiraTransition) {
-    try {
-      await api.jiraTransition(issue.key, t.id);
-      toast("success", `${issue.key} → ${t.to_status}`);
-      onClose();
-      await refreshIssues();
-    } catch (e) {
-      fail(e);
     }
   }
 
@@ -247,17 +241,16 @@ export function StartWorkDialog({
           {installed.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
         </select>
       </Field>
-
-      {transitions.length > 0 && (
-        <Field label="Move ticket">
-          <div className="row" style={{ flexWrap: "wrap" }}>
-            {transitions.map((t) => (
-              <button key={t.id} className="btn btn-sm" onClick={() => void doTransition(t)}>
-                {t.name}
-              </button>
-            ))}
-          </div>
-        </Field>
+      {agentId && (
+        <label className="row" style={{ gap: 7, margin: "-6px 0 14px", cursor: "pointer" }}>
+          <input
+            type="checkbox"
+            style={{ width: "auto" }}
+            checked={specFirst}
+            onChange={(e) => { setSpecFirst(e.target.checked); write("specFirst", e.target.checked); }}
+          />
+          Write a spec first: the agent starts from the Spec tab once you have agreed it
+        </label>
       )}
 
       {issue.description.trim() && (

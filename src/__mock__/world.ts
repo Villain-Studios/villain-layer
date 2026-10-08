@@ -25,6 +25,7 @@ import type {
   ReviewQueue,
   ReviewRequest,
   Settings,
+  Spec,
   TaskPrs,
   TaskView,
   UiPrefs,
@@ -55,7 +56,26 @@ export interface World {
   messages: Message[];
   /** Repo notes by project id (MEM-6). */
   notes: Record<string, RepoNote[]>;
+  /** Saved specs by task id (§19). */
+  specs: Record<string, Spec>;
 }
+
+/** The login task's spec, as saved. */
+const LOGIN_SPEC = `## Goal
+Two logins at once no longer leave one of them signed out.
+
+## Acceptance criteria
+- [ ] AC-1: Signing in twice within a second leaves both sessions valid.
+- [ ] AC-2: A session refresh that loses the race retries once, then reports a clear error.
+- [ ] AC-3: The submit button is disabled while a login is in flight.
+
+## Out of scope
+- Single sign-on.
+- Changing how long sessions last.
+
+## Open questions
+None.
+`;
 
 const now = Date.now();
 export const ago = (seconds: number) => new Date(now - seconds * 1000).toISOString();
@@ -461,6 +481,16 @@ function busy(): World {
     },
     messages: messages(),
     notes: notes(),
+    specs: {
+      "t-login": {
+        text: LOGIN_SPEC,
+        criteria: [
+          { id: "AC-1", text: "Signing in twice within a second leaves both sessions valid." },
+          { id: "AC-2", text: "A session refresh that loses the race retries once, then reports a clear error." },
+          { id: "AC-3", text: "The submit button is disabled while a login is in flight." },
+        ],
+      },
+    },
   };
 }
 
@@ -506,6 +536,7 @@ function empty(): World {
     issues: [], issueTypes: [], transitions: [], requiredFields: [], changed: [], feedback: [], output: {},
     messages: [],
     notes: {},
+    specs: {},
   };
 }
 

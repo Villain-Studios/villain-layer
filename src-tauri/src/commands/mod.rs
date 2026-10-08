@@ -129,6 +129,7 @@ mod open_prs;
 mod outgoing;
 mod landed;
 mod task_context;
+mod spec;
 mod notes;
 mod phone;
 mod browser;
@@ -152,6 +153,7 @@ pub use open_prs::*;
 pub use outgoing::*;
 pub(crate) use landed::{advance, landed};
 pub use notes::*;
+pub use spec::*;
 pub use phone::*;
 pub use browser::*;
 

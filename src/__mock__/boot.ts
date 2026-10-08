@@ -26,7 +26,7 @@
  */
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
-import type { BrowserView, Catchup, Cleaned, FlowStatus, Message, PaneInfo, PhoneStatus, Project, RepoUpdate, Synced, TaskView } from "../lib/types";
+import type { BrowserView, Catchup, Cleaned, FlowStatus, Message, PaneInfo, PhoneStatus, Project, RepoUpdate, Spec, Synced, TaskView } from "../lib/types";
 import { ago, SCENARIOS } from "./world";
 
 type Args = Record<string, unknown>;
@@ -177,6 +177,31 @@ function phoneAddresses(): PhoneStatus["addresses"] {
   ];
 }
 
+/** What a draft streams in: a spec for whichever ticket asked. */
+const DRAFT = `## Goal
+Password resets are rate-limited, so one address cannot be flooded with reset mails.
+
+## Acceptance criteria
+- [ ] AC-1: A sixth reset request for one address within an hour is refused with a clear message.
+- [ ] AC-2: Requests for different addresses are counted separately.
+- [ ] AC-3: The limit resets an hour after the first request.
+
+## Out of scope
+- Rate-limiting sign-ins.
+
+## Open questions
+- Should support staff be able to lift the limit for an address?
+`;
+
+/** The criteria of a spec, roughly as `spec::criteria` reads them. */
+function mockCriteria(text: string): Spec["criteria"] {
+  const part = text.split(/^#+ /m).find((p) => p.toLowerCase().startsWith("acceptance criteria")) ?? "";
+  return [...part.matchAll(/^[-*] (?:\[[ xX]\] )?(?:(AC-\d+)[:.]? )?(.+)$/gm)].map((m, i) => ({
+    id: m[1] ?? `AC-${i + 1}`,
+    text: m[2].trim(),
+  }));
+}
+
 const answer: Record<string, Answer> = {
   // What the app asks for on every launch.
   // A copy, as the real IPC's JSON always is: handing back the object a
@@ -226,7 +251,32 @@ const answer: Record<string, Answer> = {
   pty_resize: () => null,
   pty_detach: () => null,
   resumable_agents: () => [],
-  task_prompt: () => "Work on ACME-123: Fix login race.\n\nThe ticket says…",
+  task_prompt: (a) =>
+    "Work on ACME-123: Fix login race.\n\nThe ticket says…" +
+    (world.specs[a.taskId as string]
+      ? "\n\nThe user's spec for this work is /Users/you/.villain-worktrees/ACME-123/SPEC.md. Its acceptance criteria are what done means; read it before you start."
+      : ""),
+
+  // Specs (§19). A draft arrives in pieces, as the real one does.
+  read_spec: (a) => structuredClone(world.specs[a.taskId as string] ?? null),
+  save_spec: (a) => {
+    const text = (a.text as string).trim();
+    if (!text) {
+      delete world.specs[a.taskId as string];
+      return null;
+    }
+    world.specs[a.taskId as string] = { text, criteria: mockCriteria(text) };
+    return structuredClone(world.specs[a.taskId as string]);
+  },
+  draft_spec: async (a) => {
+    let sent = "";
+    for (const piece of DRAFT.match(/[^\n]*\n?/g) ?? []) {
+      await new Promise((r) => setTimeout(r, 60));
+      sent += piece;
+      void emit("spec:draft", { request_id: a.requestId, text: piece });
+    }
+    return sent;
+  },
   spawn_agent: (a) => newPane(a, "agent", a.taskId as string),
   spawn_shell: (a) => newPane(a, "shell", a.taskId as string),
   spawn_chat: (a) => newPane(a, "agent", "chat"),
@@ -371,6 +421,26 @@ const answer: Record<string, Answer> = {
   },
   jira_create_fields: () => world.requiredFields,
   jira_browse: () => ({ issues: world.issues, more: false }),
+  jira_start_work: (a) => {
+    const key = a.key as string;
+    const root = `/Users/you/.villain-worktrees/${key}`;
+    const task: TaskView = {
+      id: `t-${key.toLowerCase()}`, name: `${key} ${world.issues.find((i) => i.key === key)?.summary ?? ""}`.trim(),
+      root, branch: key, issue_key: key, issue_url: `https://acme.atlassian.net/browse/${key}`,
+      created_at: new Date().toISOString(), pane_count: 0,
+      checkouts: (a.projectIds as string[]).map((pid) => {
+        const name = world.projects.find((p) => p.id === pid)?.name ?? pid;
+        return {
+          id: `c-${key.toLowerCase()}-${name}`, task_id: `t-${key.toLowerCase()}`, project_id: pid, project_name: name,
+          path: `${root}/${name}`, base: "main", exists: true, broken: null, changed: 0,
+          status: { ahead: 0, behind: 0, staged: 0, unstaged: 0, untracked: 0, conflicted: 0, dirty_files: 0, branch: key },
+        };
+      }),
+    };
+    world.tasks.push(task);
+    if (a.agentId) newPane(a, "agent", task.id);
+    return { ...structuredClone(task), moved: "In Progress" };
+  },
   suggest_repos: () => ({ project_ids: [], reason: null }),
   project_branches: () => ["main", "develop"],
 

@@ -293,6 +293,21 @@ textarea { resize: vertical; font-family: var(--mono); }
 .empty p { margin: 0; max-width: 380px; line-height: 1.55; }
 .empty .row { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; }
 
+/* ------------------------------------------------------------------ spec */
+
+/* A task's spec (§19): the editor, and the criteria read from what is saved. */
+.spec { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.spec-bar { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.spec-bar select { width: auto; }
+.spec-warn { padding: 8px 14px; color: var(--amber); border-bottom: 1px solid var(--border-soft); }
+.spec-body { flex: 1; min-height: 0; display: flex; }
+.spec-editor { flex: 1; min-width: 0; resize: none; border: 0; border-radius: 0; padding: 14px; line-height: 1.55; background: var(--bg); }
+.spec-criteria { width: 300px; flex: none; overflow-y: auto; padding: 12px 14px; border-left: 1px solid var(--border); background: var(--panel); }
+.spec-criteria h3 { margin: 0 0 8px; font-size: 12px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.04em; }
+.spec-criteria ol { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.spec-criteria li { line-height: 1.45; }
+.spec-criteria b { font-family: var(--mono); font-size: 11px; color: var(--accent); margin-right: 4px; }
+
 /* --------------------------------------------------------------- browser */
 
 /* A task's tab beside its terminals (BRW-9). The page is a picture Chrome

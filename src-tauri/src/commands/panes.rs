@@ -407,6 +407,7 @@ const GENERATED_FILES: &[&str] = &[
     "CLAUDE.md",
     "AGENTS.md",
     super::task_context::TICKET_FILE,
+    super::spec::SPEC_FILE,
     ".mcp.json",
     "PR_DESCRIPTION.md",
     super::github::FEEDBACK_FILE,

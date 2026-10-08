@@ -10,6 +10,7 @@ mod integrations;
 mod mcp;
 mod messages;
 mod notes;
+mod oneshot;
 mod news;
 mod phone;
 mod previous;
@@ -257,6 +258,9 @@ pub fn run() {
             commands::handoff_prompt,
             commands::draft_pr_description,
             commands::optimize_issue_description,
+            commands::draft_spec,
+            commands::read_spec,
+            commands::save_spec,
             commands::request_pr_description,
             commands::take_pr_description,
             commands::github_connect,

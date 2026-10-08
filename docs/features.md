@@ -985,6 +985,7 @@ Known gaps:
 | Tickets follow the work (Jira) | not chosen | TKT-8, per Jira project |
 | Trust the folders this app creates | on | PANE-10 |
 | Terminal text | 13px | 9–24px |
+| Conversation text | 14px | 9–24px, an agent over ACP (ACP-15) |
 | Task folder location | `~/.villain-worktrees` | where task folders go |
 | Jira | — | site URL, email, API token, optional project key and JQL |
 | GitHub | — | API URL (`…/api/v3` for Enterprise), token (`repo`; `read:org` for a bare team slug), review team |
@@ -1502,6 +1503,11 @@ count and banner treats it like any other.
 - **ACP-14** A turn that fails on a usage limit MUST raise the
   usage-limit notice (STATE-6), read from the error's message; it clears
   when the agent next works.
+- **ACP-15** A conversation's text MUST have a size of its own (Settings
+  → Conversation text, 9–24px), as a terminal's has, apart from the
+  interface scale: the conversation and the message box follow it, every
+  part in proportion, and open panes change at once. The bar under the
+  message box (mode, model, usage) is the app's chrome and does not.
 
 Code: `acp/` (`conn.rs` the protocol, `user.rs`, `conversation.rs`,
 `entry.rs`, `read.rs`, `process.rs`), `pty/acp.rs`,

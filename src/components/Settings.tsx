@@ -351,19 +351,18 @@ export function Settings() {
             </select>
           </Field>
 
-          <Field
-            label={`Terminal text — ${ui!.terminal_font_size}px`}
+          <TextSize
+            label="Terminal text"
             hint="Applies to running panes immediately; they re-fit to the new cell size."
-          >
-            <input
-              type="range"
-              min={9}
-              max={24}
-              step={1}
-              value={ui!.terminal_font_size}
-              onChange={(e) => slideUi({ terminal_font_size: Number(e.target.value) })}
-            />
-          </Field>
+            value={ui!.terminal_font_size}
+            onChange={(v) => slideUi({ terminal_font_size: v })}
+          />
+          <TextSize
+            label="Conversation text"
+            hint="Agents started as a conversation (ACP): what they say, their tool calls and the message box. Applies to open ones immediately."
+            value={ui!.conversation_font_size}
+            onChange={(v) => slideUi({ conversation_font_size: v })}
+          />
         </>
       )}
 
@@ -682,5 +681,19 @@ export function Settings() {
         </>
       )}
     </Modal>
+  );
+}
+
+/** A text size in px, 9–24, saved as the slider moves. */
+function TextSize({ label, hint, value, onChange }: {
+  label: string;
+  hint: string;
+  value: number;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <Field label={`${label} — ${value}px`} hint={hint}>
+      <input type="range" min={9} max={24} step={1} value={value} onChange={(e) => onChange(Number(e.target.value))} />
+    </Field>
   );
 }

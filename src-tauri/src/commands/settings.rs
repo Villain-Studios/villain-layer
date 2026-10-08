@@ -68,6 +68,7 @@ pub fn set_ui_prefs(state: State<AppState>, ui: UiPrefs) -> Result<()> {
     let ui = UiPrefs {
         scale: ui.scale.clamp(0.8, 1.6),
         terminal_font_size: ui.terminal_font_size.clamp(9, 24),
+        conversation_font_size: ui.conversation_font_size.clamp(9, 24),
         restore_panes: ui.restore_panes,
         agents_read_panes: ui.agents_read_panes,
         trust_agent_dirs: ui.trust_agent_dirs,

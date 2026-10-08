@@ -83,6 +83,7 @@ export const ago = (seconds: number) => new Date(now - seconds * 1000).toISOStri
 const ui: UiPrefs = {
   scale: 1,
   terminal_font_size: 13,
+  conversation_font_size: 14,
   restore_panes: true,
   trust_agent_dirs: true,
   sync_jira_status: true,

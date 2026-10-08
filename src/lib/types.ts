@@ -391,6 +391,8 @@ export interface SlackConfig {
 export interface UiPrefs {
   scale: number;
   terminal_font_size: number;
+  /** An ACP conversation's text, in px (ACP-15). */
+  conversation_font_size: number;
   restore_panes: boolean;
   trust_agent_dirs: boolean;
   sync_jira_status: boolean;

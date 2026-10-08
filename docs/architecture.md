@@ -120,6 +120,7 @@ for, and the reverse, and that each is in this table.
 | `pty:activity` | pane id | a pane's state changed: a hook report, a keystroke, a notice cleared, a pane shown | `Watchers.tsx` → `refreshPanes` |
 | `pty:notice` | `{ pane_id, notice }` | a usage-limit or trust prompt appeared | `Watchers.tsx` → refresh and toast |
 | `pty:exit` | `{ pane_id, code }` | a pane's process ended | `Watchers.tsx` → refresh, toast, Slack |
+| `acp:update` | pane id | an ACP pane's conversation changed while it is on screen (batched, ~40ms; ACP-7) | `lib/acpUpdates.ts`, one listener for all → `AcpPane.tsx` asks `acp_view` for what changed |
 | `pr:draft` | `{ task_id, text }` | a chunk of a drafted PR description | `PrPanel.tsx` |
 | `issue:draft` | `{ request_id, text }` | a chunk of an improved ticket description | `tickets/OptimizeDescription.tsx` |
 | `spec:draft` | `{ request_id, text }` | a chunk of a task's drafted spec (SPEC-2) | `Watchers.tsx` → `specChunk`, into that task's editor |
@@ -282,6 +283,36 @@ app's config folder and returns its extra arguments and environment.
   the tools. Chat rooms get their own version. Nothing goes into a
   worktree (DISK-1).
 
+
+## Agents over ACP
+
+An agent over ACP (§20) has no terminal. `acp/` speaks the protocol and
+`pty/acp.rs` puts it in a pane, so the pane map, the cap, stopping,
+`attention.rs`, restore and the phone see an ordinary pane: a `Pane` whose
+`Io` is `Acp(Conn)` rather than `Pty`.
+
+- **The protocol** (`acp/conn.rs`, `user.rs`) is a state machine that runs
+  nothing: it is handed the agent's lines and puts what to send on a
+  channel, which is how its tests drive it with no process. Each step works
+  out its effects under the connection's lock and carries them out after:
+  lines sent, state reported, text printed, the pane told.
+- **The process** (`acp/process.rs`) starts in its own process group with
+  the login shell's environment (PANE-4), with a thread each to write, read,
+  keep the end of stderr and wait for the exit, as a terminal pane has.
+  Nothing runs on the async runtime or the main thread.
+- **The conversation** (`acp/conversation.rs`) is a list of entries with a
+  revision each: the window asks `acp_view(since)` for what changed after
+  the last revision it saw. The same updates write a plain-text copy into
+  the pane's scrollback, which is what `transcript`, the phone's feed and a
+  handoff read.
+- **State** comes from the protocol (`Sink::report`, ACP-2): `take_report`
+  as for a hook. Keys (`PtyManager::write`) map to cancel and answers;
+  `submit` sends a prompt whole.
+- **What it reads** is loose JSON (`acp/read.rs`), not a schema crate's
+  types: each agent adds fields of its own, and an update kind this does
+  not know is skipped, not an error that loses the message. The
+  `agent-client-protocol` crate would bring its own runtime-neutral process
+  and blocking machinery beside tokio for what is a few hundred lines here.
 ## Git
 
 `git.rs` (and `git/store.rs`, its submodule) is the only place git runs,

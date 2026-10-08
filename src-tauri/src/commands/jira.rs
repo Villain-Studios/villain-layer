@@ -1085,7 +1085,7 @@ pub async fn jira_start_work(
         let task_id = task.id.clone();
         let handle = app.clone();
         super::blocking(app.clone(), move |state| {
-            start_agent(&handle, state, task_id, agent_id, None, Some(prompt), Resume::No, None, None)
+            start_agent(&handle, state, task_id, agent_id, None, Some(prompt), Resume::No, None, None, false)
         })
         .await?;
     }

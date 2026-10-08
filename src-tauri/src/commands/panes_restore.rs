@@ -33,9 +33,18 @@ pub(crate) fn remember_pane(state: &AppState, pane: &PaneInfo) {
         cwd: Some(pane.cwd.clone()),
         failed: 0,
         waiting: false,
+        acp: pane.acp,
+        session: None,
     };
     let live: HashSet<String> = state.ptys.list(None).into_iter().map(|p| p.id).collect();
     let _ = state.config.update(|c| {
+        let mut saved = saved;
+        // Read under the config's lock, which the ACP connection takes to
+        // record the conversation too: one of the two is sure to see it,
+        // however the opening and this race (ACP-9).
+        if saved.acp {
+            saved.session = state.ptys.session(&saved.id).ok().flatten();
+        }
         // Replace rather than append: recording the same pane twice is how a
         // restore that also recorded what it restored doubled this list on
         // every launch.
@@ -215,6 +224,14 @@ fn put_back(app: &AppHandle, state: &AppState, pane: &SavedPane, resumed: &mut H
             return Back::Gone("it names no agent");
         };
         let room = pane.cwd.clone().map(PathBuf::from);
+        // Picked up by its id, so no other agent's (ACP-9).
+        if pane.acp {
+            let resume = Resume::Restart { cwd: pane.cwd.clone().unwrap_or_default(), session: pane.session.clone() };
+            return match open_chat(app, state, agent_id, None, room, resume, true) {
+                Ok(p) => Back::Opened(p),
+                Err(e) => Back::Failed(e),
+            };
+        }
         // Only resume where there is a conversation to resume: a chat
         // saved before folders were per-chat has nothing of its own.
         let resume = room.as_deref().is_some_and(|d| {
@@ -222,7 +239,7 @@ fn put_back(app: &AppHandle, state: &AppState, pane: &SavedPane, resumed: &mut H
             agents::resumable(&dir).iter().any(|r| r.agent_id == agent_id) && resumed.insert((agent_id.clone(), dir))
         });
         // No remember_pane here: spawning records the pane itself.
-        return match open_chat(app, state, agent_id, None, room, Resume::newest_if(resume)) {
+        return match open_chat(app, state, agent_id, None, room, Resume::newest_if(resume), false) {
             Ok(p) => Back::Opened(p),
             Err(e) => Back::Failed(e),
         };
@@ -231,6 +248,22 @@ fn put_back(app: &AppHandle, state: &AppState, pane: &SavedPane, resumed: &mut H
         return Back::Gone("its task is gone");
     };
     let restored = match pane.kind.as_str() {
+        "agent" if pane.acp => {
+            let Some(agent_id) = pane.agent_id.clone() else {
+                return Back::Gone("it names no agent");
+            };
+            // In the folder it ran in, on the conversation it gave the id of
+            // (ACP-9).
+            let cwd = match pane.cwd.clone() {
+                Some(cwd) => cwd,
+                None => match resolve_scope(state, &task, pane.checkout_id.as_deref()) {
+                    Ok((cwd, _, _)) => cwd,
+                    Err(e) => return Back::Failed(e),
+                },
+            };
+            let resume = Resume::Restart { cwd, session: pane.session.clone() };
+            start_agent(app, state, pane.task_id.clone(), agent_id, pane.checkout_id.clone(), None, resume, None, None, true)
+        }
         "agent" => {
             let Some(agent_id) = pane.agent_id.clone() else {
                 return Back::Gone("it names no agent");
@@ -254,7 +287,7 @@ fn put_back(app: &AppHandle, state: &AppState, pane: &SavedPane, resumed: &mut H
                 None => false,
             };
 
-            start_agent(app, state, pane.task_id.clone(), agent_id, pane.checkout_id.clone(), None, Resume::newest_if(resume), None, None)
+            start_agent(app, state, pane.task_id.clone(), agent_id, pane.checkout_id.clone(), None, Resume::newest_if(resume), None, None, false)
         }
         _ => open_shell(app, state, pane.task_id.clone(), pane.checkout_id.clone(), None, None),
     };
@@ -384,6 +417,8 @@ mod tests {
             cwd: Some(format!("/w/{id}")),
             failed: 0,
             waiting: false,
+            acp: false,
+            session: None,
         }
     }
 

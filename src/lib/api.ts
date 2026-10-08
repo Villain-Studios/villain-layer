@@ -1,5 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
+  AcpView,
   AddedRepo,
   AgentStatus,
   Catchup,
@@ -118,11 +119,12 @@ export const api = {
   listPanes: (taskId?: string) => invoke<PaneInfo[]>("list_panes", { taskId: taskId ?? null }),
   spawnShell: (taskId: string, checkoutId?: string | null) =>
     invoke<PaneInfo>("spawn_shell", { taskId, checkoutId: checkoutId ?? null }),
+  /** `acp`: as a conversation over ACP rather than in a terminal (§20). */
   spawnAgent: (
     taskId: string, agentId: string,
-    checkoutId?: string | null, prompt?: string | null, resume = false,
+    checkoutId?: string | null, prompt?: string | null, resume = false, acp = false,
   ) => invoke<PaneInfo>("spawn_agent", {
-    taskId, agentId, checkoutId: checkoutId ?? null, prompt: prompt ?? null, resume,
+    taskId, agentId, checkoutId: checkoutId ?? null, prompt: prompt ?? null, resume, acp,
   }),
   /** Panes the last launch did not put back, waiting for the user (PANE-7). */
   waitingPanes: () => invoke<WaitingPane[]>("waiting_panes"),
@@ -130,8 +132,8 @@ export const api = {
   forgetWaitingPane: (id: string) => invoke<void>("forget_waiting_pane", { id }),
   resumableAgents: (taskId: string, checkoutId?: string | null) =>
     invoke<Resumable[]>("resumable_agents", { taskId, checkoutId: checkoutId ?? null }),
-  spawnChat: (agentId: string, prompt?: string | null) =>
-    invoke<PaneInfo>("spawn_chat", { agentId, prompt: prompt ?? null }),
+  spawnChat: (agentId: string, prompt?: string | null, acp = false) =>
+    invoke<PaneInfo>("spawn_chat", { agentId, prompt: prompt ?? null, acp }),
   ptyWrite: (paneId: string, data: string) => invoke<void>("pty_write", { paneId, data }),
   ptyResize: (paneId: string, rows: number, cols: number) =>
     invoke<void>("pty_resize", { paneId, rows, cols }),
@@ -142,6 +144,16 @@ export const api = {
   killPane: (paneId: string) => invoke<void>("kill_pane", { paneId }),
   /** Stop an agent and start it again where it was, on its conversation (PANE-14). */
   restartPane: (paneId: string) => invoke<PaneInfo>("restart_pane", { paneId }),
+
+  // an agent over ACP (§20); `ptyDetach` says it is off screen, as for a terminal
+  /** What changed since `since`, and the pane is on screen from now (ACP-7). */
+  acpView: (paneId: string, since: number | null) => invoke<AcpView>("acp_view", { paneId, since }),
+  acpPrompt: (paneId: string, text: string) => invoke<void>("acp_prompt", { paneId, text }),
+  acpCancel: (paneId: string) => invoke<boolean>("acp_cancel", { paneId }),
+  acpAnswer: (paneId: string, entry: number, option: string) =>
+    invoke<void>("acp_answer", { paneId, entry, option }),
+  acpSet: (paneId: string, setting: string, value: string) =>
+    invoke<void>("acp_set", { paneId, setting, value }),
 
   // diff + git
   diffFiles: (

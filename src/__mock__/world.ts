@@ -108,10 +108,10 @@ const disconnected: Settings = {
 };
 
 const agents: AgentStatus[] = [
-  { id: "claude", name: "Claude Code", program: "claude", installed: true, path: "/usr/local/bin/claude", resumes: true },
-  { id: "copilot", name: "GitHub Copilot CLI", program: "copilot", installed: true, path: "/usr/local/bin/copilot", resumes: false },
-  { id: "opencode", name: "OpenCode", program: "opencode", installed: false, path: null, resumes: false },
-  { id: "gemini", name: "Gemini CLI", program: "gemini", installed: true, path: "/usr/local/bin/gemini", resumes: false },
+  { id: "claude", name: "Claude Code", program: "claude", installed: true, path: "/usr/local/bin/claude", resumes: true, acp: true },
+  { id: "copilot", name: "GitHub Copilot CLI", program: "copilot", installed: true, path: "/usr/local/bin/copilot", resumes: false, acp: true },
+  { id: "opencode", name: "OpenCode", program: "opencode", installed: false, path: null, resumes: false, acp: false },
+  { id: "gemini", name: "Gemini CLI", program: "gemini", installed: true, path: "/usr/local/bin/gemini", resumes: false, acp: false },
 ];
 
 const issueTypes: JiraIssueType[] = [
@@ -250,13 +250,15 @@ function pane(
     id, task_id: task, checkout_id: null, kind, title, agent_id: agent,
     cwd: `/Users/you/.villain-worktrees/${task}`, running: true, exit_code: null,
     started_at: ago(3600), last_output_at: ago(2), notice: null,
-    activity, activity_since: ago(since), topic: null, ...extra,
+    activity, activity_since: ago(since), topic: null, acp: false, ...extra,
   };
 }
 
 const panes: PaneInfo[] = [
   pane("pane-claude", "t-login", "agent", "Claude Code · api", "claude", "asking", 40, { topic: "Fix the login redirect loop" }),
   pane("pane-shell", "t-login", "shell", "Shell · api", null, "idle", 3600, { checkout_id: "c-login-api" }),
+  // An agent over ACP (§20), mid-conversation and asking (`acp.ts`).
+  pane("pane-acp", "t-login", "agent", "Claude Code · api", "claude", "asking", 25, { topic: "Rate-limit POST /login", acp: true }),
   pane("pane-copilot", "t-audit", "agent", "GitHub Copilot CLI", "copilot", "done", 300),
   pane("pane-chat", "chat", "agent", "Claude Code (resumed)", "claude", "working", 12, { topic: "Which tickets block the release", cwd: CHAT_ROOM }),
 ];

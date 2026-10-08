@@ -87,6 +87,7 @@ mod tests {
             activity: Activity::Asking,
             activity_since: now,
             topic: None,
+            acp: false,
         }
     }
 

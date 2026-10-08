@@ -199,6 +199,13 @@ pub struct SavedPane {
     /// for the user to reopen or forget, and never reopened by a launch.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub waiting: bool,
+    /// Run over ACP (§20), and so put back that way.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub acp: bool,
+    /// The conversation an ACP agent was in, by the id it gave: what a
+    /// restore picks up (ACP-9).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
 }
 
 /// Presentation preferences. Terminal text scales separately from the chrome,

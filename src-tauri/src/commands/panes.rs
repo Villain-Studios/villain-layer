@@ -179,12 +179,13 @@ pub async fn spawn_agent(
     resume: Option<bool>,
     rows: Option<u16>,
     cols: Option<u16>,
+    acp: Option<bool>,
 ) -> Result<PaneInfo> {
     let handle = app.clone();
     super::blocking(app, move |state| {
         start_agent(
             &handle, state, task_id, agent_id, checkout_id, prompt,
-            Resume::newest_if(resume.unwrap_or(false)), rows, cols,
+            Resume::newest_if(resume.unwrap_or(false)), rows, cols, acp.unwrap_or(false),
         )
     })
     .await
@@ -276,20 +277,36 @@ pub(crate) fn start_agent(
     resume: Resume,
     rows: Option<u16>,
     cols: Option<u16>,
+    acp: bool,
 ) -> Result<PaneInfo> {
     let task = state.config.task(&task_id)?;
     let def = agents::find(&agent_id)
         .ok_or_else(|| Error::NotFound(format!("agent {agent_id}")))?;
-    let program = shellenv::which(def.program)
-        .ok_or_else(|| Error::NotFound(format!("{} is not on your PATH", def.program)))?;
 
     let (mut cwd, scope, checkout_id) = resolve_scope(state, &task, checkout_id.as_deref())?;
     match &resume {
-        Resume::Newest if checkout_id.is_none() => cwd = resume_dir(state, &task, &agent_id, &cwd),
+        // An ACP agent lists its own conversations for the folder (ACP-9).
+        Resume::Newest if checkout_id.is_none() && !acp => cwd = resume_dir(state, &task, &agent_id, &cwd),
         // Where it ran, which `resume_dir` may once have picked over the root.
         Resume::Restart { cwd: ran, .. } => cwd = ran.clone(),
         _ => {}
     }
+    let title = format!("{} · {scope}{}", def.name, if resume != Resume::No { " (resumed)" } else { "" });
+
+    if acp {
+        // The task's context file and `.mcp.json` all the same: the agent
+        // reads the first, and a CLI run by hand there the second.
+        let _ = write_task_context(state, &task);
+        if let Some(dir) = agent_file_dir(state, &task) {
+            let _ = crate::mcp::write_config(&dir);
+        }
+        let start = super::acp_panes::Start { task_id, checkout_id, cwd, title, prompt, resume };
+        let pane = super::acp_panes::start(app, state, def, start)?;
+        remember_pane(state, &pane);
+        return Ok(pane);
+    }
+    let program = shellenv::which(def.program)
+        .ok_or_else(|| Error::NotFound(format!("{} is not on your PATH", def.program)))?;
 
     // Resuming means handing the conversation back to the CLI, so an opening
     // prompt would only talk over it.
@@ -320,7 +337,7 @@ pub(crate) fn start_agent(
             checkout_id,
             cwd,
             kind: PaneKind::Agent,
-            title: format!("{} · {scope}{}", def.name, if resume != Resume::No { " (resumed)" } else { "" }),
+            title,
             program,
             args,
             agent_id: Some(agent_id),
@@ -441,6 +458,10 @@ pub(crate) fn typeable(dir: Option<&Path>, file: &str, text: &str) -> Result<Str
 
 /// Type `text` into a running agent in `task`, through `typeable`.
 pub(crate) fn hand_over(state: &AppState, task: &Task, pane_id: &str, file: &str, text: &str) -> Result<()> {
+    // A conversation takes it whole (ACP-4): only a terminal needs it short.
+    if state.ptys.is_acp(pane_id) {
+        return state.ptys.submit(pane_id, text);
+    }
     let typed = typeable(agent_file_dir(state, task).as_deref(), file, text)?;
     state.ptys.submit(pane_id, &typed)
 }
@@ -577,9 +598,10 @@ pub async fn spawn_chat(
     app: AppHandle,
     agent_id: String,
     prompt: Option<String>,
+    acp: Option<bool>,
 ) -> Result<PaneInfo> {
     let handle = app.clone();
-    super::blocking(app, move |state| open_chat(&handle, state, agent_id, prompt, None, Resume::No))
+    super::blocking(app, move |state| open_chat(&handle, state, agent_id, prompt, None, Resume::No, acp.unwrap_or(false)))
         .await
 }
 
@@ -591,11 +613,10 @@ pub(crate) fn open_chat(
     // An existing chat folder to reopen, or None to start a new one.
     room: Option<PathBuf>,
     resume: Resume,
+    acp: bool,
 ) -> Result<PaneInfo> {
     let def = agents::find(&agent_id)
         .ok_or_else(|| Error::NotFound(format!("agent {agent_id}")))?;
-    let program = shellenv::which(def.program)
-        .ok_or_else(|| Error::NotFound(format!("{} is not on your PATH", def.program)))?;
 
     let dir = match room {
         Some(dir) => {
@@ -608,6 +629,17 @@ pub(crate) fn open_chat(
     // refuse to start the agent.
     let _ = write_chat_context(state, &dir);
     let _ = crate::mcp::write_config(&dir);
+    let title = format!("{}{}", def.name, if resume != Resume::No { " (resumed)" } else { "" });
+
+    if acp {
+        let cwd = dir.to_string_lossy().to_string();
+        let start = super::acp_panes::Start { task_id: CHAT_TASK_ID.to_string(), checkout_id: None, cwd, title, prompt, resume };
+        let pane = super::acp_panes::start(app, state, def, start)?;
+        remember_pane(state, &pane);
+        return Ok(pane);
+    }
+    let program = shellenv::which(def.program)
+        .ok_or_else(|| Error::NotFound(format!("{} is not on your PATH", def.program)))?;
 
     // Resuming hands the conversation back to the CLI, so an opening prompt
     // would only talk over it.
@@ -628,7 +660,7 @@ pub(crate) fn open_chat(
             checkout_id: None,
             cwd: dir.to_string_lossy().to_string(),
             kind: PaneKind::Agent,
-            title: format!("{}{}", def.name, if resume != Resume::No { " (resumed)" } else { "" }),
+            title,
             program,
             args,
             agent_id: Some(agent_id),
@@ -718,20 +750,26 @@ pub async fn restart_pane(app: AppHandle, pane_id: String) -> Result<PaneInfo> {
 
 fn restart(app: &AppHandle, state: &AppState, id: &str) -> Result<PaneInfo> {
     let old = state.ptys.info(id)?;
+    // Over ACP the conversation is picked up by its id, whatever the CLI
+    // (ACP-9).
     let def = old
         .agent_id
         .as_deref()
         .and_then(agents::find)
-        .filter(|d| d.resume_args.is_some())
+        .filter(|d| if old.acp { d.acp.is_some() } else { d.resume_args.is_some() })
         .ok_or_else(|| Error::Other(format!("{} cannot pick its conversation back up, so a restart would lose it.", old.title)))?;
     // Checked before it is stopped: stopped, then not started, is the one
     // way this loses an agent.
-    shellenv::which(def.program).ok_or_else(|| Error::NotFound(format!("{} is not on your PATH", def.program)))?;
+    let program = match (old.acp, def.acp) {
+        (true, Some(cmd)) => cmd.program,
+        _ => def.program,
+    };
+    shellenv::which(program).ok_or_else(|| Error::NotFound(format!("{program} is not on your PATH")))?;
     let session = state.ptys.session(id)?;
     // Without its id, `--continue` takes the folder's newest conversation,
     // and another agent there may be the one writing it.
     let shared = state.ptys.list(None).into_iter().any(|p| p.id != id && p.running && p.agent_id == old.agent_id && p.cwd == old.cwd);
-    if session.is_none() && shared {
+    if session.is_none() && shared && !old.acp {
         return Err(Error::Other(format!(
             "Another {} is open in this folder, and this one never said which conversation it is in, so a restart could pick up the other's.",
             def.name,
@@ -743,9 +781,9 @@ fn restart(app: &AppHandle, state: &AppState, id: &str) -> Result<PaneInfo> {
     let resume = Resume::Restart { cwd: old.cwd.clone(), session };
     let agent_id = def.id.to_string();
     let started = if old.task_id == CHAT_TASK_ID {
-        open_chat(app, state, agent_id, None, Some(PathBuf::from(&old.cwd)), resume)
+        open_chat(app, state, agent_id, None, Some(PathBuf::from(&old.cwd)), resume, old.acp)
     } else {
-        start_agent(app, state, old.task_id.clone(), agent_id, old.checkout_id.clone(), None, resume, None, None)
+        start_agent(app, state, old.task_id.clone(), agent_id, old.checkout_id.clone(), None, resume, None, None, old.acp)
     };
     let _ = state.config.update(|c| match &started {
         Ok(_) => c.saved_panes.retain(|p| p.id != id),

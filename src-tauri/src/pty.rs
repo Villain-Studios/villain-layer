@@ -18,6 +18,7 @@ use tauri::{AppHandle, Emitter, Runtime};
 use crate::error::{Error, Result};
 use crate::shellenv;
 
+mod acp;
 pub mod feed;
 mod output;
 mod screen;
@@ -87,6 +88,9 @@ pub struct PaneInfo {
     /// UI gives the pane in place of the agent's (PANE-12). None until it
     /// says, and for a CLI that never does.
     pub topic: Option<String>,
+    /// An agent over ACP (§20), drawn as a conversation rather than a
+    /// terminal.
+    pub acp: bool,
 }
 
 /// What an agent is doing, as best the app can tell.
@@ -244,23 +248,35 @@ impl PaneMeta {
     }
 }
 
+/// How the app talks to what runs in a pane.
+enum Io {
+    /// A terminal: keys in, a screen out.
+    Pty {
+        master: Mutex<Box<dyn MasterPty + Send>>,
+        /// Keystrokes on their way to the process, written by a thread of the
+        /// pane's own.
+        ///
+        /// `pty_write` runs on the main thread, and a PTY's input queue is small:
+        /// a paste into an agent that is busy and not reading filled it, and the
+        /// write then sat on the main thread until the agent read — with the
+        /// window frozen for all of it. A queue keeps the keys in order and the
+        /// wait somewhere nobody is looking.
+        input: std::sync::mpsc::Sender<Vec<u8>>,
+        killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
+    },
+    /// An agent over ACP: prompts in, a conversation out (`acp/`, ACP-*).
+    /// Its scrollback holds the conversation's text copy (ACP-7).
+    Acp(Arc<crate::acp::Conn>),
+}
+
 struct Pane {
     meta: Mutex<PaneMeta>,
     /// The child's pid, which is also its process-group id: portable-pty calls
-    /// setsid() so the agent leads its own session. Signalling the group
-    /// reaches anything the agent spawned as well.
+    /// setsid() so the agent leads its own session, and an ACP agent is
+    /// started in a group of its own. Signalling the group reaches anything
+    /// the agent spawned as well.
     pid: Option<u32>,
-    master: Mutex<Box<dyn MasterPty + Send>>,
-    /// Keystrokes on their way to the process, written by a thread of the
-    /// pane's own.
-    ///
-    /// `pty_write` runs on the main thread, and a PTY's input queue is small:
-    /// a paste into an agent that is busy and not reading filled it, and the
-    /// write then sat on the main thread until the agent read — with the
-    /// window frozen for all of it. A queue keeps the keys in order and the
-    /// wait somewhere nobody is looking.
-    input: std::sync::mpsc::Sender<Vec<u8>>,
-    killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
+    io: Io,
     output: Mutex<Output>,
     flush_scheduled: AtomicBool,
     /// When the last event went out, so a burst is coalesced and a lone key
@@ -509,10 +525,9 @@ impl PtyManager {
         }
     }
 
-    pub fn spawn<R: Runtime>(&self, app: &AppHandle<R>, opts: SpawnOptions) -> Result<PaneInfo> {
-        if let Some(input) = &opts.initial_input {
-            too_long_to_type(input)?;
-        }
+    /// A place under `MAX_PANES` for a pane about to start, in a folder that
+    /// exists.
+    fn reserve(&self, cwd: &str) -> Result<Reserved<'_>> {
         // Checked before anything is allocated, so refusing costs nothing.
         let slot = {
             let panes = self.panes.lock();
@@ -532,9 +547,68 @@ impl PtyManager {
         // without a word. A worktree deleted by hand then got `claude
         // --continue` in the home folder — resuming the wrong conversation, or
         // walking out into Photos and Downloads.
-        if !std::path::Path::new(&opts.cwd).is_dir() {
-            return Err(Error::Pty(format!("{} no longer exists", opts.cwd)));
+        if !std::path::Path::new(cwd).is_dir() {
+            return Err(Error::Pty(format!("{cwd} no longer exists")));
         }
+        Ok(slot)
+    }
+
+    /// A new pane's record, not yet in the map.
+    fn new_pane(opts: &SpawnOptions, id: &str, pid: Option<u32>, io: Io) -> (PaneInfo, Arc<Pane>) {
+        let now = Utc::now();
+        let info = PaneInfo {
+            id: id.to_string(),
+            task_id: opts.task_id.clone(),
+            checkout_id: opts.checkout_id.clone(),
+            kind: opts.kind,
+            title: opts.title.clone(),
+            agent_id: opts.agent_id.clone(),
+            cwd: opts.cwd.clone(),
+            running: true,
+            exit_code: None,
+            started_at: now,
+            last_output_at: now,
+            notice: None,
+            activity: Activity::Idle,
+            activity_since: now,
+            topic: None,
+            acp: matches!(io, Io::Acp(_)),
+        };
+        let pane = Arc::new(Pane {
+            meta: Mutex::new(PaneMeta {
+                info: info.clone(),
+                stopping: false,
+                reported: None,
+                last_work: now,
+                last_input: Instant::now(),
+                prompted: opts.prompted || opts.initial_input.is_some(),
+                seen_at: now,
+                title: String::new(),
+                cleared_notice: None,
+                notice_at: now,
+                session: None,
+            }),
+            pid,
+            io,
+            output: Mutex::new(Output { scrollback: Vec::new(), total: 0, sent: 0 }),
+            flush_scheduled: AtomicBool::new(false),
+            last_flush: Mutex::new(Instant::now()),
+            typed: Mutex::new(None),
+            urgent: Mutex::new(false),
+            wake: parking_lot::Condvar::new(),
+            // Nothing is on screen until the webview attaches, and attaching
+            // collects whatever was printed before it did.
+            watched: AtomicBool::new(false),
+            printed: tokio::sync::watch::Sender::new(()),
+        });
+        (info, pane)
+    }
+
+    pub fn spawn<R: Runtime>(&self, app: &AppHandle<R>, opts: SpawnOptions) -> Result<PaneInfo> {
+        if let Some(input) = &opts.initial_input {
+            too_long_to_type(input)?;
+        }
+        let slot = self.reserve(&opts.cwd)?;
 
         let system = portable_pty::native_pty_system();
         let size = PtySize {
@@ -611,55 +685,9 @@ impl PtyManager {
             }
         });
 
-        let now = Utc::now();
-        let info = PaneInfo {
-            id: id.clone(),
-            task_id: opts.task_id.clone(),
-            checkout_id: opts.checkout_id.clone(),
-            kind: opts.kind,
-            title: opts.title.clone(),
-            agent_id: opts.agent_id.clone(),
-            cwd: opts.cwd.clone(),
-            running: true,
-            exit_code: None,
-            started_at: now,
-            last_output_at: now,
-            notice: None,
-            activity: Activity::Idle,
-            activity_since: now,
-            topic: None,
-        };
-
-        let pid = child.process_id();
-        let pane = Arc::new(Pane {
-            meta: Mutex::new(PaneMeta {
-                info: info.clone(),
-                stopping: false,
-                reported: None,
-                last_work: now,
-                last_input: Instant::now(),
-                prompted: opts.prompted || opts.initial_input.is_some(),
-                seen_at: now,
-                title: String::new(),
-                cleared_notice: None,
-                notice_at: now,
-                session: None,
-            }),
-            pid,
-            master: Mutex::new(pair.master),
-            input,
-            killer: Mutex::new(killer),
-            output: Mutex::new(Output { scrollback: Vec::new(), total: 0, sent: 0 }),
-            flush_scheduled: AtomicBool::new(false),
-            last_flush: Mutex::new(Instant::now()),
-            typed: Mutex::new(None),
-            urgent: Mutex::new(false),
-            wake: parking_lot::Condvar::new(),
-            // Nothing is on screen until the webview attaches, and attaching
-            // collects whatever was printed before it did.
-            watched: AtomicBool::new(false),
-            printed: tokio::sync::watch::Sender::new(()),
-        });
+        let typing = input.clone();
+        let io = Io::Pty { master: Mutex::new(pair.master), input, killer: Mutex::new(killer) };
+        let (info, pane) = Self::new_pane(&opts, &id, child.process_id(), io);
 
         self.panes.lock().insert(id.clone(), pane.clone());
         drop(slot);
@@ -798,7 +826,7 @@ impl PtyManager {
         }
 
         if let Some(input) = opts.initial_input {
-            let keys = pane.input.clone();
+            let keys = typing;
             std::thread::spawn(move || {
                 // Give the agent's TUI a moment to draw its prompt first.
                 std::thread::sleep(std::time::Duration::from_millis(1200));
@@ -823,6 +851,15 @@ impl PtyManager {
     /// answered, a turn interrupted — which nothing else would announce.
     pub fn write(&self, id: &str, data: &str) -> Result<bool> {
         let pane = self.get(id)?;
+        let input = match &pane.io {
+            Io::Pty { input, .. } => input,
+            // Esc stops a conversation and a digit answers its question
+            // (ACP-10); what that changes, the agent reports itself.
+            Io::Acp(conn) => {
+                conn.key(data);
+                return Ok(false);
+            }
+        };
         *pane.typed.lock() = Some(Instant::now());
         let changed = {
             let watched = pane.watched.load(Ordering::Acquire);
@@ -831,7 +868,7 @@ impl PtyManager {
             meta.typed(data);
             meta.activity(watched, Utc::now()) != before
         };
-        pane.input
+        input
             .send(data.as_bytes().to_vec())
             .map_err(|_| Error::Pty("the terminal has closed".into()))?;
         Ok(changed)
@@ -845,10 +882,14 @@ impl PtyManager {
     /// shows up, but nothing is submitted until someone presses Enter again.
     /// A short gap between the two is enough for the TUI to accept the submit.
     pub fn submit(&self, id: &str, text: &str) -> Result<()> {
-        too_long_to_type(text)?;
         let pane = self.get(id)?;
+        let keys = match &pane.io {
+            Io::Pty { input, .. } => input.clone(),
+            // Nothing is typed into a conversation: it is sent whole (ACP-4).
+            Io::Acp(conn) => return conn.prompt(text),
+        };
+        too_long_to_type(text)?;
         pane.meta.lock().sent("\r");
-        let keys = pane.input.clone();
         let payload = text.as_bytes().to_vec();
         std::thread::spawn(move || {
             if keys.send(payload).is_ok() {
@@ -861,8 +902,11 @@ impl PtyManager {
 
     pub fn resize(&self, id: &str, rows: u16, cols: u16) -> Result<()> {
         let pane = self.get(id)?;
+        let Io::Pty { master, .. } = &pane.io else {
+            return Ok(());
+        };
         pane.meta.lock().last_input = Instant::now();
-        let master = pane.master.lock();
+        let master = master.lock();
         master
             .resize(PtySize {
                 rows,
@@ -983,8 +1027,8 @@ impl PtyManager {
             };
             // Negative pid signals the whole group, catching subprocesses too.
             unsafe { libc::kill(-(pid as i32), signal) };
-        } else {
-            let _ = pane.killer.lock().kill();
+        } else if let Io::Pty { killer, .. } = &pane.io {
+            let _ = killer.lock().kill();
         }
     }
 
@@ -1001,7 +1045,9 @@ impl PtyManager {
                 libc::kill(-(pid as i32), libc::SIGKILL);
             },
             _ => {
-                let _ = pane.killer.lock().kill();
+                if let Io::Pty { killer, .. } = &pane.io {
+                    let _ = killer.lock().kill();
+                }
             }
         }
     }
@@ -1172,6 +1218,7 @@ mod tests {
                 activity: Activity::Idle,
                 activity_since: now,
                 topic: None,
+                acp: false,
             },
             stopping: false,
             reported: None,

@@ -266,6 +266,7 @@ mod tests {
             activity,
             activity_since: now,
             topic: None,
+            acp: false,
         }
     }
 

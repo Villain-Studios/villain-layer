@@ -10,6 +10,7 @@ mod integrations;
 mod mcp;
 mod messages;
 mod notes;
+mod oneshot;
 mod news;
 mod phone;
 mod previous;

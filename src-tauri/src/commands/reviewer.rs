@@ -16,9 +16,10 @@ use tauri::AppHandle;
 
 use crate::error::{Error, Result};
 use crate::git;
+use crate::oneshot::{oneshot, Oneshot};
 use crate::shellenv;
 
-use super::jira::{oneshot, review_context, reviewed_repos, Oneshot, Reviewed};
+use super::jira::{review_context, reviewed_repos, Reviewed};
 use super::task_context::TICKET_FILE;
 use super::AppState;
 

@@ -103,37 +103,6 @@ pub async fn jira_connect(
     Ok(who.display_name)
 }
 
-/// Every epic on a project, not just the ones already carrying work.
-///
-/// The New task dialog offered whatever epics happened to appear in the user's
-/// own issue list, which is the epics that already have tickets on them — the
-/// least useful set when the point of the dialog is to file the first one.
-/// Asked of Jira directly instead, by the hierarchy level that means "epic"
-/// everywhere rather than by a name that means it only here.
-#[tauri::command]
-pub async fn jira_epics(
-    state: State<'_, AppState>,
-    project_key: String,
-) -> Result<Vec<jira::Issue>> {
-    let types = jira_issue_types_inner(&state, false).await?;
-    let names: Vec<String> = types
-        .iter()
-        .filter(|t| t.hierarchy_level >= 1)
-        .map(|t| jira::jql_string(&t.name))
-        .collect();
-    if names.is_empty() || project_key.trim().is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let (client, _) = jira_client(&state)?;
-    let jql = format!(
-        "project = {} AND issuetype in ({}) AND statusCategory != Done ORDER BY key DESC",
-        jira::jql_string(project_key.trim()),
-        names.join(", "),
-    );
-    Ok(client.search(&jql, 200).await?.issues)
-}
-
 /// Every issue type this Jira defines, with its own icon. Nothing about types
 /// is hardcoded — a site with custom types renders exactly as it does in Jira.
 #[tauri::command]
@@ -983,9 +952,9 @@ pub(crate) async fn create_fields_for(
 
 /// File a ticket without starting work on it.
 ///
-/// Separate from `jira_create_task` because filing under an epic and opening
-/// worktrees are different intentions: adding a ticket to a plan is not saying
-/// you will start it now.
+/// Filing under an epic and opening worktrees are different intentions:
+/// adding a ticket to a plan is not saying you will start it now. Start work
+/// on the ticket does that (`jira_start_work`).
 #[tauri::command]
 pub async fn jira_create_issue(state: State<'_, AppState>, req: NewIssue) -> Result<jira::Issue> {
     let summary = req.summary.trim().to_string();
@@ -1019,104 +988,6 @@ pub async fn jira_create_issue(state: State<'_, AppState>, req: NewIssue) -> Res
         )
         .await?;
     client.issue(&key).await
-}
-
-#[derive(Debug, Deserialize)]
-pub struct NewJiraTask {
-    pub summary: String,
-    #[serde(default)]
-    pub description: String,
-    pub issue_type: String,
-    /// Falls back to the project configured in Settings.
-    #[serde(default)]
-    pub project_key: Option<String>,
-    /// The epic, or any parent the issue type allows.
-    #[serde(default)]
-    pub parent_key: Option<String>,
-    pub project_ids: Vec<String>,
-    #[serde(default)]
-    pub branch_suffix: Option<String>,
-    /// Branch every worktree is cut from; each repo's default when omitted.
-    #[serde(default)]
-    pub base: Option<String>,
-    #[serde(default)]
-    pub fields: Option<Value>,
-}
-
-/// File the ticket and open the worktrees in one step.
-///
-/// The ticket goes first because the key it comes back with is what names the
-/// branch, the folder and the task. If the worktrees then fail, the ticket is
-/// left standing — deleting someone's issue to tidy up after a git error would
-/// be worse than the orphan — and the error says so, naming the key, so the
-/// work can be picked up with "start work" once the repositories are sorted.
-#[tauri::command]
-pub async fn jira_create_task(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    req: NewJiraTask,
-) -> Result<Started> {
-    if req.project_ids.is_empty() {
-        return Err(Error::Other("pick at least one repository".into()));
-    }
-    let summary = req.summary.trim().to_string();
-    if summary.is_empty() {
-        return Err(Error::Other("the ticket needs a summary".into()));
-    }
-
-    let (client, cfg) = jira_client(&state)?;
-    let project_key = req
-        .project_key
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_uppercase)
-        .or_else(|| req.parent_key.as_deref().and_then(project_of))
-        .or_else(|| cfg.project_key.clone())
-        .ok_or_else(|| {
-            Error::Other("no Jira project to file into — set a project key in Settings".into())
-        })?;
-
-    let key = client
-        .create_issue(
-            &project_key,
-            &summary,
-            &req.description,
-            &req.issue_type,
-            req.parent_key.as_deref(),
-            &req.fields.clone().unwrap_or(Value::Null),
-        )
-        .await?;
-    let url = format!("{}/browse/{key}", cfg.base_url.trim_end_matches('/'));
-
-    let new = NewTask {
-        name: format!("{key} {summary}"),
-        project_ids: req.project_ids,
-        branch: None,
-        branch_suffix: req.branch_suffix,
-        base: req.base,
-        issue_key: Some(key.clone()),
-        issue_url: Some(url),
-        epic_key: req.parent_key.clone(),
-    };
-    // Worktrees on the blocking pool: a `git fetch` and a `worktree add` per
-    // repository do not belong on the async workers.
-    let task = super::blocking(app.clone(), move |state| new_task(state, new))
-    .await
-    .map_err(|e| {
-        Error::Other(format!(
-            "{key} was filed in Jira, but its worktrees were not created: {e}. The ticket \
-             is still there — start work on it from Tickets once that is sorted."
-        ))
-    })?;
-    // Read back rather than built from the request: Jira is what decides the
-    // type's name, the epic's title and how the description renders.
-    if let Ok(issue) = client.issue(&key).await {
-        keep_ticket(app.clone(), task.clone(), issue).await;
-    }
-
-    let moved = sync_started(&state, &key).await;
-    Ok(Started { task, moved })
 }
 
 /// Move a ticket into progress alongside the worktrees, if that is wanted.

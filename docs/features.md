@@ -81,15 +81,25 @@ up** removes what tasks left behind.
 - **REPO-8** Clean up MUST list what it would remove, and why, before it
   removes anything. It pre-selects only what loses nothing, and checks each
   item again as it removes it. It finds:
-  - task folders no task uses, removable when they hold only what the app
-    generated and worktrees with no changes;
+  - task folders no task uses: pre-selected when they hold only what the
+    app generated, empty folders and worktrees with no changes; offered,
+    naming the first few, when they also hold files the app did not make
+    (an agent CLI's log, a build cache written after the worktree went).
+    Never one holding a git repository or worktree at any depth that no
+    copy lists, or more than 5000 things the app did not make. A folder
+    that gained files since the list was made is not removed;
   - worktrees inside a task folder that are none of its checkouts, on the
     same terms;
   - task branches in the user's clone, left from before REPO-4 or taken
     over by a task (TASK-3), only when every commit on them is in the
     app's copy and they are not checked out;
-  - branches in the app's copies that no task uses, pre-selected only when
-    every commit on them is on origin;
+  - branches in the app's copies that no task uses, pre-selected when every
+    commit on them is on origin, or, in repos on the connected GitHub, when
+    a pull request has every commit on them: your newest from the branch,
+    merged, or, for a branch the app made to review one
+    (`review/<repo>-<n>`), that pull request. A squash merge leaves a
+    branch's commits on no branch once origin deletes it, so git alone
+    took every finished task's branch for unpushed work;
   - your branches on origin that are done with, in repos on the connected
     GitHub, as origin stood at the last Sync. Yours means your newest pull
     request from it is merged or closed, or, with no pull request of yours,
@@ -113,9 +123,9 @@ up** removes what tasks left behind.
   folder is removed only once it is empty.
 
 Code: `commands/projects.rs`, `commands/repos.rs`, `commands/cleanup.rs`,
-`commands/cleanup_remote.rs`, `git/store.rs`, `git/upkeep.rs`,
-`integrations/github/branches.rs`, `ReposView.tsx`, `AddRepos.tsx`,
-`CleanUp.tsx`.
+`commands/cleanup_folders.rs`, `commands/cleanup_remote.rs`, `git/store.rs`,
+`git/upkeep.rs`, `integrations/github/branches.rs`, `ReposView.tsx`,
+`AddRepos.tsx`, `CleanUp.tsx`.
 
 Known gaps:
 - Removing a repo leaves panes running in *surviving* tasks' checkouts of
@@ -126,7 +136,9 @@ Known gaps:
 - Removing a repo leaves its copy in `.repos/`. Adding the repo again
   reuses it; Clean up offers it once no worktree belongs to it.
 - A branch squash-merged and then deleted on origin has commits that are on
-  no remote branch, so Clean up does not pre-select it.
+  no remote branch. In a repo not on the connected GitHub, or with no pull
+  request of yours from it, Clean up cannot tell it from unpushed work and
+  does not pre-select it.
 - Task branches are not in the user's clone until pushed and fetched.
 
 ## 2. Tasks
@@ -202,7 +214,7 @@ the repo count, running agents, uncommitted changes and the review verdict.
   the copy's branch has no commit it lacks. Its commits come across, its
   files are untouched (an edit stays an unstaged edit), and its own `.git`
   folder goes. What could not be moved is reported, with the reason.
-- **TASK-13** The new-task and Start work dialogs MUST fill in "Branch
+- **TASK-13** The Start work dialog MUST fill in "Branch
   from" with the default branch of the picked repos when they share one,
   and leave it blank (each repo's own default) when they do not. The box
   follows every change of repos while it still shows the dialog's own last
@@ -213,9 +225,15 @@ the repo count, running agents, uncommitted changes and the review verdict.
   folder, or a `cursor` command that links into a `.app`. The Cursor agent
   CLI's own `cursor` shim is not the IDE. When opening fails, the user is
   told why.
+- **TASK-15** In the app, a task MUST start from work that already
+  exists: Start work on a Jira ticket (TKT-1), or Start task on one of
+  your pull requests (REV-7). The sidebar offers no task of its own; its
+  "+" made one with a name and no ticket, or filed a new ticket and opened
+  worktrees for it in one step. A new ticket is filed from Tickets, then
+  started. A chat's agent can still make a task with no ticket
+  (`create_task`, CHAT-3).
 
-Code: `commands/tasks.rs`, `sidebar/`, `FinishTask.tsx`,
-`CreateTaskDialog.tsx`.
+Code: `commands/tasks.rs`, `sidebar/`, `FinishTask.tsx`.
 
 Known gaps:
 - A folder cut off before its last commit was recorded, or whose last
@@ -319,7 +337,7 @@ ones that need you first.
   or brought back at launch, had only the link, and spent its first calls
   fetching what the app already had. The ticket is saved as `TICKET.md`
   in the task folder whenever the app fetches it for the task (Start
-  work, filing a ticket and starting on it, the launch dialog's opening
+  work, the launch dialog's opening
   prompt), and the context file is built from that. The description is
   quoted line by line and introduced as written by whoever filed it: the
   context file is read as instructions, and a ticket's text is someone
@@ -676,11 +694,9 @@ offers Start work.
   hierarchy level 1 or above. "In progress" and "done" are status
   categories. The Epic Link field is found by its schema. The default type
   is the level-0 type called "Task" if there is one, else the first.
-- **TKT-3** Filing an issue or creating a task with a ticket MUST ask Jira
-  what the project requires (`createmeta`), offer a choice for each
-  required field with a fixed set of values, and name any it cannot fill.
-  A worktree failure after the ticket is filed keeps the ticket, and the
-  error names it.
+- **TKT-3** Filing an issue MUST ask Jira what the project requires
+  (`createmeta`), offer a choice for each required field with a fixed set
+  of values, and name any it cannot fill.
 - **TKT-4** Text typed into a search MUST be quoted as a JQL string.
   Project keys are always quoted (a key can be a reserved word, like `IT`).
 - **TKT-5** Any key or id from Jira that goes into a URL path MUST be

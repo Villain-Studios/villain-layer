@@ -459,13 +459,6 @@ pub struct NewTask {
     pub epic_key: Option<String>,
 }
 
-/// Off the command thread: one `git worktree add` per repository, and that is
-/// the slowest git command there is on a large clone.
-#[tauri::command]
-pub async fn create_task(app: AppHandle, req: NewTask) -> Result<Task> {
-    super::blocking(app, move |state| new_task(state, req)).await
-}
-
 /// Note on a task that a chat's agent created it, so the task can point at
 /// the chat its work is going on in (CHAT-3).
 pub(crate) fn link_chat(state: &AppState, mut task: Task, room: String) -> Result<Task> {

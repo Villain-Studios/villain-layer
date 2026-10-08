@@ -15,7 +15,9 @@ use crate::config::{AppConfig, Project};
 use crate::error::{Error, Result};
 use crate::git;
 
-use super::panes::{is_generated, remove_generated};
+use super::cleanup_remote::{judge_local, Pulls, Remote};
+use super::cleanup_folders::{leftover_folders, stray_worktrees};
+use super::panes::remove_generated;
 use super::repos::{canon, plural, store_of};
 use super::AppState;
 
@@ -46,8 +48,9 @@ pub struct CleanupItem {
 
 pub(super) enum Action {
     /// The worktrees in it, each with the repository it belongs to; then
-    /// the files the app made; then the folder, once empty.
-    Folder(PathBuf, Vec<(PathBuf, PathBuf)>),
+    /// the files the app made; then the folder, once empty. With `true`,
+    /// whatever else it holds as well, which is never git's.
+    Folder(PathBuf, Vec<(PathBuf, PathBuf)>, bool),
     Worktree(PathBuf, PathBuf),
     /// A branch in a repository, and the tip it was judged at.
     Branch(PathBuf, String, String),
@@ -89,8 +92,8 @@ pub async fn cleanup_apply(app: AppHandle, ids: Vec<String>) -> Result<Vec<Clean
 /// What some build of the app still uses.
 #[derive(Default)]
 pub(super) struct InUse {
-    roots: HashSet<PathBuf>,
-    checkouts: HashSet<PathBuf>,
+    pub(super) roots: HashSet<PathBuf>,
+    pub(super) checkouts: HashSet<PathBuf>,
     stores: HashSet<PathBuf>,
     pub(super) branches: HashSet<String>,
 }
@@ -121,8 +124,9 @@ pub(super) fn in_use(state: &AppState, cfg: &AppConfig) -> InUse {
 }
 
 /// Everything found on disk, then `remote`: the branches on origin, which
-/// only GitHub can judge, asked before this runs.
-fn plan(state: &AppState, remote: Vec<Planned>) -> Vec<Planned> {
+/// only GitHub can judge, asked before this runs, with what GitHub said of
+/// the pull requests behind the copies' own branches.
+fn plan(state: &AppState, remote: Remote) -> Vec<Planned> {
     let cfg = state.config.read();
     let used = in_use(state, &cfg);
     let root = state.config.worktree_root();
@@ -135,151 +139,12 @@ fn plan(state: &AppState, remote: Vec<Planned>) -> Vec<Planned> {
         if clone.is_dir() && git::is_store_of(store, clone) {
             clone_branches(project, clone, store, &cfg, &mut out);
         }
-        store_branches(project, store, &used, &mut out);
+        store_branches(project, store, &used, remote.pulls.get(store), &mut out);
         records(project, store, &mut out);
     }
     unused_stores(&root.join(".repos"), &used, &mut out);
-    out.extend(remote);
+    out.extend(remote.planned);
     out
-}
-
-/// A worktree that can go through git without losing anything, and the
-/// repository it belongs to; or why not.
-fn removable_worktree(wt: &Path) -> std::result::Result<PathBuf, String> {
-    if let Some(why) = git::unlinked(wt) {
-        return Err(format!("{why}. Look at it by hand."));
-    }
-    let owner = git::owner(wt).ok_or("git cannot tell which repository it belongs to")?;
-    let st = git::status(wt).map_err(|e| e.to_string())?;
-    if st.dirty_files > 0 {
-        return Err(format!("{} uncommitted change{}", st.dirty_files, plural(st.dirty_files as usize)));
-    }
-    if git::in_progress(wt).is_some() {
-        return Err("in the middle of a merge or rebase".into());
-    }
-    // A branch keeps its commits when its worktree goes; a detached HEAD
-    // keeps them only if some branch has them.
-    if st.branch == "(detached)" && !git::holds(&owner, &st.head) {
-        return Err("on a commit no branch has".into());
-    }
-    Ok(owner)
-}
-
-/// Folders under the task folder location that no task of any build uses.
-fn leftover_folders(root: &Path, used: &InUse, out: &mut Vec<Planned>) {
-    let Ok(entries) = std::fs::read_dir(root) else { return };
-    for entry in entries.flatten() {
-        let dir = entry.path();
-        let name = entry.file_name().to_string_lossy().to_string();
-        if !dir.is_dir() || dir.is_symlink() || name.starts_with('.') || name == "_chat" {
-            continue;
-        }
-        if used.roots.contains(&canon(&dir)) {
-            continue;
-        }
-        let mut worktrees = Vec::new();
-        let mut files = 0;
-        let mut problems = Vec::new();
-        for (rel, path) in contents(&dir) {
-            if path.join(".git").is_file() {
-                if used.checkouts.contains(&canon(&path)) {
-                    problems.push(format!("{rel} is a task's worktree"));
-                    continue;
-                }
-                match removable_worktree(&path) {
-                    Ok(owner) => worktrees.push((owner, path)),
-                    Err(why) => problems.push(format!("{rel}: {why}")),
-                }
-            } else if path.is_file() && is_generated(&rel) {
-                files += 1;
-            } else {
-                problems.push(format!("{rel} is not something the app made"));
-            }
-        }
-        let (verdict, detail) = if problems.is_empty() {
-            let mut held = Vec::new();
-            if !worktrees.is_empty() {
-                held.push(format!(
-                    "{} worktree{} with no changes (the branch{} stay{} in the repository)",
-                    worktrees.len(),
-                    plural(worktrees.len()),
-                    if worktrees.len() == 1 { "" } else { "es" },
-                    if worktrees.len() == 1 { "s" } else { "" },
-                ));
-            }
-            if files > 0 {
-                held.push(format!("{files} file{} the app wrote", plural(files)));
-            }
-            let held = if held.is_empty() { "nothing".to_string() } else { held.join(" and ") };
-            (Verdict::Safe, format!("No task uses it. It holds {held}."))
-        } else {
-            (Verdict::Blocked, format!("No task uses it, but {}.", problems.join("; ")))
-        };
-        out.push(Planned {
-            item: CleanupItem {
-                id: format!("folder:{}", dir.display()),
-                kind: "folder",
-                repo: None,
-                title: name,
-                detail,
-                verdict,
-            },
-            action: Action::Folder(dir, worktrees),
-        });
-    }
-}
-
-/// What a task folder holds, by its path there, looking one level into the
-/// folders agent CLIs keep their settings in.
-fn contents(dir: &Path) -> Vec<(String, PathBuf)> {
-    let mut out = Vec::new();
-    let Ok(entries) = std::fs::read_dir(dir) else { return out };
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().to_string();
-        let path = entry.path();
-        if path.is_dir() && !path.is_symlink() && matches!(name.as_str(), ".claude" | ".gemini") {
-            for inner in std::fs::read_dir(&path).into_iter().flatten().flatten() {
-                out.push((format!("{name}/{}", inner.file_name().to_string_lossy()), inner.path()));
-            }
-        } else {
-            out.push((name, path));
-        }
-    }
-    out
-}
-
-/// Worktrees inside a task's folder that are none of its checkouts: left
-/// when a repo is removed from the app (REPO-3), which keeps them on disk.
-fn stray_worktrees(cfg: &AppConfig, used: &InUse, out: &mut Vec<Planned>) {
-    for task in &cfg.tasks {
-        let Ok(entries) = std::fs::read_dir(&task.root) else { continue };
-        for entry in entries.flatten() {
-            let wt = entry.path();
-            if !wt.join(".git").is_file() || used.checkouts.contains(&canon(&wt)) {
-                continue;
-            }
-            let name = entry.file_name().to_string_lossy().to_string();
-            let (verdict, detail, owner) = match removable_worktree(&wt) {
-                Ok(owner) => (
-                    Verdict::Safe,
-                    "In this task's folder, but not one of its repos. No changes; its branch stays in the repository.".to_string(),
-                    owner,
-                ),
-                Err(why) => (Verdict::Blocked, format!("In this task's folder, but not one of its repos: {why}."), PathBuf::new()),
-            };
-            out.push(Planned {
-                item: CleanupItem {
-                    id: format!("worktree:{}", wt.display()),
-                    kind: "worktree",
-                    repo: Some(name.clone()),
-                    title: format!("{}/{name}", task.name),
-                    detail,
-                    verdict,
-                },
-                action: Action::Worktree(owner, wt),
-            });
-        }
-    }
 }
 
 /// Branches checked out in any worktree of `repo`, or everything, as far as
@@ -326,8 +191,10 @@ fn clone_branches(project: &Project, clone: &Path, store: &Path, cfg: &AppConfig
     }
 }
 
-/// Branches in the app's copy that no task of any build is on.
-fn store_branches(project: &Project, store: &Path, used: &InUse, out: &mut Vec<Planned>) {
+/// Branches in the app's copy that no task of any build is on, judged by
+/// git and then, for one with commits origin lacks, by `pulls`: what GitHub
+/// said of the pull requests behind them, when it was asked.
+fn store_branches(project: &Project, store: &Path, used: &InUse, pulls: Option<&Pulls>, out: &mut Vec<Planned>) {
     let (Ok(tips), Some(busy)) = (git::branch_tips(store), checked_out(store)) else { return };
     let clone = Path::new(&project.path);
     for (branch, tip) in tips {
@@ -340,14 +207,18 @@ fn store_branches(project: &Project, store: &Path, used: &InUse, out: &mut Vec<P
             Ok(_) if clone.is_dir() && git::holds(clone, &tip) => {
                 (Verdict::Safe, "No task uses it, and your clone has every commit on it.".to_string())
             }
-            Ok(n) => (
-                Verdict::Risky,
-                format!(
-                    "No task uses it, but {n} commit{} on it {} on no origin branch. A branch squash-merged and then deleted on origin looks like this too.",
-                    plural(n),
-                    if n == 1 { "is" } else { "are" },
-                ),
-            ),
+            Ok(n) => pulls
+                .and_then(|p| judge_local(&branch, n, p, &project.default_branch, |sha| git::is_ancestor(store, &tip, sha)))
+                .unwrap_or_else(|| {
+                    (
+                        Verdict::Risky,
+                        format!(
+                            "No task uses it, but {n} commit{} on it {} on no origin branch. A branch squash-merged and then deleted on origin looks like this too, and GitHub was not asked.",
+                            plural(n),
+                            if n == 1 { "is" } else { "are" },
+                        ),
+                    )
+                }),
             Err(e) => (Verdict::Blocked, e.to_string()),
         };
         out.push(Planned {
@@ -433,7 +304,7 @@ fn unused_stores(repos: &Path, used: &InUse, out: &mut Vec<Planned>) {
     }
 }
 
-fn apply(state: &AppState, remote: Vec<Planned>, ids: &[String]) -> Vec<Cleaned> {
+fn apply(state: &AppState, remote: Remote, ids: &[String]) -> Vec<Cleaned> {
     let planned = plan(state, remote);
     let mut results: Vec<Cleaned> = ids
         .iter()
@@ -459,9 +330,12 @@ fn apply(state: &AppState, remote: Vec<Planned>, ids: &[String]) -> Vec<Cleaned>
 
 fn remove(action: &Action) -> Result<()> {
     match action {
-        Action::Folder(dir, worktrees) => {
+        Action::Folder(dir, worktrees, everything) => {
             for (owner, wt) in worktrees {
                 git::remove_worktree(owner, &wt.to_string_lossy(), false)?;
+            }
+            if *everything {
+                return Ok(std::fs::remove_dir_all(dir)?);
             }
             remove_generated(dir);
             std::fs::remove_dir(dir)
@@ -487,12 +361,19 @@ fn remove(action: &Action) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
     use crate::commands::projects::ensure_store;
     use crate::commands::repos::tests::{add_task, commit, git, setup, state};
+    use crate::integrations::github::{BranchPr, PrState};
 
     fn items(state: &AppState) -> Vec<CleanupItem> {
-        plan(state, Vec::new()).into_iter().map(|p| p.item).collect()
+        plan(state, Remote::default()).into_iter().map(|p| p.item).collect()
+    }
+
+    fn detail<'a>(items: &'a [CleanupItem], kind: &str, title: &str) -> &'a str {
+        &items.iter().find(|i| i.kind == kind && i.title == title).unwrap().detail
     }
 
     fn verdict(items: &[CleanupItem], kind: &str, title: &str) -> Option<Verdict> {
@@ -544,13 +425,15 @@ mod tests {
         assert_eq!(verdict(&found, "folder", "OLD-1"), Some(Verdict::Safe));
         assert_eq!(verdict(&found, "folder", "OLD-2"), Some(Verdict::Safe));
         assert_eq!(verdict(&found, "folder", "OLD-3"), Some(Verdict::Blocked));
-        assert_eq!(verdict(&found, "folder", "OLD-4"), Some(Verdict::Blocked));
+        assert_eq!(verdict(&found, "folder", "OLD-4"), Some(Verdict::Risky), "a note of the user's is offered, never ticked");
+        assert!(detail(&found, "folder", "OLD-4").contains("notes.txt"));
         assert!(found.iter().all(|i| !i.title.contains("DEV-1")), "the other build's task is not offered");
 
-        let ids: Vec<String> = found.iter().map(|i| i.id.clone()).collect();
-        let done = apply(&state, Vec::new(), &ids);
+        // What the dialog ticks, and what it greys out, which is refused.
+        let ids: Vec<String> = found.iter().filter(|i| i.verdict != Verdict::Risky).map(|i| i.id.clone()).collect();
+        let done = apply(&state, Remote::default(), &ids);
         assert!(succeeded(&done, &found, "folder", "OLD-1") && succeeded(&done, &found, "folder", "OLD-2"));
-        assert!(!succeeded(&done, &found, "folder", "OLD-3") && !succeeded(&done, &found, "folder", "OLD-4"));
+        assert!(!succeeded(&done, &found, "folder", "OLD-3"));
         assert!(!old.exists() && !clean.exists());
         assert!(dirty.join("api/new.txt").is_file() && noted.join("notes.txt").is_file());
         assert!(theirs.join("api/a.txt").is_file());
@@ -586,11 +469,140 @@ mod tests {
         assert_eq!(verdict(&found, "store_branch", "T-1"), None, "a task is on it");
 
         let ids: Vec<String> = found.iter().map(|i| i.id.clone()).collect();
-        let done = apply(&state, Vec::new(), &ids);
+        let done = apply(&state, Remote::default(), &ids);
         assert!(succeeded(&done, &found, "clone_branch", "T-1"));
         assert!(!crate::git::branch_exists(&clone, "T-1"));
         assert!(crate::git::branch_exists(&store, "T-1"), "the task's own copy stays");
         assert!(crate::git::branch_exists(&clone, "T-2") && crate::git::branch_exists(&clone, "T-3"));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_folder_holding_only_files_nobody_would_miss_is_offered_and_goes_whole_when_picked() {
+        let (root, cfg) = setup();
+        let state = state(&root, cfg);
+        // ACME-146: an agent CLI's log, and a build cache written into the
+        // checkout's folder after its worktree had gone.
+        let left = root.join("tasks/ACME-146");
+        std::fs::create_dir_all(left.join(".cursor")).unwrap();
+        std::fs::write(left.join(".cursor/debug-8b0881.log"), "debug").unwrap();
+        let cache = left.join("customer-portal/apps/host/.angular/cache");
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::write(cache.join(".tsbuildinfo"), vec![b'x'; 2048]).unwrap();
+        std::fs::write(left.join("AGENTS.md"), "context").unwrap();
+        // Only folders, the files in them gone.
+        let hollow = root.join("tasks/ACME-1");
+        std::fs::create_dir_all(hollow.join("api/apps/host")).unwrap();
+
+        let found = items(&state);
+        assert_eq!(verdict(&found, "folder", "ACME-146"), Some(Verdict::Risky));
+        let why = detail(&found, "folder", "ACME-146");
+        assert!(why.contains("2 files the app did not make (2 KB)"), "{why}");
+        assert!(why.contains(".cursor/debug-8b0881.log") && why.contains("customer-portal/apps/host/.angular/cache/.tsbuildinfo"), "{why}");
+        assert_eq!(verdict(&found, "folder", "ACME-1"), Some(Verdict::Safe), "empty folders lose nothing");
+
+        let ids: Vec<String> = found.iter().filter(|i| i.kind == "folder").map(|i| i.id.clone()).collect();
+        let done = apply(&state, Remote::default(), &ids);
+        assert!(succeeded(&done, &found, "folder", "ACME-146") && succeeded(&done, &found, "folder", "ACME-1"));
+        assert!(!left.exists() && !hollow.exists());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_repository_anywhere_in_a_leftover_folder_keeps_it() {
+        let (root, cfg) = setup();
+        let state = state(&root, cfg);
+        let left = root.join("tasks/OLD-5");
+        let nested = left.join("tools/scripts");
+        std::fs::create_dir_all(&nested).unwrap();
+        git(&nested, &["init", "-q"]);
+        std::fs::write(left.join("tools/readme.txt"), "mine").unwrap();
+        let itself = root.join("tasks/OLD-6");
+        std::fs::create_dir_all(&itself).unwrap();
+        git(&itself, &["init", "-q"]);
+
+        let found = items(&state);
+        assert_eq!(verdict(&found, "folder", "OLD-5"), Some(Verdict::Blocked));
+        assert!(detail(&found, "folder", "OLD-5").contains("tools/scripts is a git repository"));
+        assert_eq!(verdict(&found, "folder", "OLD-6"), Some(Verdict::Blocked));
+
+        let ids: Vec<String> = found.iter().map(|i| i.id.clone()).collect();
+        apply(&state, Remote::default(), &ids);
+        assert!(nested.join(".git").is_dir() && itself.join(".git").is_dir());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_folder_that_gained_files_since_the_list_was_made_is_not_removed() {
+        let (root, cfg) = setup();
+        let state = state(&root, cfg);
+        let left = root.join("tasks/OLD-7");
+        std::fs::create_dir_all(&left).unwrap();
+        std::fs::write(left.join("build.log"), "old").unwrap();
+        let found = items(&state);
+        std::fs::write(left.join("draft.md"), "written since").unwrap();
+
+        let ids: Vec<String> = found.iter().filter(|i| i.title == "OLD-7").map(|i| i.id.clone()).collect();
+        let done = apply(&state, Remote::default(), &ids);
+        assert!(!done[0].ok && done[0].detail.contains("Changed since"));
+        assert!(left.join("draft.md").is_file());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// A branch in the app's copy with `n` commits of its own, as a finished
+    /// task leaves it once origin has deleted its branch; and its tip.
+    fn left_branch(store: &Path, root: &Path, name: &str, n: usize) -> Vec<String> {
+        let wt = root.join("wt").join(name.replace('/', "-"));
+        crate::git::add_worktree(store, &wt, name, "main").unwrap();
+        let mut tips = Vec::new();
+        for i in 0..n {
+            commit(&wt, &format!("{}-{i}.txt", name.replace('/', "-")));
+            tips.push(git(&wt, &["rev-parse", "HEAD"]).trim().to_string());
+        }
+        git(store, &["worktree", "remove", "--force", wt.to_str().unwrap()]);
+        tips
+    }
+
+    #[test]
+    fn a_branch_whose_pull_request_merged_all_of_it_is_ticked_once_github_says_so() {
+        let (root, cfg) = setup();
+        let state = state(&root, cfg);
+        let store = ensure_store(&state, "api").unwrap();
+        let squashed = left_branch(&store, &root, "DONE-1", 2);
+        let ahead = left_branch(&store, &root, "AHEAD-1", 2);
+        left_branch(&store, &root, "NO-PR", 1);
+        let reviewed = left_branch(&store, &root, "review/api-5", 1);
+        left_branch(&store, &root, "review/api-6", 1);
+
+        // Git alone cannot tell any of them from work never pushed.
+        let alone = items(&state);
+        for title in ["DONE-1", "AHEAD-1", "NO-PR", "review/api-5"] {
+            assert_eq!(verdict(&alone, "store_branch", title), Some(Verdict::Risky), "{title}");
+        }
+        assert!(detail(&alone, "store_branch", "DONE-1").contains("GitHub was not asked"));
+
+        let pr = |number, head: &str, sha: &str| BranchPr { number, head: head.into(), head_sha: sha.into(), state: PrState::Merged };
+        let pulls = Pulls {
+            mine: Some(vec![pr(1, "DONE-1", &squashed[1]), pr(2, "AHEAD-1", &ahead[0])]),
+            more: false,
+            reviewed: HashMap::from([
+                (5, Ok((PrState::Closed, reviewed[0].clone()))),
+                (6, Err("Not Found".to_string())),
+            ]),
+        };
+        let remote = || Remote { planned: Vec::new(), pulls: HashMap::from([(store.clone(), pulls.clone())]) };
+        let found: Vec<CleanupItem> = plan(&state, remote()).into_iter().map(|p| p.item).collect();
+        assert_eq!(verdict(&found, "store_branch", "DONE-1"), Some(Verdict::Safe));
+        assert_eq!(verdict(&found, "store_branch", "AHEAD-1"), Some(Verdict::Risky), "a commit came after what merged");
+        assert_eq!(verdict(&found, "store_branch", "NO-PR"), Some(Verdict::Risky));
+        assert!(detail(&found, "store_branch", "NO-PR").contains("no pull request of yours came from it"));
+        assert_eq!(verdict(&found, "store_branch", "review/api-5"), Some(Verdict::Safe));
+        assert_eq!(verdict(&found, "store_branch", "review/api-6"), Some(Verdict::Risky));
+
+        let ids: Vec<String> = found.iter().filter(|i| i.verdict == Verdict::Safe).map(|i| i.id.clone()).collect();
+        let done = apply(&state, remote(), &ids);
+        assert!(succeeded(&done, &found, "store_branch", "DONE-1") && succeeded(&done, &found, "store_branch", "review/api-5"));
+        assert!(!crate::git::branch_exists(&store, "DONE-1") && crate::git::branch_exists(&store, "AHEAD-1"));
         std::fs::remove_dir_all(&root).ok();
     }
 }

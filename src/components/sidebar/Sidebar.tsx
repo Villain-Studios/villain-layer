@@ -5,10 +5,9 @@ import { copyText } from "../../lib/clipboard";
 import { useStore } from "../../store";
 import { isRunningAgent, needsYou, taskReview, taskTotals, type TaskReview } from "../../lib/derive";
 import type { JiraTransition, TaskView } from "../../lib/types";
-import { ChevronIcon, CloseIcon, PlusIcon } from "../icons";
+import { ChevronIcon, CloseIcon } from "../icons";
 import { BusyOverlay, Confirm, ContextMenu, Field, Modal, Spinner, type MenuItem } from "../ui";
 import { RepoPicker } from "../RepoPicker";
-import { CreateTaskDialog } from "./CreateTaskDialog";
 import { FinishTask } from "../FinishTask";
 import { DeleteTask } from "./DeleteTask";
 
@@ -25,9 +24,6 @@ export function Sidebar() {
   const tasks = useStore((s) => s.tasks);
   const panes = useStore((s) => s.panes);
   const prs = useStore((s) => s.prs);
-  const settings = useStore((s) => s.settings);
-  const issues = useStore((s) => s.issues);
-  const issueTypes = useStore((s) => s.issueTypes);
   const selected = useStore((s) => s.selectedTask);
   const select = useStore((s) => s.select);
   const setView = useStore((s) => s.setView);
@@ -39,7 +35,6 @@ export function Sidebar() {
   const fail = useStore((s) => s.fail);
   const cursorIde = useStore((s) => s.cursorIde);
 
-  const [creating, setCreating] = useState(false);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [addingRepoTo, setAddingRepoTo] = useState<TaskView | null>(null);
   const [adding, setAdding] = useState<string[]>([]);
@@ -313,15 +308,6 @@ export function Sidebar() {
         <div className="section-head">
           Tasks
           <span className="count">{working.length}</span>
-          <div className="spacer" />
-          <button
-            className="btn-sm"
-            title="New task"
-            disabled={projects.length === 0}
-            onClick={() => setCreating(true)}
-          >
-            <PlusIcon />
-          </button>
         </div>
 
         {tasks.length === 0 && (
@@ -339,7 +325,17 @@ export function Sidebar() {
                 .
               </>
             ) : (
-              "No tasks yet. Create one, or start from a Jira ticket."
+              <>
+                No tasks yet. A task starts from a ticket —{" "}
+                <a
+                  href="#"
+                  style={{ color: "var(--accent)" }}
+                  onClick={(e) => { e.preventDefault(); setView("tickets"); }}
+                >
+                  pick one in Tickets
+                </a>
+                .
+              </>
             )}
           </div>
         )}
@@ -478,16 +474,6 @@ export function Sidebar() {
         })}
 
       </div>
-
-      {creating && (
-        <CreateTaskDialog
-          projects={projects}
-          settings={settings}
-          issues={issues}
-          issueTypes={issueTypes}
-          onClose={() => setCreating(false)}
-        />
-      )}
 
       {menu && (
         <ContextMenu

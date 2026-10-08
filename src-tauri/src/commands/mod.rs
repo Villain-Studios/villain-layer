@@ -112,6 +112,7 @@ pub fn notify(app: &tauri::AppHandle, kind: &str, text: impl Into<String>) {
 mod projects;
 mod repos;
 mod cleanup;
+mod cleanup_folders;
 mod cleanup_remote;
 mod tasks;
 mod panes;

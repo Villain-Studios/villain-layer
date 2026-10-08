@@ -342,7 +342,6 @@ const answer: Record<string, Answer> = {
   // Jira.
   jira_issues: () => ({ issues: world.issues, more: false }),
   jira_issue_types: () => world.issueTypes,
-  jira_epics: () => [],
   jira_transitions: () => world.transitions,
   jira_transition: (a) => {
     const t = world.transitions.find((x) => x.id === a.transitionId);

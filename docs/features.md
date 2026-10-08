@@ -202,7 +202,7 @@ the repo count, running agents, uncommitted changes and the review verdict.
   the copy's branch has no commit it lacks. Its commits come across, its
   files are untouched (an edit stays an unstaged edit), and its own `.git`
   folder goes. What could not be moved is reported, with the reason.
-- **TASK-13** The new-task and Start work dialogs MUST fill in "Branch
+- **TASK-13** The Start work dialog MUST fill in "Branch
   from" with the default branch of the picked repos when they share one,
   and leave it blank (each repo's own default) when they do not. The box
   follows every change of repos while it still shows the dialog's own last
@@ -213,9 +213,15 @@ the repo count, running agents, uncommitted changes and the review verdict.
   folder, or a `cursor` command that links into a `.app`. The Cursor agent
   CLI's own `cursor` shim is not the IDE. When opening fails, the user is
   told why.
+- **TASK-15** In the app, a task MUST start from work that already
+  exists: Start work on a Jira ticket (TKT-1), or Start task on one of
+  your pull requests (REV-7). The sidebar offers no task of its own; its
+  "+" made one with a name and no ticket, or filed a new ticket and opened
+  worktrees for it in one step. A new ticket is filed from Tickets, then
+  started. A chat's agent can still make a task with no ticket
+  (`create_task`, CHAT-3).
 
-Code: `commands/tasks.rs`, `sidebar/`, `FinishTask.tsx`,
-`CreateTaskDialog.tsx`.
+Code: `commands/tasks.rs`, `sidebar/`, `FinishTask.tsx`.
 
 Known gaps:
 - A folder cut off before its last commit was recorded, or whose last
@@ -319,7 +325,7 @@ ones that need you first.
   or brought back at launch, had only the link, and spent its first calls
   fetching what the app already had. The ticket is saved as `TICKET.md`
   in the task folder whenever the app fetches it for the task (Start
-  work, filing a ticket and starting on it, the launch dialog's opening
+  work, the launch dialog's opening
   prompt), and the context file is built from that. The description is
   quoted line by line and introduced as written by whoever filed it: the
   context file is read as instructions, and a ticket's text is someone
@@ -667,11 +673,9 @@ offers Start work.
   hierarchy level 1 or above. "In progress" and "done" are status
   categories. The Epic Link field is found by its schema. The default type
   is the level-0 type called "Task" if there is one, else the first.
-- **TKT-3** Filing an issue or creating a task with a ticket MUST ask Jira
-  what the project requires (`createmeta`), offer a choice for each
-  required field with a fixed set of values, and name any it cannot fill.
-  A worktree failure after the ticket is filed keeps the ticket, and the
-  error names it.
+- **TKT-3** Filing an issue MUST ask Jira what the project requires
+  (`createmeta`), offer a choice for each required field with a fixed set
+  of values, and name any it cannot fill.
 - **TKT-4** Text typed into a search MUST be quoted as a JQL string.
   Project keys are always quoted (a key can be a reserved word, like `IT`).
 - **TKT-5** Any key or id from Jira that goes into a URL path MUST be

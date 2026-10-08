@@ -87,15 +87,6 @@ export const api = {
   // tasks
   listTasks: (focus?: string | null) =>
     invoke<TaskView[]>("list_tasks", { focus: focus ?? null }),
-  createTask: (req: {
-    name: string;
-    project_ids: string[];
-    branch?: string | null;
-    branch_suffix?: string | null;
-    base?: string | null;
-    issue_key?: string | null;
-    issue_url?: string | null;
-  }) => invoke<Task>("create_task", { req }),
   /** The task for one of your pull requests, made on its branch if there is none (REV-7). */
   taskForPr: (repo: string, head: string, base: string, title: string) =>
     invoke<Task>("task_for_pr", { repo, head, base, title }),
@@ -199,8 +190,6 @@ export const api = {
   jiraIssues: () => invoke<JiraPage>("jira_issues"),
   jiraIssueTypes: (refresh = false) =>
     invoke<JiraIssueType[]>("jira_issue_types", { refresh }),
-  jiraEpics: (projectKey: string) =>
-    invoke<JiraIssue[]>("jira_epics", { projectKey }),
   jiraTransitions: (key: string) => invoke<JiraTransition[]>("jira_transitions", { key }),
   jiraTransition: (key: string, transitionId: string) =>
     invoke<void>("jira_transition", { key, transitionId }),
@@ -242,18 +231,6 @@ export const api = {
     parent_key: string | null;
     fields: Record<string, unknown> | null;
   }) => invoke<JiraIssue>("jira_create_issue", { req }),
-  jiraCreateTask: (req: {
-    summary: string;
-    description: string;
-    issue_type: string;
-    project_key: string | null;
-    parent_key: string | null;
-    project_ids: string[];
-    branch_suffix: string | null;
-    base?: string | null;
-    /** What the project requires beyond the above, shaped as Jira wants it. */
-    fields?: Record<string, unknown> | null;
-  }) => invoke<Started>("jira_create_task", { req }),
   jiraStartWork: (
     key: string, projectIds: string[],
     agentId?: string | null, branchSuffix?: string | null, base?: string | null,

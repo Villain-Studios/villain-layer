@@ -23,6 +23,7 @@ export function PaneView({ pane, visible }: { pane: PaneInfo; visible: boolean }
 function AcpPane({ pane, visible }: { pane: PaneInfo; visible: boolean }) {
   const appActive = useStore((s) => s.appActive);
   const fail = useStore((s) => s.fail);
+  const textSize = useStore((s) => s.settings?.ui.conversation_font_size ?? 14);
   const shown = visible && appActive;
 
   const [view, setView] = useState<AcpView | null>(null);
@@ -102,6 +103,8 @@ function AcpPane({ pane, visible }: { pane: PaneInfo; visible: boolean }) {
   return (
     <div
       className={`acp${visible ? "" : " hidden"}`}
+      // Every size in the conversation is a multiple of this (ACP-15).
+      style={{ ["--acp-text" as string]: `${textSize}px` }}
       onKeyDown={(e) => {
         // Esc stops the turn, as it does in a terminal (ACP-6).
         if (e.key === "Escape" && busy) {

@@ -219,6 +219,9 @@ pub struct SavedPane {
 pub struct UiPrefs {
     pub scale: f32,
     pub terminal_font_size: u16,
+    /// The text of an agent's conversation over ACP (ACP-15), which is the
+    /// app's own page and not a terminal, so neither of the others.
+    pub conversation_font_size: u16,
     /// Put back the panes that were open when the app last closed, resuming
     /// each agent's conversation where its CLI can.
     #[serde(default = "yes")]
@@ -273,6 +276,7 @@ impl Default for UiPrefs {
         Self {
             scale: 1.0,
             terminal_font_size: 13,
+            conversation_font_size: 14,
             restore_panes: true,
             trust_agent_dirs: true,
             sync_jira_status: true,
@@ -643,6 +647,8 @@ mod tests {
         assert_eq!(cfg.tasks.len(), 1);
         assert!(!cfg.ui.restore_panes);
         assert_eq!(cfg.ui.terminal_font_size, UiPrefs::default().terminal_font_size);
+        // Saved before conversations had a text size of their own (ACP-15).
+        assert_eq!(cfg.ui.conversation_font_size, 14);
     }
 
     #[test]

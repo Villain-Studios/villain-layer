@@ -11,7 +11,7 @@ mod check;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -124,6 +124,8 @@ struct Shared {
     /// Raised to stop. The driver and a running check both look.
     stop: AtomicBool,
     wake: Notify,
+    /// The process group of the check running now, 0 for none.
+    group: AtomicI32,
 }
 
 impl Shared {
@@ -190,6 +192,7 @@ impl Loops {
                 }),
                 stop: AtomicBool::new(false),
                 wake: Notify::new(),
+                group: AtomicI32::new(0),
             });
             map.insert(pane.to_string(), shared.clone());
             shared
@@ -197,6 +200,30 @@ impl Loops {
         let view = shared.view.lock().clone();
         tauri::async_runtime::spawn(drive(host, shared, targets, self.permits.clone()));
         Ok(view)
+    }
+
+    /// Quitting: every loop stopped, and its check asked to end now and
+    /// killed by `kill_checks` once the agents' grace is over (PANE-5). A
+    /// check runs in a process group of its own, which nothing else ends:
+    /// a build half done would run on after the app had gone.
+    pub fn stop_all(&self) {
+        for shared in self.map.lock().values() {
+            shared.stop.store(true, Ordering::Release);
+            shared.wake.notify_one();
+            let group = shared.group.load(Ordering::Acquire);
+            if group > 0 {
+                check::signal(group, libc::SIGTERM);
+            }
+        }
+    }
+
+    pub fn kill_checks(&self) {
+        for shared in self.map.lock().values() {
+            let group = shared.group.load(Ordering::Acquire);
+            if group > 0 {
+                check::signal(group, libc::SIGKILL);
+            }
+        }
     }
 
     /// Stop `pane`'s loop, and a check it is running. The agent is left as
@@ -314,8 +341,7 @@ async fn go_round<H: Host>(host: &Arc<H>, me: &Arc<Shared>, pane: &str, targets:
             host.changed(pane);
             let (t, stop) = (target.clone(), me.clone());
             let ran = tauri::async_runtime::spawn_blocking(move || {
-                let stop = &stop.stop;
-                check::run(&t.dir, &t.command, CHECK_TIMEOUT, stop)
+                check::run(&t.dir, &t.command, CHECK_TIMEOUT, &stop.stop, &stop.group)
             })
             .await;
             let outcome = match ran {
@@ -344,7 +370,10 @@ async fn go_round<H: Host>(host: &Arc<H>, me: &Arc<Shared>, pane: &str, targets:
                     target.repo,
                     CHECK_TIMEOUT.as_secs() / 60
                 )),
-                (_, Some(127)) => Some(format!("`{}` in {} was not found", target.command, target.repo)),
+                (_, Some(127)) => Some(format!(
+                    "`{}` in {} exited 127: a command it runs was not found",
+                    target.command, target.repo
+                )),
                 _ => None,
             };
             if let Some(why) = why {
@@ -386,7 +415,11 @@ async fn go_round<H: Host>(host: &Arc<H>, me: &Arc<Shared>, pane: &str, targets:
         }
 
         me.view.lock().round = round + 1;
-        failed_at = Some(print);
+        // What the checks left, not what they found: one that writes files
+        // of its own (a coverage report, a new snapshot) changed the
+        // worktree, and taken for the agent's work, the same failures went
+        // back to it after a turn that changed nothing.
+        failed_at = Some(fingerprint(targets).await);
         // Before it is sent: the end of the turn it starts must be news.
         seen = *turns.borrow_and_update();
         show(host, me, pane, Phase::Waiting, None, true, None);
@@ -767,6 +800,25 @@ done
         println!("---- transcript\n{}\n---- loop\n{view:#?}", host.ptys.transcript(&pane, 200).unwrap());
         assert_eq!(view.phase, Phase::Passed, "{view:?}");
         assert_eq!(std::fs::read_to_string(dir.join("answer.txt")).unwrap().trim(), "42");
+        host.ptys.close(&pane).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn what_a_check_writes_itself_is_not_taken_for_the_agents_work() {
+        let (_app, host, pane, dir) = world(":");
+        let loops = Loops::default();
+        // A report of its own, written on every run and never ignored.
+        loops.start(host.clone(), &pane, checks(&dir, "date +%s%N >> report.txt; exit 1"), 5).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while loops.view(&pane).unwrap().phase != Phase::Held {
+            assert!(Instant::now() < deadline, "never held: {:?}", loops.view(&pane));
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(loops.view(&pane).unwrap().runs.len(), 1);
+        assert_eq!(host.sent.lock().len(), 1);
+        loops.stop(&pane);
+        until_ended(&loops, &pane);
         host.ptys.close(&pane).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
     }

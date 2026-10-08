@@ -345,7 +345,9 @@ pub fn run() {
                 let closing = std::thread::spawn(move || {
                     browser.state::<AppState>().browser.shutdown(std::time::Duration::from_secs(3));
                 });
+                state.loops.stop_all();
                 state.ptys.shutdown(std::time::Duration::from_secs(5));
+                state.loops.kill_checks();
                 let _ = closing.join();
             }
         });

@@ -6,7 +6,7 @@ use std::io::Read;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -39,8 +39,9 @@ pub struct Outcome {
 }
 
 /// Run `command` in `dir` through `/bin/sh -c`, in the login shell's
-/// environment, for at most `timeout`, or until `stop` is raised.
-pub fn run(dir: &Path, command: &str, timeout: Duration, stop: &AtomicBool) -> Result<Outcome> {
+/// environment, for at most `timeout`, or until `stop` is raised. Its
+/// process group is in `running` while it runs, for quitting to stop.
+pub fn run(dir: &Path, command: &str, timeout: Duration, stop: &AtomicBool, running: &AtomicI32) -> Result<Outcome> {
     let (mut reader, writer) = std::io::pipe()?;
     let mut child = {
         let mut cmd = Command::new("/bin/sh");
@@ -67,6 +68,7 @@ pub fn run(dir: &Path, command: &str, timeout: Duration, stop: &AtomicBool) -> R
     // once, on first use, and that took the whole of a short time limit.
     let started = Instant::now();
     let group = child.id() as i32;
+    running.store(group, Ordering::Release);
 
     let held = Arc::new(parking_lot::Mutex::new(Vec::<u8>::new()));
     let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
@@ -91,7 +93,9 @@ pub fn run(dir: &Path, command: &str, timeout: Duration, stop: &AtomicBool) -> R
 
     let deadline = started + timeout;
     let (ended, code) = loop {
-        if let Some(status) = child.try_wait()? {
+        // A failed look is not an end: the time limit still comes, and with
+        // it the kill. Returned from here, the check ran on unwatched.
+        if let Some(status) = child.try_wait().ok().flatten() {
             break (Ended::Exited, status.code());
         }
         let ended = if stop.load(Ordering::Acquire) {
@@ -104,7 +108,7 @@ pub fn run(dir: &Path, command: &str, timeout: Duration, stop: &AtomicBool) -> R
         };
         signal(group, libc::SIGTERM);
         let grace = Instant::now() + GRACE;
-        while Instant::now() < grace && child.try_wait()?.is_none() {
+        while Instant::now() < grace && child.try_wait().ok().flatten().is_none() {
             std::thread::sleep(Duration::from_millis(50));
         }
         signal(group, libc::SIGKILL);
@@ -114,6 +118,7 @@ pub fn run(dir: &Path, command: &str, timeout: Duration, stop: &AtomicBool) -> R
     // Whatever it left running in its group goes with it: a server a test
     // started and never stopped would hold the output open, and run on.
     signal(group, libc::SIGKILL);
+    running.store(0, Ordering::Release);
     // Something that left the group and kept the output open must not hold
     // the loop up: what was read by now is the answer.
     let _ = done_rx.recv_timeout(Duration::from_secs(2));
@@ -130,7 +135,7 @@ pub fn run(dir: &Path, command: &str, timeout: Duration, stop: &AtomicBool) -> R
     })
 }
 
-fn signal(group: i32, signal: i32) {
+pub(super) fn signal(group: i32, signal: i32) {
     // A negative pid is the whole group. The group may be gone already,
     // which is what this was for.
     unsafe { libc::kill(-group, signal) };
@@ -147,7 +152,7 @@ mod tests {
     #[test]
     fn a_command_that_exits_0_passes_with_what_it_printed_on_both_streams_in_order() {
         let stop = AtomicBool::new(false);
-        let out = run(&dir(), "echo one; echo two >&2; echo three", Duration::from_secs(10), &stop).unwrap();
+        let out = run(&dir(), "echo one; echo two >&2; echo three", Duration::from_secs(10), &stop, &AtomicI32::new(0)).unwrap();
         assert_eq!(out.ended, Ended::Exited);
         assert_eq!(out.code, Some(0));
         assert_eq!(out.output, "one\ntwo\nthree\n");
@@ -159,10 +164,10 @@ mod tests {
         std::fs::create_dir_all(&here).unwrap();
         std::fs::write(here.join("marker"), "").unwrap();
         let stop = AtomicBool::new(false);
-        let out = run(&here, "ls; exit 3", Duration::from_secs(10), &stop).unwrap();
+        let out = run(&here, "ls; exit 3", Duration::from_secs(10), &stop, &AtomicI32::new(0)).unwrap();
         assert_eq!(out.code, Some(3));
         assert!(out.output.contains("marker"), "{}", out.output);
-        let missing = run(&here, "no-such-command-anywhere", Duration::from_secs(10), &stop).unwrap();
+        let missing = run(&here, "no-such-command-anywhere", Duration::from_secs(10), &stop, &AtomicI32::new(0)).unwrap();
         assert_eq!(missing.code, Some(127), "the shell's own code for a command it cannot find");
         let _ = std::fs::remove_dir_all(&here);
     }
@@ -172,7 +177,7 @@ mod tests {
         let stop = AtomicBool::new(false);
         let begun = Instant::now();
         // A child of its own that would print later, had it lived.
-        let out = run(&dir(), "(sleep 30; echo late) & echo early; sleep 30", Duration::from_millis(1500), &stop).unwrap();
+        let out = run(&dir(), "(sleep 30; echo late) & echo early; sleep 30", Duration::from_millis(1500), &stop, &AtomicI32::new(0)).unwrap();
         assert_eq!(out.ended, Ended::TimedOut);
         assert_eq!(out.code, None);
         assert!(begun.elapsed() < Duration::from_secs(10), "took {:?}", begun.elapsed());
@@ -187,14 +192,14 @@ mod tests {
             std::thread::sleep(Duration::from_millis(300));
             raise.store(true, Ordering::Release);
         });
-        let out = run(&dir(), "sleep 30", Duration::from_secs(60), &stop).unwrap();
+        let out = run(&dir(), "sleep 30", Duration::from_secs(60), &stop, &AtomicI32::new(0)).unwrap();
         assert_eq!(out.ended, Ended::Stopped);
     }
 
     #[test]
     fn a_long_log_keeps_its_end() {
         let stop = AtomicBool::new(false);
-        let out = run(&dir(), "i=0; while [ $i -lt 40000 ]; do echo line-$i-padding-padding; i=$((i+1)); done", Duration::from_secs(60), &stop).unwrap();
+        let out = run(&dir(), "i=0; while [ $i -lt 40000 ]; do echo line-$i-padding-padding; i=$((i+1)); done", Duration::from_secs(60), &stop, &AtomicI32::new(0)).unwrap();
         assert!(out.output.len() <= KEEP);
         assert!(out.output.ends_with("line-39999-padding-padding\n"));
     }

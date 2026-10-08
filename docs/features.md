@@ -1571,7 +1571,9 @@ agent pane in front; the bar under the pane bar shows how it is going.
   is not an end: someone is at the keys.
 - **LOOP-4** At a turn's end the loop MUST first see whether anything
   changed in the worktrees it checks (the commit, the diff, the untracked
-  files) since its last failed check. When nothing did, the agent most
+  files) since its last failed check ended: measured from what the check
+  left, so a check that writes files of its own (a coverage report, a new
+  snapshot) is not taken for the agent's work. When nothing did, the agent most
   likely stopped to ask something, or gave up: the loop runs nothing,
   sends nothing, and waits on you, saying so. It goes on at the next turn
   that changes something. A turn that ends on a usage limit (STATE-6)
@@ -1581,8 +1583,11 @@ agent pane in front; the bar under the pane bar shows how it is going.
   loops' at a time in the app (the others queue, and say so), each command
   for at most 20 minutes. A command still running then is stopped as an
   agent is (PANE-5: SIGTERM to its process group, then SIGKILL), and the
-  loop stops, saying why. So does a command the shell cannot find (exit
-  127), which no agent can fix. Stopping a loop stops its check. Nothing
+  loop stops, saying why. So does a command that exits 127, the shell's
+  code for one it cannot find, which is seldom the agent's to fix.
+  Stopping a loop stops its check, and quitting the app stops every
+  check as it stops the agents: in a process group of its own, a build
+  would otherwise run on after the app had gone. Nothing
   that waits runs on the main thread or the async runtime. Every check is
   a real process, often a whole build: the cap keeps a dozen loops from
   building at once on one laptop.

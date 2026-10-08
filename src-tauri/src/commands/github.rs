@@ -868,8 +868,8 @@ pub fn send_pr_feedback(
     let ask = "Work through every point. Fix what is right; where you think a reviewer is \
                wrong, say so and why instead of quietly skipping it. For a failing check, \
                find the cause before changing anything, and reproduce it locally if you can. \
-               Do not reply on GitHub or resolve threads yourself. When you are done, go \
-               through the points one by one and say what you did about each.";
+               When you are done, go through the points one by one and say what you did \
+               about each.";
     let head = format!(
         "Reviewers and CI have come back on the pull requests for `{}`: {}.",
         task.branch,

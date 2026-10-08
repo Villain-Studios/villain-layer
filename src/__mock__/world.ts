@@ -165,6 +165,7 @@ const health: RepoHealth[] = [
 const cleanup: CleanupItem[] = [
   { id: "folder:ACME-90", kind: "folder", repo: null, title: "ACME-90", verdict: "safe", detail: "No task uses it. It holds 2 files the app wrote." },
   { id: "folder:ACME-77", kind: "folder", repo: null, title: "ACME-77", verdict: "blocked", detail: "No task uses it, but api: 3 uncommitted changes." },
+  { id: "folder:ACME-61", kind: "folder", repo: null, title: "ACME-61", verdict: "risky", detail: "No task uses it, but it holds 2 files the app did not make (860 KB), none of them git's: .cursor/debug-8b0881.log, web/apps/host/.angular/cache/21.2.24/web/.tsbuildinfo." },
   { id: "clone_branch:api:ACME-123", kind: "clone_branch", repo: "api", title: "ACME-123", verdict: "safe", detail: "A task works on this branch in the app's copy, which has every commit on it. The task does not need this one." },
   { id: "store_branch:api:ACME-85", kind: "store_branch", repo: "api", title: "ACME-85", verdict: "safe", detail: "No task uses it, and #85 merged every commit on it. GitHub can restore it from the pull request." },
   { id: "store_branch:api:review/api-392", kind: "store_branch", repo: "api", title: "review/api-392", verdict: "safe", detail: "Left from reviewing #392. GitHub keeps every commit on it in that pull request." },

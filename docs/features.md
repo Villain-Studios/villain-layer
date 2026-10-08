@@ -81,8 +81,13 @@ up** removes what tasks left behind.
 - **REPO-8** Clean up MUST list what it would remove, and why, before it
   removes anything. It pre-selects only what loses nothing, and checks each
   item again as it removes it. It finds:
-  - task folders no task uses, removable when they hold only what the app
-    generated and worktrees with no changes;
+  - task folders no task uses: pre-selected when they hold only what the
+    app generated, empty folders and worktrees with no changes; offered,
+    naming the first few, when they also hold files the app did not make
+    (an agent CLI's log, a build cache written after the worktree went).
+    Never one holding a git repository or worktree at any depth that no
+    copy lists, or more than 5000 things the app did not make. A folder
+    that gained files since the list was made is not removed;
   - worktrees inside a task folder that are none of its checkouts, on the
     same terms;
   - task branches in the user's clone, left from before REPO-4 or taken

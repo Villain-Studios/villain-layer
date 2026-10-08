@@ -48,8 +48,9 @@ pub struct CleanupItem {
 
 pub(super) enum Action {
     /// The worktrees in it, each with the repository it belongs to; then
-    /// the files the app made; then the folder, once empty.
-    Folder(PathBuf, Vec<(PathBuf, PathBuf)>),
+    /// the files the app made; then the folder, once empty. With `true`,
+    /// whatever else it holds as well, which is never git's.
+    Folder(PathBuf, Vec<(PathBuf, PathBuf)>, bool),
     Worktree(PathBuf, PathBuf),
     /// A branch in a repository, and the tip it was judged at.
     Branch(PathBuf, String, String),
@@ -329,9 +330,12 @@ fn apply(state: &AppState, remote: Remote, ids: &[String]) -> Vec<Cleaned> {
 
 fn remove(action: &Action) -> Result<()> {
     match action {
-        Action::Folder(dir, worktrees) => {
+        Action::Folder(dir, worktrees, everything) => {
             for (owner, wt) in worktrees {
                 git::remove_worktree(owner, &wt.to_string_lossy(), false)?;
+            }
+            if *everything {
+                return Ok(std::fs::remove_dir_all(dir)?);
             }
             remove_generated(dir);
             std::fs::remove_dir(dir)
@@ -421,13 +425,15 @@ mod tests {
         assert_eq!(verdict(&found, "folder", "OLD-1"), Some(Verdict::Safe));
         assert_eq!(verdict(&found, "folder", "OLD-2"), Some(Verdict::Safe));
         assert_eq!(verdict(&found, "folder", "OLD-3"), Some(Verdict::Blocked));
-        assert_eq!(verdict(&found, "folder", "OLD-4"), Some(Verdict::Blocked));
+        assert_eq!(verdict(&found, "folder", "OLD-4"), Some(Verdict::Risky), "a note of the user's is offered, never ticked");
+        assert!(detail(&found, "folder", "OLD-4").contains("notes.txt"));
         assert!(found.iter().all(|i| !i.title.contains("DEV-1")), "the other build's task is not offered");
 
-        let ids: Vec<String> = found.iter().map(|i| i.id.clone()).collect();
+        // What the dialog ticks, and what it greys out, which is refused.
+        let ids: Vec<String> = found.iter().filter(|i| i.verdict != Verdict::Risky).map(|i| i.id.clone()).collect();
         let done = apply(&state, Remote::default(), &ids);
         assert!(succeeded(&done, &found, "folder", "OLD-1") && succeeded(&done, &found, "folder", "OLD-2"));
-        assert!(!succeeded(&done, &found, "folder", "OLD-3") && !succeeded(&done, &found, "folder", "OLD-4"));
+        assert!(!succeeded(&done, &found, "folder", "OLD-3"));
         assert!(!old.exists() && !clean.exists());
         assert!(dirty.join("api/new.txt").is_file() && noted.join("notes.txt").is_file());
         assert!(theirs.join("api/a.txt").is_file());
@@ -468,6 +474,78 @@ mod tests {
         assert!(!crate::git::branch_exists(&clone, "T-1"));
         assert!(crate::git::branch_exists(&store, "T-1"), "the task's own copy stays");
         assert!(crate::git::branch_exists(&clone, "T-2") && crate::git::branch_exists(&clone, "T-3"));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_folder_holding_only_files_nobody_would_miss_is_offered_and_goes_whole_when_picked() {
+        let (root, cfg) = setup();
+        let state = state(&root, cfg);
+        // ACME-146: an agent CLI's log, and a build cache written into the
+        // checkout's folder after its worktree had gone.
+        let left = root.join("tasks/ACME-146");
+        std::fs::create_dir_all(left.join(".cursor")).unwrap();
+        std::fs::write(left.join(".cursor/debug-8b0881.log"), "debug").unwrap();
+        let cache = left.join("customer-portal/apps/host/.angular/cache");
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::write(cache.join(".tsbuildinfo"), vec![b'x'; 2048]).unwrap();
+        std::fs::write(left.join("AGENTS.md"), "context").unwrap();
+        // Only folders, the files in them gone.
+        let hollow = root.join("tasks/ACME-1");
+        std::fs::create_dir_all(hollow.join("api/apps/host")).unwrap();
+
+        let found = items(&state);
+        assert_eq!(verdict(&found, "folder", "ACME-146"), Some(Verdict::Risky));
+        let why = detail(&found, "folder", "ACME-146");
+        assert!(why.contains("2 files the app did not make (2 KB)"), "{why}");
+        assert!(why.contains(".cursor/debug-8b0881.log") && why.contains("customer-portal/apps/host/.angular/cache/.tsbuildinfo"), "{why}");
+        assert_eq!(verdict(&found, "folder", "ACME-1"), Some(Verdict::Safe), "empty folders lose nothing");
+
+        let ids: Vec<String> = found.iter().filter(|i| i.kind == "folder").map(|i| i.id.clone()).collect();
+        let done = apply(&state, Remote::default(), &ids);
+        assert!(succeeded(&done, &found, "folder", "ACME-146") && succeeded(&done, &found, "folder", "ACME-1"));
+        assert!(!left.exists() && !hollow.exists());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_repository_anywhere_in_a_leftover_folder_keeps_it() {
+        let (root, cfg) = setup();
+        let state = state(&root, cfg);
+        let left = root.join("tasks/OLD-5");
+        let nested = left.join("tools/scripts");
+        std::fs::create_dir_all(&nested).unwrap();
+        git(&nested, &["init", "-q"]);
+        std::fs::write(left.join("tools/readme.txt"), "mine").unwrap();
+        let itself = root.join("tasks/OLD-6");
+        std::fs::create_dir_all(&itself).unwrap();
+        git(&itself, &["init", "-q"]);
+
+        let found = items(&state);
+        assert_eq!(verdict(&found, "folder", "OLD-5"), Some(Verdict::Blocked));
+        assert!(detail(&found, "folder", "OLD-5").contains("tools/scripts is a git repository"));
+        assert_eq!(verdict(&found, "folder", "OLD-6"), Some(Verdict::Blocked));
+
+        let ids: Vec<String> = found.iter().map(|i| i.id.clone()).collect();
+        apply(&state, Remote::default(), &ids);
+        assert!(nested.join(".git").is_dir() && itself.join(".git").is_dir());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_folder_that_gained_files_since_the_list_was_made_is_not_removed() {
+        let (root, cfg) = setup();
+        let state = state(&root, cfg);
+        let left = root.join("tasks/OLD-7");
+        std::fs::create_dir_all(&left).unwrap();
+        std::fs::write(left.join("build.log"), "old").unwrap();
+        let found = items(&state);
+        std::fs::write(left.join("draft.md"), "written since").unwrap();
+
+        let ids: Vec<String> = found.iter().filter(|i| i.title == "OLD-7").map(|i| i.id.clone()).collect();
+        let done = apply(&state, Remote::default(), &ids);
+        assert!(!done[0].ok && done[0].detail.contains("Changed since"));
+        assert!(left.join("draft.md").is_file());
         std::fs::remove_dir_all(&root).ok();
     }
 

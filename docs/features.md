@@ -1435,7 +1435,7 @@ count and banner treats it like any other.
 
 | Agent | ACP command | Picks a conversation up by | Checked against |
 |---|---|---|---|
-| `claude` | `claude-agent-acp`, Zed's adapter, installed separately | load, resume, list | adapter 0.22.2 |
+| `claude` | `claude-agent-acp`, installed separately (`@agentclientprotocol/claude-agent-acp`, formerly `@zed-industries/`) | load, resume, list | adapter 0.22.2 |
 | `copilot` | `copilot --acp` | load, list | 1.0.93 |
 | `opencode` | `opencode acp` | load, resume, list | 1.18.35 |
 | `gemini` | `gemini --acp` | load | 0.63.0, `initialize` only: it would not open a conversation for a personal Google account |
@@ -1516,9 +1516,12 @@ Code: `acp/` (`conn.rs` the protocol, `user.rs`, `conversation.rs`,
 `VILLAIN_ACP_AGENT="opencode acp" cargo test --lib real_agent -- --ignored`.
 
 Known gaps:
-- Claude Code runs over ACP only through Zed's `claude-agent-acp`
+- Claude Code runs over ACP only through the `claude-agent-acp`
   adapter, which bundles its own Claude Agent SDK: its models and features
-  are that version's, not those of the `claude` on the PATH. A slash
+  are that version's, not those of the `claude` on the PATH. An old one
+  goes wrong in ways the app cannot see: 0.22.2, the last under
+  `@zed-industries/`, has the model call its own tools without their
+  schemas (`Read` with `path`, refused) until it looks them up. A slash
   command the user ran there is left out of a replay, with the adapter's
   own (ACP-9).
 - Copilot's ACP mode is in public preview. Gemini CLI was checked only as

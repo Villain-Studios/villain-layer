@@ -585,8 +585,9 @@ send feedback to an agent, and finish a merged task.
   It MUST pre-select only what is new: not
   resolved, not sent before, not from a bot, not your own, not outdated.
   The feedback is written to `PR_FEEDBACK.md` in the task folder, never in
-  a worktree, and a pointer is typed into the agent. The agent is told not
-  to reply on GitHub or resolve threads itself.
+  a worktree, and a pointer is typed into the agent. It is not told to keep
+  off GitHub: whether it replies or resolves threads is the user's call,
+  and told never to, it refused when asked to.
 - **PR-7** Failing GitHub Actions checks MUST come with the end of the
   job's log, trimmed to the error.
 - **PR-8** Every task's PRs are refreshed every 90 seconds (180 when idle)

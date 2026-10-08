@@ -82,12 +82,29 @@ pub(super) fn cut(text: String) -> String {
     format!("{}\n… cut: {} KB more", &text[..end], (text.len() - end) / 1024)
 }
 
+/// Tool output without the code fence `claude-agent-acp` wraps it in. It is
+/// shown as plain text already, so the fence showed as two lines of
+/// backticks around every result. Fences inside it are kept.
+fn unfence(text: String) -> String {
+    let trimmed = text.trim();
+    let inner = trimmed
+        .strip_prefix("```")
+        .and_then(|rest| rest.split_once('\n'))
+        .filter(|(lang, _)| !lang.contains('`') && !lang.contains(' '))
+        .and_then(|(_, body)| body.strip_suffix("```"))
+        .filter(|body| !body.lines().any(|l| l.trim_start().starts_with("```")));
+    match inner {
+        Some(body) => body.trim_end_matches('\n').to_string(),
+        None => text,
+    }
+}
+
 pub(super) fn tool_content(items: &[Value]) -> Vec<ToolContent> {
     items
         .iter()
         .filter_map(|c| match c.get("type").and_then(Value::as_str)? {
             "content" => {
-                let text = block_text(c.get("content"));
+                let text = unfence(block_text(c.get("content")));
                 (!text.is_empty()).then(|| ToolContent::Text { text: cut(text) })
             }
             "diff" => Some(ToolContent::Diff {
@@ -100,4 +117,18 @@ pub(super) fn tool_content(items: &[Value]) -> Vec<ToolContent> {
             _ => None,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tool_output_loses_the_fence_around_it_and_keeps_fences_inside_it() {
+        assert_eq!(unfence("```\n<tool_use_error>no</tool_use_error>\n```".into()), "<tool_use_error>no</tool_use_error>");
+        assert_eq!(unfence("```console\n$ ls\na b\n```\n".into()), "$ ls\na b");
+        let two = "```\na\n```\ntext\n```\nb\n```";
+        assert_eq!(unfence(two.into()), two);
+        assert_eq!(unfence("plain".into()), "plain");
+    }
 }

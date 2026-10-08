@@ -121,59 +121,66 @@ function AcpPane({ pane, visible }: { pane: PaneInfo; visible: boolean }) {
           atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
         }}
       >
-        {entries.length === 0 && (
-          <div className="acp-empty">
-            {view?.ready ? `Ask ${view.agent ?? "the agent"} something.` : `Starting ${pane.title}…`}
-          </div>
-        )}
-        {entries.map((e) => <Entry key={e.index} entry={e} onAnswer={answer} />)}
-        {busy && <div className="acp-working"><span className="dot live" /> Working · Esc to stop</div>}
+        <div className="acp-col">
+          {entries.length === 0 && (
+            <div className="acp-empty">
+              <div className="acp-empty-title">{pane.title}</div>
+              <div>{view?.ready ? "Ask it anything. Type / for its commands." : "Starting…"}</div>
+            </div>
+          )}
+          {entries.map((e) => <Entry key={e.index} entry={e} onAnswer={answer} />)}
+          {busy && <div className="acp-working"><span className="dot live" /> Working · Esc to stop</div>}
+        </div>
       </div>
 
       <div className="acp-compose">
-        {commands.length > 0 && (
-          <div className="acp-commands">
-            {commands.map((c) => (
-              <button key={c.name} className="acp-command" onClick={() => setDraft(`/${c.name} `)}>
-                <span className="mono">/{c.name}</span> <span className="muted">{c.hint ?? c.description}</span>
-              </button>
-            ))}
+        <div className="acp-col">
+          {commands.length > 0 && (
+            <div className="acp-commands">
+              {commands.map((c) => (
+                <button key={c.name} className="acp-command" onClick={() => setDraft(`/${c.name} `)}>
+                  <span className="mono">/{c.name}</span> <span className="muted">{c.hint ?? c.description}</span>
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="acp-box">
+            <textarea
+              rows={3}
+              value={draft}
+              disabled={over}
+              placeholder={over ? "The agent has exited." : busy ? "Sent when this turn ends…" : "Message the agent · Enter to send, Shift-Enter for a new line"}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                  e.preventDefault();
+                  void send();
+                }
+              }}
+            />
+            <div className="acp-bar">
+              {(view?.settings ?? []).map((s) => (
+                <label key={s.id} className="acp-setting" title={s.options.find((o) => o.value === s.current)?.description ?? s.name}>
+                  <span>{s.name}</span>
+                  <select value={s.current} disabled={over} onChange={(e) => set(s.id, e.target.value)}>
+                    {s.options.map((o) => <option key={o.value} value={o.value}>{o.name}</option>)}
+                  </select>
+                </label>
+              ))}
+              <span className="spacer" />
+              {view?.usage && (
+                <span className="muted" title="Context used, of the model's window">
+                  {kilo(view.usage.used)} / {kilo(view.usage.size)}{view.usage.cost ? ` · ${view.usage.cost}` : ""}
+                </span>
+              )}
+              {view?.agent && <span className="muted">{view.agent}</span>}
+              {busy ? (
+                <button className="btn btn-sm" onClick={stop}>Stop</button>
+              ) : (
+                <button className="btn btn-sm btn-primary" disabled={over || !draft.trim()} onClick={() => void send()}>Send</button>
+              )}
+            </div>
           </div>
-        )}
-        <textarea
-          rows={3}
-          value={draft}
-          disabled={over}
-          placeholder={over ? "The agent has exited." : busy ? "Sent when this turn ends…" : "Message the agent · Enter to send, Shift-Enter for a new line"}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-              e.preventDefault();
-              void send();
-            }
-          }}
-        />
-        <div className="acp-bar">
-          {(view?.settings ?? []).map((s) => (
-            <label key={s.id} className="acp-setting" title={s.options.find((o) => o.value === s.current)?.description ?? s.name}>
-              <span>{s.name}</span>
-              <select value={s.current} disabled={over} onChange={(e) => set(s.id, e.target.value)}>
-                {s.options.map((o) => <option key={o.value} value={o.value}>{o.name}</option>)}
-              </select>
-            </label>
-          ))}
-          <span className="spacer" />
-          {view?.usage && (
-            <span className="muted" title="Context used, of the model's window">
-              {kilo(view.usage.used)} / {kilo(view.usage.size)}{view.usage.cost ? ` · ${view.usage.cost}` : ""}
-            </span>
-          )}
-          {view?.agent && <span className="muted">{view.agent}</span>}
-          {busy ? (
-            <button className="btn btn-sm" onClick={stop}>Stop</button>
-          ) : (
-            <button className="btn btn-sm btn-primary" disabled={over || !draft.trim()} onClick={() => void send()}>Send</button>
-          )}
         </div>
       </div>
     </div>

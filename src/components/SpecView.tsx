@@ -1,103 +1,118 @@
 import { useEffect, useState } from "react";
 import { api } from "../lib/api";
+import { approvedText, editKey, editorText, useSpecs } from "../lib/specs";
 import { useStore } from "../store";
-import type { TaskView } from "../lib/types";
+import type { RepoSpec, SpecKind, SpecPart, TaskView } from "../lib/types";
 import { Confirm, Spinner } from "./ui";
+import { SpecSide } from "./spec/SpecSide";
 
-/** What "Write one yourself" starts from: the headings a draft has (SPEC-1). */
-const TEMPLATE = `## Goal
+const PARTS: SpecPart[] = ["requirements", "design", "tasks"];
 
-## Acceptance criteria
+/** What "Write them yourself" starts from: the headings a draft has (SPEC-1). */
+const TEMPLATE: Record<SpecKind, string> = {
+  feature: "## Goal\n\n## Requirements\n\n- R-1: WHEN … THE SYSTEM SHALL …\n\n## Out of scope\n\n-\n\n## Open questions\n\nNone.\n",
+  bugfix: "## Current behaviour\n\n## Expected behaviour\n\n- R-1: WHEN … THE SYSTEM SHALL …\n\n## Unchanged behaviour\n\n- R-2: WHEN … THE SYSTEM SHALL CONTINUE TO …\n\n## Open questions\n\nNone.\n",
+};
 
-- [ ] AC-1:
-
-## Out of scope
-
--
-
-## Open questions
-
-None.
-`;
+export function partName(part: SpecPart, kind: SpecKind): string {
+  if (part === "requirements") return kind === "bugfix" ? "Bug analysis" : "Requirements";
+  return part === "design" ? "Design" : "Tasks";
+}
 
 /**
- * A task's spec (§19): drafted from the ticket, edited here, and only once
- * saved given to the task's agents. Start agent saves it and starts one.
+ * A task's specs (§19): for each repository, requirements, design and tasks,
+ * each drafted, edited here and approved in turn. Approving commits the file
+ * on the task's branch, so it goes to review with the code and stays in the
+ * repository after the task is gone.
  */
 export function SpecView({ task }: { task: TaskView }) {
-  const spec = useStore((s) => s.specs[task.id]);
-  const pending = useStore((s) => s.pendingSpec);
-  const agents = useStore((s) => s.agents);
-  const loadSpec = useStore((s) => s.loadSpec);
-  const editSpec = useStore((s) => s.editSpec);
-  const saveSpec = useStore((s) => s.saveSpec);
-  const draftSpec = useStore((s) => s.draftSpec);
-  const setPendingSpec = useStore((s) => s.setPendingSpec);
-  const refreshPanes = useStore((s) => s.refreshPanes);
-  const showPane = useStore((s) => s.showPane);
-  const setTab = useStore((s) => s.setTab);
-  const toast = useStore((s) => s.toast);
+  const state = useSpecs((s) => s.byTask[task.id]);
+  const load = useSpecs((s) => s.load);
+  const edit = useSpecs((s) => s.edit);
+  const draft = useSpecs((s) => s.draft);
+  const approve = useSpecs((s) => s.approve);
+  const pending = useSpecs((s) => s.pending);
+  const setPending = useSpecs((s) => s.setPending);
+  const running = useStore((s) => s.panes.filter((p) => p.task_id === task.id && p.running && p.kind === "agent").length);
   const fail = useStore((s) => s.fail);
+  const toast = useStore((s) => s.toast);
 
-  const installed = agents.filter((a) => a.installed);
-  const [agentId, setAgentId] = useState(installed[0]?.id ?? "");
+  const [checkoutId, setCheckoutId] = useState<string | null>(null);
+  const [part, setPart] = useState<SpecPart | null>(null);
+  const [kind, setKind] = useState<SpecKind>("feature");
+  const [agentId, setAgentId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [replacing, setReplacing] = useState(false);
+  /** What was just approved while agents were running, to tell them (SPEC-14). */
+  const [tell, setTell] = useState<{ checkoutId: string; parts: SpecPart[] } | null>(null);
 
-  const loaded = spec?.loaded ?? false;
+  const loaded = state?.loaded ?? false;
   useEffect(() => {
-    if (!loaded) void loadSpec(task.id).catch(fail);
-  }, [task.id, loaded, loadSpec, fail]);
-
-  // A default agent once the list arrives, unless one was picked.
-  const firstInstalled = installed[0]?.id;
+    if (!loaded) void load(task.id).catch(fail);
+  }, [task.id, loaded, load, fail]);
+  // Feature or bug, as the spec already says once there is one.
+  const savedKind = state?.spec?.repos[0]?.kind;
   useEffect(() => {
-    if (!agentId && firstInstalled) setAgentId(firstInstalled);
-  }, [agentId, firstInstalled]);
+    if (savedKind) setKind(savedKind);
+  }, [task.id, savedKind]);
 
-  // Start work's choice (SPEC-6): the agent to start later, and a draft now,
-  // unless the task already has a spec.
+  const repos = state?.spec?.repos ?? [];
+  const repo = repos.find((r) => r.checkout_id === checkoutId) ?? repos[0];
+  const edits = state?.edits ?? {};
+  const started = repos.some((r) => r.parts.some((p) => p.approved)) || Object.keys(edits).length > 0;
+  const drafting = state?.drafting ?? null;
+
+  // Start work's choice (SPEC-18): the agent to start later, and the
+  // requirements drafted now, unless there is a spec already.
   useEffect(() => {
-    if (!pending || pending.taskId !== task.id || !spec?.loaded) return;
-    setPendingSpec(null);
-    if (pending.agentId) setAgentId(pending.agentId);
-    if (!spec.saved && spec.edit === null && !spec.drafting) void draftSpec(task.id);
-  }, [pending, task.id, spec, setPendingSpec, draftSpec]);
+    if (!pending || pending.taskId !== task.id || !loaded) return;
+    setPending(null);
+    setAgentId(pending.agentId);
+    if (!started && !drafting) void draft(task.id, "requirements", null, null).catch(fail);
+  }, [pending, task.id, loaded, started, drafting, setPending, draft, fail]);
 
-  if (!spec?.loaded) {
-    return <div className="empty"><Spinner /></div>;
-  }
-
-  const drafting = spec.drafting !== null;
-  const text = spec.edit ?? spec.saved?.text ?? "";
-  const dirty = spec.edit !== null;
-  const from = task.issue_key ? "the ticket" : "the task's name";
-
-  if (!spec.saved && !dirty && !drafting) {
+  if (!loaded) return <div className="empty"><Spinner /></div>;
+  if (!repo) {
     return (
       <div className="empty">
-        <h2>No spec yet</h2>
-        <p>
-          A spec says what done means: the goal, the acceptance criteria, and what is out of
-          scope. Every agent in this task works to it once you save it.
-        </p>
-        <div className="row">
-          <button className="btn btn-primary" onClick={() => void draftSpec(task.id)}>
-            Draft from {from}
-          </button>
-          <button className="btn" onClick={() => editSpec(task.id, TEMPLATE)}>
-            Write one yourself
-          </button>
-        </div>
+        <h2>No repositories</h2>
+        <p>A spec is kept in each repository the task works in. Add one to the task first.</p>
       </div>
     );
   }
 
-  async function save() {
+  if (!started && !drafting) {
+    return (
+      <SpecStart
+        kind={kind}
+        setKind={setKind}
+        from={task.issue_key ? "the ticket" : "the task's name"}
+        legacy={state?.spec?.legacy ?? null}
+        busy={busy}
+        onDraft={() => void draft(task.id, "requirements", null, kind).catch(fail)}
+        onQuick={() => void quick()}
+        onWrite={(text) => repos.forEach((r) => edit(task.id, r.checkout_id, "requirements", text))}
+      />
+    );
+  }
+
+  const current = part ?? firstOpen(repo);
+  const view = repo.parts.find((p) => p.part === current)!;
+  const key = editKey(repo.checkout_id, current);
+  const text = editorText(state, repo, current);
+  const dirty = edits[key] !== undefined;
+  const before = PARTS[PARTS.indexOf(current) - 1];
+  const ready = !before || !!repo.parts.find((p) => p.part === before)?.approved || edits[editKey(repo.checkout_id, before)] !== undefined;
+  const isDrafting = drafting?.part === current;
+  const allDrafted = repo.parts.every((p) => !p.approved && edits[editKey(repo.checkout_id, p.part)] !== undefined);
+
+  async function quick() {
     setBusy(true);
     try {
-      await saveSpec(task.id);
-      toast("success", text.trim() ? "Spec saved. Agents in this task now work to it." : "Spec removed.");
+      await draft(task.id, "requirements", null, kind);
+      await draft(task.id, "design", null, null);
+      await draft(task.id, "tasks", null, null);
+      setPart("requirements");
     } catch (e) {
       fail(e);
     } finally {
@@ -105,16 +120,15 @@ export function SpecView({ task }: { task: TaskView }) {
     }
   }
 
-  async function startAgent() {
-    if (!agentId) return;
+  async function approveParts(parts: SpecPart[]) {
+    if (!repo) return;
     setBusy(true);
     try {
-      if (dirty || !spec?.saved) await saveSpec(task.id);
-      const prompt = await api.taskPrompt(task.id, null);
-      const pane = await api.spawnAgent(task.id, agentId, null, prompt);
-      await refreshPanes();
-      showPane(pane.id);
-      setTab("terminals");
+      await approve(task.id, repo.checkout_id, parts, parts.includes("requirements") ? kind : null);
+      toast("success", repo.in_repo ? `Approved and committed in ${repo.folder}.` : "Approved.");
+      if (running > 0) setTell({ checkoutId: repo.checkout_id, parts });
+      const next = PARTS[PARTS.indexOf(parts[parts.length - 1]) + 1];
+      if (next && parts.length === 1) setPart(next);
     } catch (e) {
       fail(e);
     } finally {
@@ -122,91 +136,171 @@ export function SpecView({ task }: { task: TaskView }) {
     }
   }
 
-  const criteria = spec.saved?.criteria ?? [];
-  const status = drafting
-    ? `Drafting from ${from}…`
-    : dirty
-      ? spec.saved ? "Changed since saved: agents still see the saved spec" : "Not saved: agents do not see it yet"
-      : `Saved · ${criteria.length} acceptance criteri${criteria.length === 1 ? "on" : "a"}`;
+  function redraft() {
+    if (!repo) return;
+    void draft(task.id, current, current === "requirements" ? null : repo.checkout_id, null).catch(fail);
+  }
+
+  const status = isDrafting
+    ? current === "requirements" && repos.length > 1 ? "Drafting for every repository…" : "Drafting…"
+    : drafting
+      ? `Drafting the ${drafting.part}…`
+      : view.stale
+      ? `Out of date: the ${current === "tasks" ? "design or requirements" : "requirements"} changed since. Sync redrafts it.`
+      : dirty
+        ? view.approved ? "Changed since approved: agents still work to what was approved" : "Not approved: no agent sees it yet"
+        : view.approved
+          ? repo.in_repo ? "Approved and committed" : "Approved"
+          : "Not started";
+  const draftLabel = view.stale ? "Sync" : text.trim() ? "Redraft" : "Draft";
+  const draftTitle = current === "requirements"
+    ? `From ${task.issue_key ? "the ticket" : "the task's name"}, for every repository at once`
+    : current === "design" ? `From the requirements, reading ${repo.folder}'s code` : "From the requirements and the design";
 
   return (
     <div className="spec">
+      {repos.length > 1 && (
+        <div className="spec-repos">
+          {repos.map((r) => (
+            <button
+              key={r.checkout_id}
+              className={`spec-repo${r.checkout_id === repo.checkout_id ? " active" : ""}`}
+              onClick={() => { setCheckoutId(r.checkout_id); setPart(null); }}
+            >
+              {r.folder}
+              <span className="muted">{r.parts.filter((p) => p.approved && !p.stale).length}/3</span>
+            </button>
+          ))}
+        </div>
+      )}
+      <div className="spec-steps">
+        {PARTS.map((p, i) => {
+          const v = repo.parts.find((x) => x.part === p)!;
+          const has = edits[editKey(repo.checkout_id, p)] !== undefined;
+          const label = v.stale ? "out of date" : has ? (v.approved ? "changed" : "draft") : v.approved ? "approved" : "not started";
+          return (
+            <button key={p} className={`spec-step${p === current ? " active" : ""}`} onClick={() => setPart(p)}>
+              <span className={`spec-num ${v.approved && !v.stale && !has ? "done" : ""}`}>{v.approved && !v.stale && !has ? "✓" : i + 1}</span>
+              <span>{partName(p, repo.kind)}</span>
+              <span className={`spec-state ${label.replace(/ /g, "-")}`}>{label}</span>
+            </button>
+          );
+        })}
+        <span className="spacer" />
+        <span className="muted spec-home" title={repo.in_repo ? "Committed on the task's branch" : "Specs are off for this repository (Repos): kept by the app, not in git"}>
+          {repo.in_repo ? repo.home : "kept by the app"}
+        </span>
+      </div>
+      {tell && (
+        <div className="spec-tell">
+          {running} agent{running === 1 ? " is" : "s are"} working in this task to the spec as it was.
+          <button className="btn btn-sm" onClick={() => {
+            void api.tellSpecChange(task.id, tell.checkoutId, tell.parts).then((n) => toast("success", `Told ${n} agent${n === 1 ? "" : "s"}.`)).catch(fail);
+            setTell(null);
+          }}>Tell them</button>
+          <button className="btn btn-sm" onClick={() => setTell(null)}>Not now</button>
+        </div>
+      )}
       <div className="spec-bar">
         <button
           className="btn btn-sm"
-          disabled={drafting || busy}
-          onClick={() => (text.trim() ? setReplacing(true) : void draftSpec(task.id))}
+          disabled={!!drafting || busy || !ready}
+          title={ready ? draftTitle : `Approve the ${before} first`}
+          onClick={() => (text.trim() && !view.stale ? setReplacing(true) : redraft())}
         >
-          {text.trim() ? "Redraft" : "Draft"} from {from}
+          {draftLabel} {current === "requirements" ? "" : current}
         </button>
-        {drafting && <Spinner />}
+        {(isDrafting || busy) && <Spinner />}
         <span className="muted">{status}</span>
-        <span style={{ flex: 1 }} />
-        {dirty && spec.saved && (
+        <span className="spacer" />
+        {dirty && (
           <button
             className="btn btn-sm"
-            disabled={drafting || busy}
-            onClick={() => editSpec(task.id, spec.saved?.text ?? "")}
+            disabled={!!drafting || busy}
+            onClick={() => edit(task.id, repo.checkout_id, current, approvedText(repo, current))}
           >
-            Discard changes
+            {view.approved ? "Discard changes" : "Discard draft"}
           </button>
         )}
-        <button className="btn btn-sm" disabled={!dirty || drafting || busy} onClick={() => void save()}>
-          Save
-        </button>
-        <select
-          value={agentId}
-          disabled={installed.length === 0}
-          onChange={(e) => setAgentId(e.target.value)}
-          title="The agent Start agent starts, at the task folder"
-        >
-          {installed.length === 0 && <option value="">No agent CLI installed</option>}
-          {installed.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-        </select>
+        {allDrafted && (
+          <button className="btn btn-sm" disabled={!!drafting || busy} onClick={() => void approveParts(PARTS)}>
+            Approve all three
+          </button>
+        )}
         <button
           className="btn btn-sm btn-primary"
-          disabled={!agentId || !text.trim() || drafting || busy}
-          title="Save the spec, then start the agent with it"
-          onClick={() => void startAgent()}
+          disabled={!!drafting || busy || !(dirty || (view.stale && text.trim()))}
+          title={repo.in_repo ? `Write it to ${repo.home} and commit it on the task's branch` : "Keep it as the approved spec"}
+          onClick={() => void approveParts([current])}
         >
-          {busy ? "Starting…" : "Start agent"}
+          Approve {partName(current, repo.kind).toLowerCase()}
         </button>
       </div>
-      {spec.saved && !dirty && criteria.length === 0 && (
-        <div className="spec-warn">
-          No acceptance criteria found. List them under an “Acceptance criteria” heading:
-          they are what done means.
-        </div>
-      )}
       <div className="spec-body">
         <textarea
           className="spec-editor"
           value={text}
-          readOnly={drafting}
+          readOnly={isDrafting}
           spellCheck={false}
-          placeholder="## Goal…"
-          onChange={(e) => editSpec(task.id, e.target.value)}
+          placeholder={current === "tasks" ? "## Tasks\n\n- [ ] 1. … (R-1)" : "## …"}
+          onChange={(e) => edit(task.id, repo.checkout_id, current, e.target.value)}
         />
-        {criteria.length > 0 && (
-          <aside className="spec-criteria">
-            <h3>Acceptance criteria</h3>
-            <ol>
-              {criteria.map((c) => (
-                <li key={c.id}><b>{c.id}</b> {c.text}</li>
-              ))}
-            </ol>
-          </aside>
-        )}
+        <SpecSide task={task} repo={repo} repos={repos} agentId={agentId} setAgentId={setAgentId} />
       </div>
       {replacing && (
         <Confirm
-          title="Replace the spec in the editor?"
-          body={`A new draft from ${from} replaces what is in the editor. What is saved stays until you save again.`}
+          title="Replace what the editor holds?"
+          body={current === "requirements" && repos.length > 1
+            ? "A new draft replaces the requirements of every repository in the editor. What is approved stays until you approve again."
+            : "A new draft replaces what is in the editor. What is approved stays until you approve again."}
           confirmLabel="Redraft"
           danger={false}
-          onConfirm={() => { void draftSpec(task.id); }}
+          onConfirm={() => { setReplacing(false); redraft(); }}
           onCancel={() => setReplacing(false)}
         />
+      )}
+    </div>
+  );
+}
+
+/** The first file not yet approved, or the tasks. */
+function firstOpen(repo: RepoSpec): SpecPart {
+  return repo.parts.find((p) => !p.approved || p.stale)?.part ?? "tasks";
+}
+
+/** Before any spec: what it is, a bug or a feature, and how to start one. */
+function SpecStart({ kind, setKind, from, legacy, busy, onDraft, onQuick, onWrite }: {
+  kind: SpecKind;
+  setKind: (k: SpecKind) => void;
+  from: string;
+  legacy: string | null;
+  busy: boolean;
+  onDraft: () => void;
+  onQuick: () => void;
+  onWrite: (text: string) => void;
+}) {
+  return (
+    <div className="empty spec-start">
+      <h2>No spec yet</h2>
+      <p>
+        A spec is three files in each repository, reviewed in turn: the requirements (what done
+        means), the design (how), and the tasks an agent works through. Approving one commits it on
+        the task's branch, so it goes to review with the code and stays in the repository.
+      </p>
+      <div className="row spec-kind">
+        <label><input type="radio" checked={kind === "feature"} onChange={() => setKind("feature")} /> A feature</label>
+        <label><input type="radio" checked={kind === "bugfix"} onChange={() => setKind("bugfix")} /> A bug</label>
+      </div>
+      <div className="row">
+        <button className="btn btn-primary" disabled={busy} onClick={onDraft}>Draft the {kind === "bugfix" ? "bug analysis" : "requirements"} from {from}</button>
+        <button className="btn" disabled={busy} onClick={onQuick} title="Requirements, design and tasks in one go, to approve together">Quick spec</button>
+        <button className="btn" disabled={busy} onClick={() => onWrite(TEMPLATE[kind])}>Write it yourself</button>
+      </div>
+      {legacy && (
+        <p className="muted">
+          This task has a spec from before, kept beside the task.{" "}
+          <button className="btn btn-sm" onClick={() => onWrite(legacy)}>Start from it</button>
+        </p>
       )}
     </div>
   );

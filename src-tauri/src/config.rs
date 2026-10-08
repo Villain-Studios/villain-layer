@@ -44,6 +44,12 @@ pub struct Project {
     /// its history (UPD-7).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub update_by: Option<crate::git::UpdateBy>,
+    /// Where specs are committed here (SPEC-1), from its root. None: `specs`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spec_folder: Option<String>,
+    /// Specs are kept by the app instead of committed here (SPEC-3).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub specs_in_app: bool,
 }
 
 impl Project {

@@ -623,6 +623,18 @@ fn tools() -> Vec<Value> {
             }),
             vec!["id", "reason"],
         ),
+        tool(
+            "spec_task",
+            "Mark a numbered step of a repository's spec tasks.md done (or not) once \
+             you have finished it. The user follows the work by these ticks.",
+            json!({
+                "task_id": str_prop("Your task's id, from the context file or list_tasks"),
+                "repo": str_prop("The repository's folder in the task; may be left out when there is one"),
+                "step": { "type": "integer", "description": "The step's number in tasks.md" },
+                "done": { "type": "boolean", "description": "Default true; false unticks it" }
+            }),
+            vec!["step"],
+        ),
     ]
 }
 
@@ -975,7 +987,7 @@ async fn call(app: &AppHandle, name: &str, args: Value, caller: Option<&str>) ->
             let body = arg(&args, "body").unwrap_or_default().to_string();
             let draft = args.get("draft").and_then(|d| d.as_bool()).unwrap_or(true);
             Ok(serde_json::to_value(
-                commands::github_open_prs(state, task_id, title, body, draft, Vec::new()).await?,
+                commands::github_open_prs(app.clone(), state, task_id, title, body, draft, Vec::new()).await?,
             )?)
         }
 
@@ -1009,6 +1021,22 @@ async fn call(app: &AppHandle, name: &str, args: Value, caller: Option<&str>) ->
             .await?;
             crate::notes::changed(app);
             Ok(json!({ "remembered": note.id }))
+        }
+
+        "spec_task" => {
+            let task_id = match arg(&args, "task_id") {
+                Some(id) => id.to_string(),
+                None => caller
+                    .and_then(|pane| state.ptys.info(pane).ok())
+                    .map(|p| p.task_id)
+                    .ok_or_else(|| crate::error::Error::Other("give task_id".into()))?,
+            };
+            let repo = arg(&args, "repo").unwrap_or_default().to_string();
+            let step = args.get("step").and_then(Value::as_u64).unwrap_or(0) as u32;
+            let (id, done) = (task_id.clone(), args.get("done").and_then(Value::as_bool).unwrap_or(true));
+            let ticked = commands::blocking(app.clone(), move |state| commands::tick_step(state, &id, &repo, step, done)).await?;
+            let _ = { use tauri::Emitter; app.emit("spec:changed", &task_id) };
+            Ok(serde_json::to_value(ticked)?)
         }
 
         "check_note" => {

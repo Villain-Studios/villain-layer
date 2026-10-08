@@ -1062,6 +1062,8 @@ mod tests {
             group: None,
             store: None,
             update_by: None,
+            spec_folder: None,
+            specs_in_app: false,
         }
     }
 

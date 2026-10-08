@@ -924,6 +924,7 @@ credentials themselves.
 | `remember` | keep a lasting fact about a repository, after asking the user (MEM-1) | yes |
 | `check_note` | say a note still holds, as of now | |
 | `forget_note` | remove a note that no longer holds, with a reason for the message center | yes |
+| `spec_task` | tick (or untick) a numbered step of a repository's spec `tasks.md` (SPEC-13) | |
 | `browser_navigate` | open a page in the task's browser tab (BRW-3), and get its outline | |
 | `browser_back` | back one page | |
 | `browser_snapshot` | the page as an outline, each element it can act on numbered | |
@@ -1020,7 +1021,7 @@ Known gaps:
 | `~/Library/Application Support/eu.codevillain.villain-layer/` | `config.json`: repos, tasks, settings, saved panes. `messages.json`: the message center (MSG-4). `notes.json`: repo notes (MEM-7). At agent launch also `.mcp.json` (0600), `claude-hooks.json`, `copilot-plugin/`, `opencode-plugin.js` |
 | Keychain, service `eu.codevillain.villain-layer` | one item holding every token, paired phones' included (PHONE-3), and the passwords of the browser's saved sign-ins (BRW-18) |
 | `~/.villain-worktrees/` (settable) | task folders, `_chat/` rooms, and `.repos/`: the app's own copy of each repo (REPO-4) |
-| a task folder | the worktrees, `AGENTS.md` and `CLAUDE.md` (task context), `TICKET.md` (PANE-13), spec drafts and checks (SPEC-6, SPEC-15), `.mcp.json`, and `.gemini/settings.json`, `PR_DESCRIPTION.md`, `PR_FEEDBACK.md`, and hand-offs too long to type (`CONFLICTS.md`, `REVIEW_COMMENTS.md`, `PR_DRAFT_REQUEST.md`, `FIRST_PROMPT.md`, PANE-11) as they come up |
+| a task folder | the worktrees, `AGENTS.md` and `CLAUDE.md` (task context), `TICKET.md` (PANE-13), `.spec-drafts/`: spec drafts and checks (SPEC-6, SPEC-15), `.mcp.json`, and `.gemini/settings.json`, `PR_DESCRIPTION.md`, `PR_FEEDBACK.md`, and hand-offs too long to type (`CONFLICTS.md`, `REVIEW_COMMENTS.md`, `PR_DRAFT_REQUEST.md`, `FIRST_PROMPT.md`, PANE-11) as they come up |
 | `~/.claude.json` | trust entries for the app's own folders only (PANE-10) |
 | `<config folder>/browser/` | the browser's own Chrome profile (BRW-1): cookies, sign-ins and storage of the pages opened there |
 | `~/Library/Logs/villain-layer/panic.log` | a crash's location and backtrace |
@@ -1435,8 +1436,8 @@ each reviewed before the next is drafted.
   commit: whatever an agent has staged or changed there stays as it was.
   The message says which file of which task ("Approve the design for
   ACME-123."). A draft or an edit not approved reaches nobody, and the
-  tab says so. Drafts are kept in the task folder until approved, so
-  neither switching tasks nor quitting the app loses one.
+  tab says so. Drafts are kept in the task folder (`.spec-drafts/`) until
+  approved, so neither switching tasks nor quitting the app loses one.
 - **SPEC-7** Changing an approved file MUST mark the files after it out of
   date. Sync redrafts them from it: tasks already ticked are kept, steps
   for new requirements are added, and a step whose requirements are all
@@ -1502,11 +1503,13 @@ each reviewed before the next is drafted.
   requirements draft of each of its repositories, and remove it once
   those are approved.
 
-Code: `commands/spec.rs`, `commands/task_context.rs`, `oneshot.rs`,
-`git.rs` (committing only given paths), `mcp.rs` (`spec_task`),
-`SpecView.tsx`, `store.ts` (`specs`, `pendingSpec`),
-`tickets/StartWorkDialog.tsx`, `ReposView.tsx` (the per-repository
-setting).
+Code: `spec.rs` (the files, and what is read from them),
+`commands/spec.rs` (where a spec lives, approving, ticking),
+`commands/spec_draft.rs` (drafting, checking), `commands/task_context.rs`,
+`git/only.rs` (committing only the spec), `mcp.rs` (`spec_task`),
+`commands/open_prs.rs`, `SpecView.tsx`, `spec/SpecSide.tsx`,
+`lib/specs.ts`, `tickets/StartWorkDialog.tsx`, `ReposView.tsx` (the
+per-repository setting).
 
 Known gaps:
 - Drafting runs Claude Code, whichever agent will do the work.
@@ -1515,6 +1518,9 @@ Known gaps:
 - Kiro runs independent tasks side by side; here one agent works through
   them in order.
 - A draft cannot be stopped once started.
+- A step an agent ticks is an uncommitted change in the worktree until the
+  next approval or Open pull requests, and shows in the Diff tab until then.
+- Drafting and checking need Claude Code on the PATH.
 
 ## 20. Agents over ACP
 

@@ -29,6 +29,32 @@ pub(super) fn topic(title: &str) -> String {
     title.lines().next().unwrap_or_default().trim().chars().take(80).collect()
 }
 
+/// What Claude Code records of a local command (a slash command it runs
+/// itself, not the model) in the transcript, each in its own element.
+const LOCAL_COMMAND_TAGS: &[&str] =
+    &["command-name", "command-message", "command-args", "local-command-stdout", "local-command-stderr", "local-command-caveat"];
+
+/// What the user wrote, out of a message a conversation replays: without
+/// Claude Code's record of its local commands. `claude-agent-acp` replays
+/// the transcript as it is, and the adapter runs `/model` itself as every
+/// session starts, so a picked-up conversation opened with a message the
+/// user never sent, run together with the first one they did.
+pub(super) fn user_words(text: &str) -> String {
+    let mut out = text.to_string();
+    let mut cut = false;
+    for tag in LOCAL_COMMAND_TAGS {
+        let (open, close) = (format!("<{tag}>"), format!("</{tag}>"));
+        while let Some(start) = out.find(&open) {
+            let Some(end) = out[start..].find(&close).map(|e| start + e + close.len()) else { break };
+            out.replace_range(start..end, "");
+            cut = true;
+        }
+    }
+    // Only where something was cut: a message streamed in pieces keeps the
+    // spaces between them.
+    if cut { out.trim().to_string() } else { out }
+}
+
 /// The text of a content block: text as it is, anything else named.
 pub(super) fn block_text(block: Option<&Value>) -> String {
     let Some(block) = block else { return String::new() };

@@ -1481,7 +1481,11 @@ count and banner treats it like any other.
   `session/resume`. Resume with no id takes the newest the agent lists for
   the folder (`session/list`). One that cannot be picked up is started
   new, and the pane says why. So two agents in one folder never pick up
-  the same conversation, and Restart works for every ACP agent.
+  the same conversation, and Restart works for every ACP agent. A replay
+  shows what the user wrote, without a CLI's record of its own local
+  commands: `claude-agent-acp` runs `/model` itself as each session
+  starts, and a picked-up conversation opened with that, its output and
+  the user's first message run together as one.
 - **ACP-10** On the phone, an ACP pane's keys MUST mean: Esc and Ctrl-C
   stop the turn; 1 to 9 choose the oldest open question's options in
   order, as the text copy numbers them. A line typed is a prompt (ACP-4).
@@ -1508,9 +1512,9 @@ Code: `acp/` (`conn.rs` the protocol, `user.rs`, `conversation.rs`,
 Known gaps:
 - Claude Code runs over ACP only through Zed's `claude-agent-acp`
   adapter, which bundles its own Claude Agent SDK: its models and features
-  are that version's, not those of the `claude` on the PATH. Picked up
-  again, its conversation replays the adapter's own `/model` command as if
-  the user had typed it.
+  are that version's, not those of the `claude` on the PATH. A slash
+  command the user ran there is left out of a replay, with the adapter's
+  own (ACP-9).
 - Copilot's ACP mode is in public preview. Gemini CLI was checked only as
   far as `initialize`.
 - Codex (`codex-acp`), Cursor, Goose and the rest of the ACP registry are

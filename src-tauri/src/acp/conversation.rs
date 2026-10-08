@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use serde_json::Value;
 
 use super::entry::{Body, Changes, Choice, Command, Entry, Setting, SettingOption, Step, Usage};
-use super::read::{block_text, str_at, tool_content, topic, value_text};
+use super::read::{block_text, str_at, tool_content, topic, user_words, value_text};
 
 /// The most entries a pane keeps. The oldest go first; the text copy in the
 /// scrollback has its own, separate limit.
@@ -294,11 +294,14 @@ impl Conversation {
             }
             // A loaded conversation replays what the user said (ACP-9).
             "user_message_chunk" => {
-                let text = block_text(update.get("content"));
+                let text = user_words(&block_text(update.get("content")));
+                if text.trim().is_empty() {
+                    return applied;
+                }
                 if let Some(Body::User { text: t, .. }) = self.last_mut() {
                     t.push_str(&text);
                     self.touch_last();
-                } else if !text.is_empty() {
+                } else {
                     self.user(&text, false);
                 }
             }
@@ -541,6 +544,27 @@ mod tests {
         assert_eq!(all.entries.len(), MAX_ENTRIES);
         assert_eq!(all.entries[0].index, 5);
         assert!(c.entry(4).is_none());
+    }
+
+    /// What `claude-agent-acp` 0.22.2 replayed on `session/load`, chunk by
+    /// chunk: Claude Code's record of the `/model` command the adapter itself
+    /// runs, its output, then what the user wrote. All three ran together
+    /// into one message from the user.
+    #[test]
+    fn a_replay_shows_what_the_user_wrote_not_the_agents_record_of_its_own_commands() {
+        let mut c = Conversation::default();
+        c.apply(&chunk("user_message_chunk", "<command-name>/model</command-name>\n            <command-message>model</command-message>\n            <command-args>default</command-args>"));
+        c.apply(&chunk("user_message_chunk", "<local-command-stdout>Set model to claude-opus-4-6[1m]</local-command-stdout>"));
+        c.apply(&chunk("user_message_chunk", "Say hi in one word."));
+        c.apply(&chunk("agent_message_chunk", "Hi!"));
+        let all = c.changes(None).entries;
+        assert_eq!(all.len(), 2, "{all:?}");
+        assert_eq!(all[0].body, Body::User { text: "Say hi in one word.".into(), queued: false, dropped: false });
+        assert!(!c.take_text().contains("command"));
+        // A message replayed in pieces is still one, spaces and all.
+        c.apply(&chunk("user_message_chunk", "Now say "));
+        c.apply(&chunk("user_message_chunk", "bye."));
+        assert_eq!(c.changes(None).entries[2].body, Body::User { text: "Now say bye.".into(), queued: false, dropped: false });
     }
 
     #[test]

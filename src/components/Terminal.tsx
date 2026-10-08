@@ -102,8 +102,19 @@ class PaneTerminal {
       // local buffer just burns memory across every terminal kept.
       scrollback: 5000,
       macOptionIsMeta: true,
+      // Once an agent turns on mouse reporting (Claude Code's fullscreen
+      // mode, OpenCode, Copilot) a drag is the agent's, and on a Mac xterm
+      // offers no other way to select unless ⌥ is allowed to (PANE-15).
+      macOptionClickForcesSelection: true,
     });
     this.term.loadAddon(this.fit);
+    // xterm reports every mouse movement to such an agent as input, and
+    // input clears the selection: one made with ⌥-drag was gone the moment
+    // the mouse moved, before ⌘C. Hovering is held back while there is a
+    // selection; a click, a key or a scroll still reaches the agent.
+    this.el.addEventListener("mousemove", (e) => {
+      if (e.buttons === 0 && this.term.hasSelection()) e.stopPropagation();
+    }, true);
     this.subs.push(
       this.term.onData((d) => { void api.ptyWrite(id, d).catch(() => {}); }),
       this.term.onResize(({ rows, cols }) => {

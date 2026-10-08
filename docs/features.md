@@ -336,6 +336,14 @@ ones that need you first.
   another open agent of the same CLI is in that folder, since the newest
   could be the other's. Before this, an agent that exited said "Resume
   this session with: claude --resume …" and nothing in the app could.
+- **PANE-15** Text in any terminal MUST be selectable and copied by ⌘C,
+  including while the agent has the mouse. Claude Code's fullscreen mode,
+  OpenCode and Copilot turn on mouse reporting, and then a drag is theirs:
+  ⌥-drag selects in the terminal instead. The selection stays until a
+  click, a key or a scroll, which go to the agent as before. Before this,
+  nothing could select there, and a selection made anyway was gone with
+  the next movement of the mouse, which xterm reports to the agent as
+  input.
 
 Code: `pty.rs`, `agents.rs`, `commands/panes.rs` (`restart_pane`),
 `Terminals.tsx`, `Terminal.tsx`, `AgentsView.tsx`, `PaneNotice.tsx`.

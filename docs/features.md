@@ -1564,7 +1564,10 @@ agent pane in front; the bar under the pane bar shows how it is going.
   one, else every repository of the task. Those without a check command
   are skipped, and with none at all it does not start. One loop per pane.
   An agent not in a turn when its loop starts is checked at once;
-  otherwise at the end of the turn.
+  otherwise at the end of the turn. For an agent over ACP the dialog
+  offers its mode (ACP-12) as it stands, changed only if the user changes
+  it: one that asks before every command holds its loop at each, as
+  Claude Code in its default mode did at an `ls`.
 - **LOOP-3** A loop MUST act when its agent ends a turn, as the CLI
   reports it (a Claude Code Stop hook, an ACP prompt answered: STATE-1),
   never on a timer or on output going quiet. A turn interrupted (STATE-2)

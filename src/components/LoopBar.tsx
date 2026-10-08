@@ -4,7 +4,7 @@ import { api } from "../lib/api";
 import { paneName } from "../lib/derive";
 import { read, write } from "../lib/persist";
 import { useStore } from "../store";
-import type { LoopCheckRun, LoopView, PaneInfo, TaskView } from "../lib/types";
+import type { AcpSetting, LoopCheckRun, LoopView, PaneInfo, TaskView } from "../lib/types";
 import { LoopIcon } from "./icons";
 import { Field, Modal, Spinner } from "./ui";
 
@@ -74,6 +74,25 @@ function StartLoop({ pane, task, onClose }: { pane: PaneInfo; task: TaskView; on
   const [busy, setBusy] = useState(false);
   const once = useRef(false);
   const any = repos.some((c) => commands[c.project_id]?.trim());
+  // An agent over ACP says what modes it has (ACP-12). One that asks
+  // before it runs anything holds the loop at every command: Claude Code
+  // in its default mode stopped at `ls`. Offered here, and changed only if
+  // the user changes it.
+  const [mode, setMode] = useState<AcpSetting | null>(null);
+  const [modeValue, setModeValue] = useState("");
+  useEffect(() => {
+    if (!pane.acp) return;
+    let current = true;
+    api.acpView(pane.id, null)
+      .then((v) => {
+        const m = v.settings.find((s) => s.category === "mode") ?? null;
+        if (!current || !m) return;
+        setMode(m);
+        setModeValue(m.current);
+      })
+      .catch(() => {});
+    return () => { current = false; };
+  }, [pane.id, pane.acp]);
 
   async function start() {
     if (once.current || !any) return;
@@ -86,6 +105,7 @@ function StartLoop({ pane, task, onClose }: { pane: PaneInfo; task: TaskView; on
         if (typed !== saved(c.project_id).trim()) await api.setProjectCheck(c.project_id, typed || null);
       }
       await refreshRepos();
+      if (mode && modeValue !== mode.current) await api.acpSet(pane.id, mode.id, modeValue);
       const n = Math.min(20, Math.max(1, Math.round(rounds) || 5));
       write("loopRounds", n);
       await api.startLoop(pane.id, n);
@@ -118,7 +138,7 @@ function StartLoop({ pane, task, onClose }: { pane: PaneInfo; task: TaskView; on
       </p>
       <p className="loop-intro">
         An agent that stops to ask permission holds the loop until you answer. To leave it alone,
-        give it a mode that does not ask first{pane.acp ? " (Mode under the conversation: auto, or accept edits)" : ""}.
+        give it a mode that does not ask first{mode ? ", below" : pane.acp ? "" : ", in the agent itself"}.
       </p>
       {repos.map((c) => (
         <Field
@@ -135,6 +155,16 @@ function StartLoop({ pane, task, onClose }: { pane: PaneInfo; task: TaskView; on
           />
         </Field>
       ))}
+      {mode && (
+        <Field
+          label={`The agent's ${mode.name.toLowerCase()}`}
+          hint={mode.options.find((o) => o.value === modeValue)?.description ?? "The agent's own setting, as under its conversation."}
+        >
+          <select value={modeValue} onChange={(e) => setModeValue(e.target.value)}>
+            {mode.options.map((o) => <option key={o.value} value={o.value}>{o.name}</option>)}
+          </select>
+        </Field>
+      )}
       <Field label="Rounds" hint="The most times failures go back to the agent before the loop gives up (1–20).">
         <input
           type="number"

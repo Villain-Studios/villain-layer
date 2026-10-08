@@ -15,6 +15,7 @@ use crate::config::{AppConfig, Project};
 use crate::error::{Error, Result};
 use crate::git;
 
+use super::cleanup_remote::{judge_local, Pulls, Remote};
 use super::cleanup_folders::{leftover_folders, stray_worktrees};
 use super::panes::remove_generated;
 use super::repos::{canon, plural, store_of};
@@ -122,8 +123,9 @@ pub(super) fn in_use(state: &AppState, cfg: &AppConfig) -> InUse {
 }
 
 /// Everything found on disk, then `remote`: the branches on origin, which
-/// only GitHub can judge, asked before this runs.
-fn plan(state: &AppState, remote: Vec<Planned>) -> Vec<Planned> {
+/// only GitHub can judge, asked before this runs, with what GitHub said of
+/// the pull requests behind the copies' own branches.
+fn plan(state: &AppState, remote: Remote) -> Vec<Planned> {
     let cfg = state.config.read();
     let used = in_use(state, &cfg);
     let root = state.config.worktree_root();
@@ -136,11 +138,11 @@ fn plan(state: &AppState, remote: Vec<Planned>) -> Vec<Planned> {
         if clone.is_dir() && git::is_store_of(store, clone) {
             clone_branches(project, clone, store, &cfg, &mut out);
         }
-        store_branches(project, store, &used, &mut out);
+        store_branches(project, store, &used, remote.pulls.get(store), &mut out);
         records(project, store, &mut out);
     }
     unused_stores(&root.join(".repos"), &used, &mut out);
-    out.extend(remote);
+    out.extend(remote.planned);
     out
 }
 
@@ -188,8 +190,10 @@ fn clone_branches(project: &Project, clone: &Path, store: &Path, cfg: &AppConfig
     }
 }
 
-/// Branches in the app's copy that no task of any build is on.
-fn store_branches(project: &Project, store: &Path, used: &InUse, out: &mut Vec<Planned>) {
+/// Branches in the app's copy that no task of any build is on, judged by
+/// git and then, for one with commits origin lacks, by `pulls`: what GitHub
+/// said of the pull requests behind them, when it was asked.
+fn store_branches(project: &Project, store: &Path, used: &InUse, pulls: Option<&Pulls>, out: &mut Vec<Planned>) {
     let (Ok(tips), Some(busy)) = (git::branch_tips(store), checked_out(store)) else { return };
     let clone = Path::new(&project.path);
     for (branch, tip) in tips {
@@ -202,14 +206,18 @@ fn store_branches(project: &Project, store: &Path, used: &InUse, out: &mut Vec<P
             Ok(_) if clone.is_dir() && git::holds(clone, &tip) => {
                 (Verdict::Safe, "No task uses it, and your clone has every commit on it.".to_string())
             }
-            Ok(n) => (
-                Verdict::Risky,
-                format!(
-                    "No task uses it, but {n} commit{} on it {} on no origin branch. A branch squash-merged and then deleted on origin looks like this too.",
-                    plural(n),
-                    if n == 1 { "is" } else { "are" },
-                ),
-            ),
+            Ok(n) => pulls
+                .and_then(|p| judge_local(&branch, n, p, &project.default_branch, |sha| git::is_ancestor(store, &tip, sha)))
+                .unwrap_or_else(|| {
+                    (
+                        Verdict::Risky,
+                        format!(
+                            "No task uses it, but {n} commit{} on it {} on no origin branch. A branch squash-merged and then deleted on origin looks like this too, and GitHub was not asked.",
+                            plural(n),
+                            if n == 1 { "is" } else { "are" },
+                        ),
+                    )
+                }),
             Err(e) => (Verdict::Blocked, e.to_string()),
         };
         out.push(Planned {
@@ -295,7 +303,7 @@ fn unused_stores(repos: &Path, used: &InUse, out: &mut Vec<Planned>) {
     }
 }
 
-fn apply(state: &AppState, remote: Vec<Planned>, ids: &[String]) -> Vec<Cleaned> {
+fn apply(state: &AppState, remote: Remote, ids: &[String]) -> Vec<Cleaned> {
     let planned = plan(state, remote);
     let mut results: Vec<Cleaned> = ids
         .iter()
@@ -349,12 +357,19 @@ fn remove(action: &Action) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
     use crate::commands::projects::ensure_store;
     use crate::commands::repos::tests::{add_task, commit, git, setup, state};
+    use crate::integrations::github::{BranchPr, PrState};
 
     fn items(state: &AppState) -> Vec<CleanupItem> {
-        plan(state, Vec::new()).into_iter().map(|p| p.item).collect()
+        plan(state, Remote::default()).into_iter().map(|p| p.item).collect()
+    }
+
+    fn detail<'a>(items: &'a [CleanupItem], kind: &str, title: &str) -> &'a str {
+        &items.iter().find(|i| i.kind == kind && i.title == title).unwrap().detail
     }
 
     fn verdict(items: &[CleanupItem], kind: &str, title: &str) -> Option<Verdict> {
@@ -410,7 +425,7 @@ mod tests {
         assert!(found.iter().all(|i| !i.title.contains("DEV-1")), "the other build's task is not offered");
 
         let ids: Vec<String> = found.iter().map(|i| i.id.clone()).collect();
-        let done = apply(&state, Vec::new(), &ids);
+        let done = apply(&state, Remote::default(), &ids);
         assert!(succeeded(&done, &found, "folder", "OLD-1") && succeeded(&done, &found, "folder", "OLD-2"));
         assert!(!succeeded(&done, &found, "folder", "OLD-3") && !succeeded(&done, &found, "folder", "OLD-4"));
         assert!(!old.exists() && !clean.exists());
@@ -448,11 +463,68 @@ mod tests {
         assert_eq!(verdict(&found, "store_branch", "T-1"), None, "a task is on it");
 
         let ids: Vec<String> = found.iter().map(|i| i.id.clone()).collect();
-        let done = apply(&state, Vec::new(), &ids);
+        let done = apply(&state, Remote::default(), &ids);
         assert!(succeeded(&done, &found, "clone_branch", "T-1"));
         assert!(!crate::git::branch_exists(&clone, "T-1"));
         assert!(crate::git::branch_exists(&store, "T-1"), "the task's own copy stays");
         assert!(crate::git::branch_exists(&clone, "T-2") && crate::git::branch_exists(&clone, "T-3"));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// A branch in the app's copy with `n` commits of its own, as a finished
+    /// task leaves it once origin has deleted its branch; and its tip.
+    fn left_branch(store: &Path, root: &Path, name: &str, n: usize) -> Vec<String> {
+        let wt = root.join("wt").join(name.replace('/', "-"));
+        crate::git::add_worktree(store, &wt, name, "main").unwrap();
+        let mut tips = Vec::new();
+        for i in 0..n {
+            commit(&wt, &format!("{}-{i}.txt", name.replace('/', "-")));
+            tips.push(git(&wt, &["rev-parse", "HEAD"]).trim().to_string());
+        }
+        git(store, &["worktree", "remove", "--force", wt.to_str().unwrap()]);
+        tips
+    }
+
+    #[test]
+    fn a_branch_whose_pull_request_merged_all_of_it_is_ticked_once_github_says_so() {
+        let (root, cfg) = setup();
+        let state = state(&root, cfg);
+        let store = ensure_store(&state, "api").unwrap();
+        let squashed = left_branch(&store, &root, "DONE-1", 2);
+        let ahead = left_branch(&store, &root, "AHEAD-1", 2);
+        left_branch(&store, &root, "NO-PR", 1);
+        let reviewed = left_branch(&store, &root, "review/api-5", 1);
+        left_branch(&store, &root, "review/api-6", 1);
+
+        // Git alone cannot tell any of them from work never pushed.
+        let alone = items(&state);
+        for title in ["DONE-1", "AHEAD-1", "NO-PR", "review/api-5"] {
+            assert_eq!(verdict(&alone, "store_branch", title), Some(Verdict::Risky), "{title}");
+        }
+        assert!(detail(&alone, "store_branch", "DONE-1").contains("GitHub was not asked"));
+
+        let pr = |number, head: &str, sha: &str| BranchPr { number, head: head.into(), head_sha: sha.into(), state: PrState::Merged };
+        let pulls = Pulls {
+            mine: Some(vec![pr(1, "DONE-1", &squashed[1]), pr(2, "AHEAD-1", &ahead[0])]),
+            more: false,
+            reviewed: HashMap::from([
+                (5, Ok((PrState::Closed, reviewed[0].clone()))),
+                (6, Err("Not Found".to_string())),
+            ]),
+        };
+        let remote = || Remote { planned: Vec::new(), pulls: HashMap::from([(store.clone(), pulls.clone())]) };
+        let found: Vec<CleanupItem> = plan(&state, remote()).into_iter().map(|p| p.item).collect();
+        assert_eq!(verdict(&found, "store_branch", "DONE-1"), Some(Verdict::Safe));
+        assert_eq!(verdict(&found, "store_branch", "AHEAD-1"), Some(Verdict::Risky), "a commit came after what merged");
+        assert_eq!(verdict(&found, "store_branch", "NO-PR"), Some(Verdict::Risky));
+        assert!(detail(&found, "store_branch", "NO-PR").contains("no pull request of yours came from it"));
+        assert_eq!(verdict(&found, "store_branch", "review/api-5"), Some(Verdict::Safe));
+        assert_eq!(verdict(&found, "store_branch", "review/api-6"), Some(Verdict::Risky));
+
+        let ids: Vec<String> = found.iter().filter(|i| i.verdict == Verdict::Safe).map(|i| i.id.clone()).collect();
+        let done = apply(&state, remote(), &ids);
+        assert!(succeeded(&done, &found, "store_branch", "DONE-1") && succeeded(&done, &found, "store_branch", "review/api-5"));
+        assert!(!crate::git::branch_exists(&store, "DONE-1") && crate::git::branch_exists(&store, "AHEAD-1"));
         std::fs::remove_dir_all(&root).ok();
     }
 }

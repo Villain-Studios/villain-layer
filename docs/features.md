@@ -659,7 +659,8 @@ offers Start work.
   repos from what was used before for its epic, then its project, and says
   which it was ("preselected from the last task under ACME-100"), so a
   stale guess is visible. It picks
-  a base, optionally starts an agent with the ticket as the prompt, and,
+  a base, optionally starts an agent with the ticket as the prompt (or,
+  with "Write a spec first", leaves that to the Spec tab, SPEC-6), and,
   when "Move the ticket when work starts" is on, moves the ticket to the
   first in-progress (`indeterminate`) status.
 - **TKT-2** Nothing MUST depend on a site's names. Epics are types at
@@ -1369,9 +1370,16 @@ checking its work.
 - **SPEC-5** An opening prompt for a task with a spec (`task_prompt`: the
   launch dialog, Start agent, handoffs) MUST end by pointing at `SPEC.md`,
   by its full path, so an agent started inside one repo finds it too.
+- **SPEC-6** Start work, with an agent picked, MUST offer "Write a spec
+  first", on until turned off, and remembered. With it the task is made
+  and the ticket moved as without it, but no agent starts: the task opens
+  on its Spec tab with a draft being written (unless the task already has
+  a spec), and Start agent there starts the agent Start work had picked,
+  at the task folder.
 
 Code: `commands/spec.rs`, `commands/task_context.rs`, `oneshot.rs`,
-`SpecView.tsx`, `store.ts` (`specs`).
+`SpecView.tsx`, `store.ts` (`specs`, `pendingSpec`),
+`tickets/StartWorkDialog.tsx`.
 
 Known gaps:
 - Drafting runs Claude Code, whichever agent will do the work.

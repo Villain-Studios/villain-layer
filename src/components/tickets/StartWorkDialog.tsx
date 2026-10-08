@@ -5,6 +5,7 @@ import type { AgentStatus, JiraIssue, JiraTransition, Project } from "../../lib/
 import { Combo, Field, Modal } from "../ui";
 import { RepoPicker } from "../RepoPicker";
 import { suggestBase } from "../../lib/derive";
+import { read, write } from "../../lib/persist";
 import { IssueTypeIcon, type TypeMap } from "../IssueType";
 
 export function StartWorkDialog({
@@ -24,6 +25,8 @@ export function StartWorkDialog({
   const refreshTasks = useStore((s) => s.refreshTasks);
   const refreshPanes = useStore((s) => s.refreshPanes);
   const select = useStore((s) => s.select);
+  const setTab = useStore((s) => s.setTab);
+  const setPendingSpec = useStore((s) => s.setPendingSpec);
   const toast = useStore((s) => s.toast);
   const fail = useStore((s) => s.fail);
 
@@ -38,6 +41,8 @@ export function StartWorkDialog({
   /** The base this dialog last filled in itself, as opposed to one typed. */
   const autoBase = useRef("");
   const [starting, setStarting] = useState(false);
+  /** SPEC-6: start the agent from the Spec tab, once its spec is agreed. */
+  const [specFirst, setSpecFirst] = useState(() => read("specFirst", true));
 
   const installed = agents.filter((a) => a.installed);
   const selected = projects.filter((p) => picked.includes(p.id));
@@ -113,11 +118,12 @@ export function StartWorkDialog({
   async function startWork() {
     if (picked.length === 0) return;
     setStarting(true);
+    const spec = specFirst && !!agentId;
     try {
       const task = await api.jiraStartWork(
         issue.key,
         picked,
-        agentId || null,
+        spec ? null : agentId || null,
         suffix || null,
         base.trim() || null,
       );
@@ -125,6 +131,10 @@ export function StartWorkDialog({
       // status on the card is the thing the move was meant to correct.
       await Promise.all([refreshTasks(), refreshPanes(), refreshIssues()]);
       select(task.id);
+      if (spec) {
+        setPendingSpec({ taskId: task.id, agentId: agentId || null });
+        setTab("spec");
+      }
       onClose();
       toast(
         "success",
@@ -247,6 +257,17 @@ export function StartWorkDialog({
           {installed.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
         </select>
       </Field>
+      {agentId && (
+        <label className="row" style={{ gap: 7, margin: "-6px 0 14px", cursor: "pointer" }}>
+          <input
+            type="checkbox"
+            style={{ width: "auto" }}
+            checked={specFirst}
+            onChange={(e) => { setSpecFirst(e.target.checked); write("specFirst", e.target.checked); }}
+          />
+          Write a spec first: the agent starts from the Spec tab once you have agreed it
+        </label>
+      )}
 
       {transitions.length > 0 && (
         <Field label="Move ticket">

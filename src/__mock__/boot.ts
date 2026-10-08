@@ -421,6 +421,26 @@ const answer: Record<string, Answer> = {
   },
   jira_create_fields: () => world.requiredFields,
   jira_browse: () => ({ issues: world.issues, more: false }),
+  jira_start_work: (a) => {
+    const key = a.key as string;
+    const root = `/Users/you/.villain-worktrees/${key}`;
+    const task: TaskView = {
+      id: `t-${key.toLowerCase()}`, name: `${key} ${world.issues.find((i) => i.key === key)?.summary ?? ""}`.trim(),
+      root, branch: key, issue_key: key, issue_url: `https://acme.atlassian.net/browse/${key}`,
+      created_at: new Date().toISOString(), pane_count: 0,
+      checkouts: (a.projectIds as string[]).map((pid) => {
+        const name = world.projects.find((p) => p.id === pid)?.name ?? pid;
+        return {
+          id: `c-${key.toLowerCase()}-${name}`, task_id: `t-${key.toLowerCase()}`, project_id: pid, project_name: name,
+          path: `${root}/${name}`, base: "main", exists: true, broken: null, changed: 0,
+          status: { ahead: 0, behind: 0, staged: 0, unstaged: 0, untracked: 0, conflicted: 0, dirty_files: 0, branch: key },
+        };
+      }),
+    };
+    world.tasks.push(task);
+    if (a.agentId) newPane(a, "agent", task.id);
+    return { ...structuredClone(task), moved: "In Progress" };
+  },
   suggest_repos: () => ({ project_ids: [], reason: null }),
   project_branches: () => ["main", "develop"],
 

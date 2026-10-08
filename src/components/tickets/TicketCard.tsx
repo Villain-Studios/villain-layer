@@ -55,9 +55,9 @@ export function TicketCard({
           {issue.status}
         </span>
         {/*
-          Every ticket that is moving says where it stands here, because the
-          absence of a chip reads as "fine" rather than as "nothing set up".
-          Three states, each with the one action that resolves it.
+          A ticket with a task here says so, with the one action that goes
+          with it. One with no task has no chip: clicking the card offers
+          Start work.
         */}
         {taskId && moving && <span className="chip add">open task →</span>}
         {taskId && !moving && (
@@ -82,16 +82,6 @@ export function TicketCard({
             }}
           >
             + ticket
-          </button>
-        )}
-        {!taskId && moving && !isEpicType(types, issue.issue_type) && (
-          // In progress on the board with nothing here to work in.
-          <button
-            className="chip sync open"
-            title={`Create worktrees and start work on ${issue.key}`}
-            onClick={(e) => { e.stopPropagation(); onOpen(); }}
-          >
-            no worktree — start ↓
           </button>
         )}
       </div>

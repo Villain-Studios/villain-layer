@@ -44,6 +44,10 @@ pub struct Project {
     /// its history (UPD-7).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub update_by: Option<crate::git::UpdateBy>,
+    /// What says the work here is done (`bun run check`), run in a
+    /// worktree by a loop (LOOP-1). Set only by the user.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check: Option<String>,
 }
 
 impl Project {

@@ -229,6 +229,7 @@ mod tests {
             group: None,
             store: None,
             update_by: None,
+            check: None,
         });
         let state = super::super::repos::tests::state(&root, cfg);
         (root, clone, state)

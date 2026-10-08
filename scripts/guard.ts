@@ -523,6 +523,10 @@ const CEILINGS: Record<string, number> = {
   "src-tauri/src/agents.rs": 850,
   "src-tauri/src/git.rs": 1150,
   "src-tauri/src/commands/diff.rs": 700,
+  // Every field of config.json is declared here, each with its reason and
+  // its serde default; a repository's check command (LOOP-1) took it past
+  // 600, and a field split from its struct is harder to find than a long file.
+  "src-tauri/src/config.rs": 650,
 };
 
 for (const f of files) {

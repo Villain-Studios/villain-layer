@@ -12,6 +12,8 @@ export interface Project {
   /** How Update from base updates branches here: set in Repos, or the way it
    *  was last updated. Absent: guessed from its history (UPD-7). */
   update_by?: UpdateBy | null;
+  /** What says the work here is done, run by a loop (LOOP-1). */
+  check?: string | null;
 }
 
 /** How a registered repository is doing (REPO-5). */
@@ -363,6 +365,7 @@ export * from "./types-github";
 // The browser panel's (§18), likewise.
 export * from "./types-browser";
 export * from "./types-acp";
+export * from "./types-loop";
 
 export interface JiraConfig {
   base_url: string;

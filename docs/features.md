@@ -33,7 +33,8 @@ by picking folders, or by scanning a folder (three levels deep) and ticking
 what was found. A repo has at most one group; groups are renamed in place.
 Each repo says how it is doing, and the view keeps them in shape: **Sync**
 brings them up to date, **Locate** follows a clone that moved, and **Clean
-up** removes what tasks left behind.
+up** removes what tasks left behind. A repo can have a check command, which
+a loop runs (LOOP-1).
 
 - **REPO-1** A repo MUST be a git work tree root. It is registered by path,
   and its default branch is detected (origin/HEAD, then `main`, then
@@ -400,7 +401,9 @@ shows as a banner above the terminals.
 - **STATE-2** Esc or Ctrl-C at a question or during a turn MUST make the
   pane idle, since no Stop hook runs for an interrupted turn. Answering a
   question makes it working.
-- **STATE-3** Done becomes idle once the pane has been on screen.
+- **STATE-3** Done becomes idle once the pane has been on screen. A pane
+  on a loop reads as working between its turns while the loop runs, and as
+  done again when the loop hands back (LOOP-8).
 - **STATE-4** Every view MUST agree: the sidebar, the task's pane bar, All
   agents, Chat and the "N need you" count use `paneState` / `needsYou` in
   `lib/derive.ts`, and the dock count uses the same rule in `attention.rs`.
@@ -1019,7 +1022,7 @@ Known gaps:
 | `~/Library/Application Support/eu.codevillain.villain-layer/` | `config.json`: repos, tasks, settings, saved panes. `messages.json`: the message center (MSG-4). `notes.json`: repo notes (MEM-7). At agent launch also `.mcp.json` (0600), `claude-hooks.json`, `copilot-plugin/`, `opencode-plugin.js` |
 | Keychain, service `eu.codevillain.villain-layer` | one item holding every token, paired phones' included (PHONE-3), and the passwords of the browser's saved sign-ins (BRW-18) |
 | `~/.villain-worktrees/` (settable) | task folders, `_chat/` rooms, and `.repos/`: the app's own copy of each repo (REPO-4) |
-| a task folder | the worktrees, `AGENTS.md` and `CLAUDE.md` (task context), `TICKET.md` (PANE-13), `SPEC.md` (SPEC-3), `.mcp.json`, and `.gemini/settings.json`, `PR_DESCRIPTION.md`, `PR_FEEDBACK.md`, and hand-offs too long to type (`CONFLICTS.md`, `REVIEW_COMMENTS.md`, `PR_DRAFT_REQUEST.md`, `FIRST_PROMPT.md`, PANE-11) as they come up |
+| a task folder | the worktrees, `AGENTS.md` and `CLAUDE.md` (task context), `TICKET.md` (PANE-13), `SPEC.md` (SPEC-3), `.mcp.json`, and `.gemini/settings.json`, `PR_DESCRIPTION.md`, `PR_FEEDBACK.md`, and hand-offs too long to type (`CONFLICTS.md`, `REVIEW_COMMENTS.md`, `PR_DRAFT_REQUEST.md`, `FIRST_PROMPT.md`, `CHECKS.md` (LOOP-6), PANE-11) as they come up |
 | `~/.claude.json` | trust entries for the app's own folders only (PANE-10) |
 | `<config folder>/browser/` | the browser's own Chrome profile (BRW-1): cookies, sign-ins and storage of the pages opened there |
 | `~/Library/Logs/villain-layer/panic.log` | a crash's location and backtrace |
@@ -1534,6 +1537,108 @@ Known gaps:
   terminal.
 - Drafting PR and ticket descriptions still runs `claude -p` (§3).
 - The slash commands an agent offers are only suggested as `/` is typed.
+
+## 21. Loops
+
+An agent can be put on a loop: each time it ends a turn, the app runs the
+checks of the repositories it works in (each repository's own command:
+`bun run check`, `cargo test`), and when they fail, sends it what failed
+and lets it go on. It goes round until they pass, or until it has used its
+rounds, and then stops and tells you. Without one, you are the loop: you
+read that the agent is done, run the tests, paste the failures back, and
+again.
+
+A repository's check command is set in the Repos view, or in the dialog
+that starts a loop. The loop button in a task's pane bar starts one on the
+agent pane in front; the bar under the pane bar shows how it is going.
+
+- **LOOP-1** A repository MAY have a check command: what says the work in
+  it is done. It runs in a checkout's worktree through `/bin/sh -c`, in the
+  login shell's environment (PANE-4) with `NO_COLOR` set, standard error
+  folded into standard output and nothing on standard input, and passes
+  when it exits 0. It is set only by the user: never from a ticket, a spec
+  or an agent, since it is run as the user, unattended.
+- **LOOP-2** A loop MUST be started by the user on one running agent pane,
+  with the most rounds it may take (5 unless changed, at most 20). It
+  checks the repositories the pane works in: its own, for a pane started in
+  one, else every repository of the task. Those without a check command
+  are skipped, and with none at all it does not start. One loop per pane.
+  An agent not in a turn when its loop starts is checked at once;
+  otherwise at the end of the turn.
+- **LOOP-3** A loop MUST act when its agent ends a turn, as the CLI
+  reports it (a Claude Code Stop hook, an ACP prompt answered: STATE-1),
+  never on a timer or on output going quiet. A turn interrupted (STATE-2)
+  is not an end: someone is at the keys.
+- **LOOP-4** At a turn's end the loop MUST first see whether anything
+  changed in the worktrees it checks (the commit, the diff, the untracked
+  files) since its last failed check. When nothing did, the agent most
+  likely stopped to ask something, or gave up: the loop runs nothing,
+  sends nothing, and waits on you, saying so. It goes on at the next turn
+  that changes something. A turn that ends on a usage limit (STATE-6)
+  waits the same way. Run again on nothing new, the same failures went
+  back to an agent that had already said what it needed.
+- **LOOP-5** Checks MUST run one repository after another, at most two
+  loops' at a time in the app (the others queue, and say so), each command
+  for at most 20 minutes. A command still running then is stopped as an
+  agent is (PANE-5: SIGTERM to its process group, then SIGKILL), and the
+  loop stops, saying why. So does a command the shell cannot find (exit
+  127), which no agent can fix. Stopping a loop stops its check. Nothing
+  that waits runs on the main thread or the async runtime. Every check is
+  a real process, often a whole build: the cap keeps a dozen loops from
+  building at once on one laptop.
+- **LOOP-6** Checks that fail, with rounds left, MUST go back to the
+  agent: for each repository that failed, its command, its exit code and
+  the end of its output (150 lines, 12 KB, without colour codes), with
+  the round it is and how many there are, and to end the turn once they
+  pass. To a terminal as a file in the task folder (`CHECKS.md`) with a
+  pointer typed (PANE-11), to an agent over ACP whole (ACP-4). Only
+  between turns: when someone started a turn while the checks ran, their
+  answer is thrown away and the loop checks again at that turn's end.
+- **LOOP-7** A loop MUST end when its checks pass (passed), when they
+  still fail after its last round (gave up), when the user stops it, when
+  its agent exits or is closed, or when a check cannot run (LOOP-5).
+  Ending stops nothing else: the agent stays as it is.
+- **LOOP-8** While a loop runs, a finished turn MUST NOT read as your
+  turn: the pane reads as working wherever its state shows (its dot, the
+  "needs you" count, the dock, banners, Keep awake: STATE-4, STATE-7),
+  since the app is still at work on it. Waiting on you (LOOP-4) or ended,
+  it reads as done again, as of that moment, so the dock and a banner say
+  so even if you looked at the pane during the checks. The banner and the
+  message center say how the loop ended ("passed its checks", "still
+  fails its checks after 5 rounds", why it stopped) in place of "has
+  finished".
+- **LOOP-9** The pane MUST show its loop under the pane bar: the round,
+  what it is doing (waiting for the agent, queued, checking which
+  repository), how it ended, and each check run, newest first, with every
+  repository's result and output. Stop while it runs; Start again once it
+  has ended. The window is told of a change (`loop:changed`), never polls.
+- **LOOP-10** A task's context file (PANE-13) MUST name each repository's
+  check command, and tell agents to run it before they end a turn, so an
+  agent checks its work by the measure the loop will, loop or not. Setting
+  a command rewrites the context files of the tasks that repository is in.
+
+Code: `loops.rs` (the registry and the driver), `loops/check.rs` (running
+a command), `git/snapshot.rs` (what changed), `pty.rs` (`turns`,
+`set_looping`), `attention.rs`, `commands/loops.rs`,
+`commands/task_context.rs`, `LoopBar.tsx`, `ReposView.tsx`.
+
+Known gaps:
+- Only the checks decide: the reviewer (DIFF-6) is not part of a loop
+  yet, nor is a spec's check.
+- A loop ends where you take over: it does not open a pull request, and
+  does not follow CI or review comments after one (§8).
+- A loop ends with the app. A pane that comes back after a restart
+  (PANE-7) has none.
+- A check is its command's exit code: a flaky test sends the agent after
+  a failure that is not there.
+- An agent asks for permissions on a loop as it does off one, and holds
+  the loop until you answer: whether it asks is its own setting (ACP-12).
+  Claude Code over ACP in its `auto` mode runs the commands a fix needs
+  without asking; in `acceptEdits` it still asks before running one.
+- Checked against Claude Code over ACP (`claude-agent-acp` 0.87.0, `auto`
+  mode) and a fake ACP agent. Claude Code, Copilot, OpenCode and Gemini in
+  a terminal report their turns' ends the same way (STATE-1), but have not
+  been run on a loop.
 
 ---
 

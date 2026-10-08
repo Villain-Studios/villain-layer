@@ -161,6 +161,7 @@ mod tests {
             group: None,
             store: None,
             update_by: None,
+            check: None,
         });
         AppState {
             config: ConfigStore::for_tests(root.join("config.json"), cfg),
@@ -173,6 +174,7 @@ mod tests {
             messages: crate::messages::Messages::for_tests(root.join("messages.json")),
             notes: crate::notes::Notes::load(root),
             browser: Default::default(),
+            loops: Default::default(),
         }
     }
 

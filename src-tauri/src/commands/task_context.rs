@@ -64,6 +64,7 @@ pub(crate) fn write_task_context(state: &AppState, task: &Task) -> Result<()> {
     let ticket = std::fs::read_to_string(dir.join(TICKET_FILE)).ok();
     let spec = super::spec::saved_spec(state, task);
     let mut md = task_context(task, &task_repos(state, task), ticket.as_deref(), spec.as_deref());
+    md.push_str(&checks_section(&task_checks(state, task)));
     md.push_str(&notes_section(&task_notes(state, task), chrono::Utc::now().timestamp_millis()));
 
     std::fs::write(dir.join("CLAUDE.md"), &md)?;
@@ -99,6 +100,44 @@ fn task_notes(state: &AppState, task: &Task) -> Vec<FolderNotes> {
             Some(FolderNotes { folder, notes: notes_of(state, &project) })
         })
         .collect()
+}
+
+/// Each repository's check command, by the folder it is checked out as.
+fn task_checks(state: &AppState, task: &Task) -> Vec<(String, String)> {
+    state
+        .config
+        .checkouts_of(&task.id)
+        .iter()
+        .filter_map(|c| {
+            let command = state.config.project(&c.project_id).ok()?.check?;
+            let folder = Path::new(&c.path).file_name()?.to_string_lossy().to_string();
+            Some((folder, command))
+        })
+        .collect()
+}
+
+/// The check commands (LOOP-10), so an agent checks its work by the
+/// measure a loop will, loop or not. Nothing when no repository has one.
+fn checks_section(checks: &[(String, String)]) -> String {
+    if checks.is_empty() {
+        return String::new();
+    }
+    let mut md = String::from(concat!(
+        "\n## Checks\n\n",
+        "What says the work in a repository is done. Run it from inside the ",
+        "repository's folder before you end a turn, and fix what it reports:\n\n",
+    ));
+    for (folder, command) in checks {
+        // On one line, and in code even when it holds a backtick.
+        let command = command.split_whitespace().collect::<Vec<_>>().join(" ");
+        let code = if command.contains('`') { format!("`` {command} ``") } else { format!("`{command}`") };
+        md.push_str(&format!("- `{folder}/`: {code}\n"));
+    }
+    md.push_str(concat!(
+        "\nWhen the user puts you on a loop, Villain Layer runs these each time you ",
+        "end a turn and sends you what failed.\n",
+    ));
+    md
 }
 
 /// What earlier tasks learned, and how to add to it (MEM-4). Said even
@@ -516,6 +555,18 @@ mod tests {
         assert!(md.contains("Nothing yet."));
         assert!(md.contains("call `remember` with `confirm: true` only if they agree"));
         assert!(!md.contains("###"));
+    }
+
+    #[test]
+    fn the_check_commands_are_named_one_to_a_line_and_only_when_there_are_some() {
+        assert_eq!(checks_section(&[]), "");
+        let md = checks_section(&[
+            ("web".into(), "bun run check".into()),
+            ("api".into(), "cargo test &&\n  echo `date`".into()),
+        ]);
+        assert!(md.contains("\n## Checks\n"));
+        assert!(md.contains("- `web/`: `bun run check`\n"));
+        assert!(md.contains("- `api/`: `` cargo test && echo `date` ``\n"));
     }
 
     #[test]

@@ -342,6 +342,7 @@ pub(super) mod tests {
                 group: None,
                 store: None,
                 update_by: None,
+                check: None,
             }],
             ..Default::default()
         };
@@ -393,6 +394,7 @@ pub(super) mod tests {
             messages: crate::messages::Messages::for_tests(root.join("messages.json")),
             notes: crate::notes::Notes::load(root),
             browser: Default::default(),
+            loops: Default::default(),
         }
     }
 
@@ -404,6 +406,7 @@ pub(super) mod tests {
             name: id.into(),
             group: group.map(String::from),
             update_by: by,
+            check: None,
             ..cfg.projects[0].clone()
         };
         let row = |id: &str, guess: Option<git::UpdateBy>| RepoHealth {

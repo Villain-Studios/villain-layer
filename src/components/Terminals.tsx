@@ -7,6 +7,7 @@ import { canRestart, paneScope, paneState } from "../lib/derive";
 import type { PaneInfo, Resumable, TaskView } from "../lib/types";
 import { BrowserPanel, useBrowserView } from "./BrowserPanel";
 import { ChatLink } from "./ChatLink";
+import { LoopBar, LoopButton } from "./LoopBar";
 import { PaneNotice } from "./PaneNotice";
 import { PaneExited, RestartButton, useRestart } from "./Restart";
 import { WaitingTaskPanes } from "./WaitingPanes";
@@ -397,6 +398,7 @@ export function Terminals({ task }: { task: TaskView }) {
           </>
         )}
 
+        <LoopButton pane={panes.find((x) => x.id === active)} task={task} />
         <button
           className={`btn btn-sm btn-add${browserOpen ? " active" : ""}`}
           title={
@@ -442,6 +444,7 @@ export function Terminals({ task }: { task: TaskView }) {
 
       <PaneNotice pane={panes.find((x) => x.id === active && x.notice)} onHandoff={startHandoff} />
       <PaneExited pane={panes.find((x) => x.id === active)} busy={restarting.has(active ?? "")} onResume={restart} />
+      <LoopBar pane={panes.find((x) => x.id === active)} />
 
       <div className="term-split" ref={splitRef}>
       <div className="pane-stack">

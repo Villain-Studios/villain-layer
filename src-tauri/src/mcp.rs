@@ -186,6 +186,9 @@ pub(crate) fn take_hook(ptys: &crate::pty::PtyManager, pane: &str, payload: &Val
     else {
         return false;
     };
+    if let Some(session) = crate::agents::hook_session(payload) {
+        let _ = ptys.note_session(pane, session);
+    }
     ptys.report_with(pane, |now| crate::agents::hook_activity(def.integration, payload, now))
         .unwrap_or(false)
 }
@@ -1205,6 +1208,27 @@ mod tests {
         assert!(!take_hook(&ptys, &gemini, &json!({"hook_event_name": "Stop"})));
         assert!(!take_hook(&ptys, "no-such-pane", &json!({"hook_event_name": "Stop"})));
         for id in [claude, opencode, gemini] {
+            let _ = ptys.close(&id);
+        }
+    }
+
+    #[test]
+    fn a_pane_keeps_the_conversation_its_hooks_last_named_for_a_restart() {
+        let ptys = crate::pty::PtyManager::default();
+        let (one, two) = (agent(&ptys, "claude", "sleep 5", false), agent(&ptys, "claude", "sleep 5", false));
+        let (first, cleared) = ("024e8fc6-e2f5-44cd-a238-12dc258b29c8", "7d2b6a0e-1c3f-4e5a-9b8c-0d1e2f3a4b5c");
+        assert_eq!(ptys.session(&one).unwrap(), None, "not until it says");
+
+        take_hook(&ptys, &one, &json!({"hook_event_name": "SessionStart", "source": "startup", "session_id": first}));
+        assert_eq!(ptys.session(&one).unwrap().as_deref(), Some(first));
+        assert_eq!(ptys.session(&two).unwrap(), None, "each pane its own");
+        // `/clear` starts another conversation, and a restart resumes that one.
+        take_hook(&ptys, &one, &json!({"hook_event_name": "SessionStart", "source": "clear", "session_id": cleared}));
+        assert_eq!(ptys.session(&one).unwrap().as_deref(), Some(cleared));
+        // A post that does not say leaves it.
+        take_hook(&ptys, &one, &json!({"hook_event_name": "Stop"}));
+        assert_eq!(ptys.session(&one).unwrap().as_deref(), Some(cleared));
+        for id in [one, two] {
             let _ = ptys.close(&id);
         }
     }

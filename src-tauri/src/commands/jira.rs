@@ -14,7 +14,7 @@ use crate::secrets;
 use crate::shellenv;
 
 use super::AppState;
-use super::panes::{agent_file_dir, resolve_scope, start_agent};
+use super::panes::{agent_file_dir, resolve_scope, start_agent, Resume};
 use super::task_context::keep_ticket;
 use super::tasks::{new_task, NewTask};
 
@@ -1367,7 +1367,7 @@ pub async fn jira_start_work(
         let task_id = task.id.clone();
         let handle = app.clone();
         super::blocking(app.clone(), move |state| {
-            start_agent(&handle, state, task_id, agent_id, None, Some(prompt), false, None, None)
+            start_agent(&handle, state, task_id, agent_id, None, Some(prompt), Resume::No, None, None)
         })
         .await?;
     }

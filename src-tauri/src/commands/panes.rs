@@ -184,7 +184,7 @@ pub async fn spawn_agent(
     super::blocking(app, move |state| {
         start_agent(
             &handle, state, task_id, agent_id, checkout_id, prompt,
-            resume.unwrap_or(false), rows, cols,
+            Resume::newest_if(resume.unwrap_or(false)), rows, cols,
         )
     })
     .await
@@ -230,6 +230,41 @@ pub(crate) fn pretrust_own_dir(state: &AppState, agent_id: &str, cwd: &str) {
     agents::pretrust(agent_id, dir);
 }
 
+/// How an agent starts: on a new conversation, or picking one up.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Resume {
+    No,
+    /// The newest conversation where it starts (`--continue`).
+    Newest,
+    /// A pane restarted in place (PANE-14): in the folder it ran in, on the
+    /// conversation it last said it was in, or else that folder's newest.
+    Restart { cwd: String, session: Option<String> },
+}
+
+impl Resume {
+    /// The newest conversation, when there is one to pick up.
+    pub(crate) fn newest_if(found: bool) -> Self {
+        if found { Resume::Newest } else { Resume::No }
+    }
+
+    /// What the CLI is started with to pick the conversation up. None for a
+    /// new one.
+    fn args(&self, def: &agents::AgentDef) -> Result<Option<Vec<String>>> {
+        let session = match self {
+            Resume::No => return Ok(None),
+            Resume::Newest => None,
+            Resume::Restart { session, .. } => session.as_deref(),
+        };
+        if let (Some(id), Some(flag)) = (session, def.resume_by_id) {
+            return Ok(Some(vec![flag.to_string(), id.to_string()]));
+        }
+        let flags = def.resume_args.ok_or_else(|| {
+            Error::Other(format!("{} cannot resume a previous session", def.name))
+        })?;
+        Ok(Some(flags.iter().map(|f| f.to_string()).collect()))
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn start_agent(
     app: &AppHandle,
@@ -238,7 +273,7 @@ pub(crate) fn start_agent(
     agent_id: String,
     checkout_id: Option<String>,
     prompt: Option<String>,
-    resume: bool,
+    resume: Resume,
     rows: Option<u16>,
     cols: Option<u16>,
 ) -> Result<PaneInfo> {
@@ -249,19 +284,18 @@ pub(crate) fn start_agent(
         .ok_or_else(|| Error::NotFound(format!("{} is not on your PATH", def.program)))?;
 
     let (mut cwd, scope, checkout_id) = resolve_scope(state, &task, checkout_id.as_deref())?;
-    if resume && checkout_id.is_none() {
-        cwd = resume_dir(state, &task, &agent_id, &cwd);
+    match &resume {
+        Resume::Newest if checkout_id.is_none() => cwd = resume_dir(state, &task, &agent_id, &cwd),
+        // Where it ran, which `resume_dir` may once have picked over the root.
+        Resume::Restart { cwd: ran, .. } => cwd = ran.clone(),
+        _ => {}
     }
 
     // Resuming means handing the conversation back to the CLI, so an opening
     // prompt would only talk over it.
-    let (mut args, initial_input) = if resume {
-        let flags = def.resume_args.ok_or_else(|| {
-            Error::Other(format!("{} cannot resume a previous session", def.name))
-        })?;
-        (flags.iter().map(|f| f.to_string()).collect::<Vec<_>>(), None)
-    } else {
-        agents::launch_args(def, prompt.as_deref())
+    let (mut args, initial_input) = match resume.args(def)? {
+        Some(args) => (args, None),
+        None => agents::launch_args(def, prompt.as_deref()),
     };
     let initial_input = initial_input
         .map(|text| typeable(agent_file_dir(state, &task).as_deref(), FIRST_PROMPT, &text))
@@ -286,14 +320,14 @@ pub(crate) fn start_agent(
             checkout_id,
             cwd,
             kind: PaneKind::Agent,
-            title: format!("{} · {scope}{}", def.name, if resume { " (resumed)" } else { "" }),
+            title: format!("{} · {scope}{}", def.name, if resume != Resume::No { " (resumed)" } else { "" }),
             program,
             args,
             agent_id: Some(agent_id),
             rows,
             cols,
             initial_input,
-            prompted: prompt.is_some() && !resume,
+            prompted: prompt.is_some() && resume == Resume::No,
             env,
             title_activity: agents::title_reader(def.integration),
             title_topic: agents::topic_reader(def.integration),
@@ -544,7 +578,7 @@ pub async fn spawn_chat(
     prompt: Option<String>,
 ) -> Result<PaneInfo> {
     let handle = app.clone();
-    super::blocking(app, move |state| open_chat(&handle, state, agent_id, prompt, None, false))
+    super::blocking(app, move |state| open_chat(&handle, state, agent_id, prompt, None, Resume::No))
         .await
 }
 
@@ -555,7 +589,7 @@ pub(crate) fn open_chat(
     prompt: Option<String>,
     // An existing chat folder to reopen, or None to start a new one.
     room: Option<PathBuf>,
-    resume: bool,
+    resume: Resume,
 ) -> Result<PaneInfo> {
     let def = agents::find(&agent_id)
         .ok_or_else(|| Error::NotFound(format!("agent {agent_id}")))?;
@@ -576,13 +610,9 @@ pub(crate) fn open_chat(
 
     // Resuming hands the conversation back to the CLI, so an opening prompt
     // would only talk over it.
-    let (mut args, initial_input) = if resume {
-        let flags = def.resume_args.ok_or_else(|| {
-            Error::Other(format!("{} cannot resume a previous session", def.name))
-        })?;
-        (flags.iter().map(|f| f.to_string()).collect::<Vec<_>>(), None)
-    } else {
-        agents::launch_args(def, prompt.as_deref())
+    let (mut args, initial_input) = match resume.args(def)? {
+        Some(args) => (args, None),
+        None => agents::launch_args(def, prompt.as_deref()),
     };
     let initial_input = initial_input.map(|text| typeable(Some(&dir), FIRST_PROMPT, &text)).transpose()?;
 
@@ -597,13 +627,13 @@ pub(crate) fn open_chat(
             checkout_id: None,
             cwd: dir.to_string_lossy().to_string(),
             kind: PaneKind::Agent,
-            title: format!("{}{}", def.name, if resume { " (resumed)" } else { "" }),
+            title: format!("{}{}", def.name, if resume != Resume::No { " (resumed)" } else { "" }),
             program,
             args,
             agent_id: Some(agent_id),
             rows: None,
             cols: None,
-            prompted: prompt.is_some() && !resume,
+            prompted: prompt.is_some() && resume == Resume::No,
             initial_input,
             env,
             title_activity: agents::title_reader(def.integration),
@@ -675,6 +705,61 @@ pub async fn kill_pane(app: AppHandle, pane_id: String) -> Result<()> {
     super::blocking(app, move |state| state.ptys.kill(&pane_id)).await
 }
 
+/// Stop an agent and start it again where it was, on the same conversation
+/// (PANE-14): how a CLI that updated itself gets to run its new version, and
+/// how one that exited is picked back up. Off the command thread: stopping
+/// waits up to five seconds for the agent to save.
+#[tauri::command]
+pub async fn restart_pane(app: AppHandle, pane_id: String) -> Result<PaneInfo> {
+    let handle = app.clone();
+    super::blocking(app, move |state| restart(&handle, state, &pane_id)).await
+}
+
+fn restart(app: &AppHandle, state: &AppState, id: &str) -> Result<PaneInfo> {
+    let old = state.ptys.info(id)?;
+    let def = old
+        .agent_id
+        .as_deref()
+        .and_then(agents::find)
+        .filter(|d| d.resume_args.is_some())
+        .ok_or_else(|| Error::Other(format!("{} cannot pick its conversation back up, so a restart would lose it.", old.title)))?;
+    // Checked before it is stopped: stopped, then not started, is the one
+    // way this loses an agent.
+    shellenv::which(def.program).ok_or_else(|| Error::NotFound(format!("{} is not on your PATH", def.program)))?;
+    let session = state.ptys.session(id)?;
+    // Without its id, `--continue` takes the folder's newest conversation,
+    // and another agent there may be the one writing it.
+    let shared = state.ptys.list(None).into_iter().any(|p| p.id != id && p.running && p.agent_id == old.agent_id && p.cwd == old.cwd);
+    if session.is_none() && shared {
+        return Err(Error::Other(format!(
+            "Another {} is open in this folder, and this one never said which conversation it is in, so a restart could pick up the other's.",
+            def.name,
+        )));
+    }
+
+    // Stopped first, so its transcript is saved before the CLI reads it back.
+    state.ptys.close(id)?;
+    let resume = Resume::Restart { cwd: old.cwd.clone(), session };
+    let agent_id = def.id.to_string();
+    let started = if old.task_id == CHAT_TASK_ID {
+        open_chat(app, state, agent_id, None, Some(PathBuf::from(&old.cwd)), resume)
+    } else {
+        start_agent(app, state, old.task_id.clone(), agent_id, old.checkout_id.clone(), None, resume, None, None)
+    };
+    let _ = state.config.update(|c| match &started {
+        Ok(_) => c.saved_panes.retain(|p| p.id != id),
+        // Not lost: it waits to be reopened, as one a launch did not put
+        // back does (PANE-7).
+        Err(_) => c.saved_panes.iter_mut().filter(|p| p.id == id).for_each(|p| p.waiting = true),
+    });
+    if started.is_err() {
+        let _ = app.emit("panes:waiting", ());
+    }
+    let pane = started?;
+    state.ptys.keep_place(&pane.id, old.started_at)?;
+    state.ptys.info(&pane.id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -693,5 +778,19 @@ mod tests {
         assert!(typeable(None, "CONFLICTS.md", &long).is_err(), "nowhere to leave it: refused, not cut");
         assert!(is_generated("CONFLICTS.md"), "deleting the task takes it too (DISK-2)");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_restarted_claude_resumes_the_conversation_it_named_not_the_folders_newest() {
+        let claude = agents::find("claude").unwrap();
+        let id = "024e8fc6-e2f5-44cd-a238-12dc258b29c8";
+        let restart = |session: Option<&str>| Resume::Restart { cwd: "/t".into(), session: session.map(String::from) };
+        assert_eq!(restart(Some(id)).args(claude).unwrap(), Some(vec!["--resume".into(), id.into()]));
+        // One that never said, from before the app asked: the folder's newest.
+        assert_eq!(restart(None).args(claude).unwrap(), Some(vec!["--continue".into()]));
+        assert_eq!(Resume::Newest.args(claude).unwrap(), Some(vec!["--continue".into()]));
+        assert_eq!(Resume::No.args(claude).unwrap(), None);
+        // A CLI that cannot resume is refused, not started on a new conversation.
+        assert!(restart(Some(id)).args(agents::find("gemini").unwrap()).is_err());
     }
 }

@@ -4,7 +4,7 @@
  * reaches the backend.
  */
 import type {
-  AuthoredPr, CheckoutPr, JiraIssue, PaneInfo, Project, RepoHealth, ReviewQueue, TaskView, UpdateBy,
+  AgentStatus, AuthoredPr, CheckoutPr, JiraIssue, PaneInfo, Project, RepoHealth, ReviewQueue, TaskView, UpdateBy,
 } from "./types";
 
 /** Panes started from the Chat view carry this instead of a real task id. */
@@ -72,6 +72,11 @@ export function paneName(pane: PaneInfo): string {
 /** Where a pane works: the repo or task after " · " in its title. Null for a chat. */
 export function paneScope(pane: PaneInfo): string | null {
   return pane.title.split(" · ")[1]?.replace(/ \(resumed\)$/, "") ?? null;
+}
+
+/** An agent whose CLI can be restarted on its own conversation (PANE-14). */
+export function canRestart(pane: PaneInfo, agents: AgentStatus[]): boolean {
+  return pane.kind === "agent" && !!agents.find((a) => a.id === pane.agent_id)?.resumes;
 }
 
 /** A running agent — what every "N running" in the app counts. */

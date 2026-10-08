@@ -12,7 +12,7 @@ use crate::config::SavedPane;
 use crate::error::{Error, Result};
 use crate::pty::{PaneInfo, PaneKind};
 
-use super::panes::{open_chat, open_shell, resolve_scope, resumable_for, resume_dir, start_agent, CHAT_TASK_ID};
+use super::panes::{open_chat, open_shell, resolve_scope, resumable_for, resume_dir, start_agent, Resume, CHAT_TASK_ID};
 use super::AppState;
 
 /// Remember a pane so it can be put back next launch.
@@ -222,7 +222,7 @@ fn put_back(app: &AppHandle, state: &AppState, pane: &SavedPane, resumed: &mut H
             agents::resumable(&dir).iter().any(|r| r.agent_id == agent_id) && resumed.insert((agent_id.clone(), dir))
         });
         // No remember_pane here: spawning records the pane itself.
-        return match open_chat(app, state, agent_id, None, room, resume) {
+        return match open_chat(app, state, agent_id, None, room, Resume::newest_if(resume)) {
             Ok(p) => Back::Opened(p),
             Err(e) => Back::Failed(e),
         };
@@ -254,7 +254,7 @@ fn put_back(app: &AppHandle, state: &AppState, pane: &SavedPane, resumed: &mut H
                 None => false,
             };
 
-            start_agent(app, state, pane.task_id.clone(), agent_id, pane.checkout_id.clone(), None, resume, None, None)
+            start_agent(app, state, pane.task_id.clone(), agent_id, pane.checkout_id.clone(), None, Resume::newest_if(resume), None, None)
         }
         _ => open_shell(app, state, pane.task_id.clone(), pane.checkout_id.clone(), None, None),
     };

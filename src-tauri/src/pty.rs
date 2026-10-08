@@ -234,6 +234,9 @@ struct PaneMeta {
     cleared_notice: Option<String>,
     /// When the notice now showing was raised.
     notice_at: DateTime<Utc>,
+    /// The conversation the agent last said it is in, from its hooks: what
+    /// a restart resumes (PANE-14).
+    session: Option<String>,
 }
 
 impl PaneMeta {
@@ -795,6 +798,7 @@ impl PtyManager {
                 title: String::new(),
                 cleared_notice: None,
                 notice_at: now,
+                session: None,
             }),
             pid,
             master: Mutex::new(pair.master),
@@ -1097,6 +1101,24 @@ impl PtyManager {
         Ok((meta.activity(watched, Utc::now()), meta.info.notice.clone()) != before)
     }
 
+    /// Which conversation the agent says it is in, from its hooks.
+    pub fn note_session(&self, id: &str, session: String) -> Result<()> {
+        self.get(id)?.meta.lock().session = Some(session);
+        Ok(())
+    }
+
+    /// The conversation the agent last said it was in (PANE-14).
+    pub fn session(&self, id: &str) -> Result<Option<String>> {
+        Ok(self.get(id)?.meta.lock().session.clone())
+    }
+
+    /// Put a pane where one started at `at` stood: the list is in the order
+    /// panes started, and a restarted one keeps its place (PANE-14).
+    pub fn keep_place(&self, id: &str, at: DateTime<Utc>) -> Result<()> {
+        self.get(id)?.meta.lock().info.started_at = at;
+        Ok(())
+    }
+
     /// Ask the process group to stop, and only insist if it will not.
     ///
     /// This matters more than it looks: insisting is SIGKILL, which an agent
@@ -1315,6 +1337,7 @@ mod tests {
             title: String::new(),
             cleared_notice: None,
             notice_at: now,
+            session: None,
         }
     }
 

@@ -3,11 +3,12 @@ import { api, errMessage } from "../lib/api";
 import { useFocusedPane } from "../lib/goto";
 import { read, write } from "../lib/persist";
 import { markStopping, useStore } from "../store";
-import { paneScope, paneState } from "../lib/derive";
+import { canRestart, paneScope, paneState } from "../lib/derive";
 import type { PaneInfo, Resumable, TaskView } from "../lib/types";
 import { BrowserPanel, useBrowserView } from "./BrowserPanel";
 import { ChatLink } from "./ChatLink";
 import { PaneNotice } from "./PaneNotice";
+import { PaneExited, RestartButton, useRestart } from "./Restart";
 import { WaitingTaskPanes } from "./WaitingPanes";
 import { TerminalPane } from "./Terminal";
 import { CloseIcon, GlobeIcon, PlusIcon, SwapIcon } from "./icons";
@@ -35,6 +36,7 @@ export function Terminals({ task }: { task: TaskView }) {
   const fail = useStore((s) => s.fail);
 
   const [active, setActive] = useState<string | null>(null);
+  const { restarting, restart } = useRestart(setActive);
   const [launching, setLaunching] = useState<string | null>(null);
   const [prompt, setPrompt] = useState("");
   const [promptLoading, setPromptLoading] = useState(false);
@@ -346,7 +348,10 @@ export function Terminals({ task }: { task: TaskView }) {
             {!p.running && p.exit_code !== null && (
               <span style={{ color: "var(--dimmer)" }}>({p.exit_code})</span>
             )}
-            {p.kind === "agent" && installed.length > 0 && !closing.has(p.id) && (
+            {canRestart(p, agents) && !closing.has(p.id) && !restarting.has(p.id) && (
+              <RestartButton pane={p} onRestart={restart} />
+            )}
+            {p.kind === "agent" && installed.length > 0 && !closing.has(p.id) && !restarting.has(p.id) && (
               <span
                 className="x"
                 title="Hand off to another agent"
@@ -355,7 +360,7 @@ export function Terminals({ task }: { task: TaskView }) {
                 <SwapIcon />
               </span>
             )}
-            {closing.has(p.id) ? (
+            {closing.has(p.id) || restarting.has(p.id) ? (
               <Spinner />
             ) : (
               <span className="x" onClick={(e) => { e.stopPropagation(); void closePane(p); }}>
@@ -433,6 +438,7 @@ export function Terminals({ task }: { task: TaskView }) {
       <WaitingTaskPanes taskId={task.id} />
 
       <PaneNotice pane={panes.find((x) => x.id === active && x.notice)} onHandoff={startHandoff} />
+      <PaneExited pane={panes.find((x) => x.id === active)} busy={restarting.has(active ?? "")} onResume={restart} />
 
       <div className="term-split" ref={splitRef}>
       <div className="pane-stack">

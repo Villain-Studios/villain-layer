@@ -263,7 +263,9 @@ app's config folder and returns its extra arguments and environment.
 - **Hooks** (Claude, Copilot) are shell commands the CLI runs on events.
   Each posts `{"hook_event_name": …}` with curl and the hook token. It
   drains stdin: a PostToolUse payload can be megabytes. It always exits 0,
-  so a down server never fails the agent's turn.
+  so a down server never fails the agent's turn. Notification and
+  SessionStart post their payload whole: the words of a notification, and
+  the `session_id` a restart resumes (`hook_session`, PANE-14).
 - **OpenCode** loads a plugin that posts its state. **Gemini** is read from
   the mark it puts in its window title, parsed from the output.
 - **`hook_activity`** turns a post into a state, chosen by what the *pane*

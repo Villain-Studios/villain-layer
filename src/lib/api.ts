@@ -148,6 +148,8 @@ export const api = {
   ptyDetach: (paneId: string) => invoke<void>("pty_detach", { paneId }),
   closePane: (paneId: string) => invoke<void>("close_pane", { paneId }),
   killPane: (paneId: string) => invoke<void>("kill_pane", { paneId }),
+  /** Stop an agent and start it again where it was, on its conversation (PANE-14). */
+  restartPane: (paneId: string) => invoke<PaneInfo>("restart_pane", { paneId }),
 
   // diff + git
   diffFiles: (

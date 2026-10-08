@@ -324,9 +324,21 @@ ones that need you first.
   quoted line by line and introduced as written by whoever filed it: the
   context file is read as instructions, and a ticket's text is someone
   else's. A description past 8 KB is cut, and says so.
+- **PANE-14** An agent pane MUST restart in place on its own
+  conversation, for a CLI that can resume (Claude Code): Restart, on its
+  tab and its entry in the chat list, stops it as closing does (PANE-5,
+  PANE-6) and starts the same CLI in the same folder, in the same place
+  in the list. That is how a CLI that updated itself gets to run its new
+  version. An agent that has exited offers the same, as Resume, above its
+  terminal. The conversation is the one the CLI last said it was in (a
+  Claude Code hook's `session_id`, resumed with `--resume`). Without that,
+  it is the folder's newest (`--continue`), and Restart refuses while
+  another open agent of the same CLI is in that folder, since the newest
+  could be the other's. Before this, an agent that exited said "Resume
+  this session with: claude --resume …" and nothing in the app could.
 
-Code: `pty.rs`, `agents.rs`, `commands/panes.rs`, `Terminals.tsx`,
-`Terminal.tsx`, `AgentsView.tsx`.
+Code: `pty.rs`, `agents.rs`, `commands/panes.rs` (`restart_pane`),
+`Terminals.tsx`, `Terminal.tsx`, `AgentsView.tsx`, `PaneNotice.tsx`.
 
 Known gaps:
 - Resume, pre-trust, and drafting PR and ticket descriptions are Claude

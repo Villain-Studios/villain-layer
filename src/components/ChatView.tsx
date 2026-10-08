@@ -3,10 +3,11 @@ import { api } from "../lib/api";
 import { useFocusedPane } from "../lib/goto";
 import { read, write } from "../lib/persist";
 import { useStore } from "../store";
-import { CHAT_TASK_ID, paneName, paneState } from "../lib/derive";
+import { CHAT_TASK_ID, canRestart, paneName, paneState } from "../lib/derive";
 import { TerminalPane } from "./Terminal";
 import { PlusIcon } from "./icons";
 import { ContextMenu, Confirm } from "./ui";
+import { PaneExited, RestartButton, useRestart } from "./Restart";
 import { WaitingChats } from "./WaitingPanes";
 import type { MenuItem } from "./ui";
 
@@ -37,6 +38,7 @@ export function ChatView() {
   const fail = useStore((s) => s.fail);
 
   const [active, setActive] = useState<string | null>(null);
+  const { restarting, restart } = useRestart(setActive);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [closing, setClosing] = useState<string | null>(null);
   const addRef = useRef<HTMLButtonElement>(null);
@@ -143,9 +145,10 @@ export function ChatView() {
                 <span className="chat-item-title" title={paneName(p)}>{paneName(p)}</span>
                 <span className="chat-item-sub">
                   {p.topic && `${agents.find((a) => a.id === p.agent_id)?.name ?? p.title} · `}
-                  {p.running ? started(p.started_at) : "ended"}
+                  {restarting.has(p.id) ? "restarting…" : p.running ? started(p.started_at) : "ended"}
                 </span>
               </span>
+              {canRestart(p, agents) && !restarting.has(p.id) && <RestartButton pane={p} onRestart={restart} />}
               <span
                 className="x"
                 title="Close this chat"
@@ -162,6 +165,8 @@ export function ChatView() {
         </div>
       </div>
 
+      <div className="chat-main">
+      <PaneExited pane={panes.find((p) => p.id === active)} busy={restarting.has(active ?? "")} onResume={restart} />
       <div className="pane-stack">
         {panes.map((p) => (
           <TerminalPane key={p.id} pane={p} visible={p.id === active} />
@@ -193,6 +198,7 @@ export function ChatView() {
             </div>
           </div>
         )}
+      </div>
       </div>
 
       {menu && (

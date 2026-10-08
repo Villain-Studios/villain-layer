@@ -88,10 +88,10 @@ const disconnected: Settings = {
 };
 
 const agents: AgentStatus[] = [
-  { id: "claude", name: "Claude Code", program: "claude", installed: true, path: "/usr/local/bin/claude" },
-  { id: "copilot", name: "GitHub Copilot CLI", program: "copilot", installed: true, path: "/usr/local/bin/copilot" },
-  { id: "opencode", name: "OpenCode", program: "opencode", installed: false, path: null },
-  { id: "gemini", name: "Gemini CLI", program: "gemini", installed: true, path: "/usr/local/bin/gemini" },
+  { id: "claude", name: "Claude Code", program: "claude", installed: true, path: "/usr/local/bin/claude", resumes: true },
+  { id: "copilot", name: "GitHub Copilot CLI", program: "copilot", installed: true, path: "/usr/local/bin/copilot", resumes: false },
+  { id: "opencode", name: "OpenCode", program: "opencode", installed: false, path: null, resumes: false },
+  { id: "gemini", name: "Gemini CLI", program: "gemini", installed: true, path: "/usr/local/bin/gemini", resumes: false },
 ];
 
 const issueTypes: JiraIssueType[] = [

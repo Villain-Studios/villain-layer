@@ -229,6 +229,7 @@ pub fn run() {
             commands::reopen_waiting_pane,
             commands::forget_waiting_pane,
             commands::kill_pane,
+            commands::restart_pane,
             commands::diff_files,
             commands::diff_file,
             commands::task_commits,

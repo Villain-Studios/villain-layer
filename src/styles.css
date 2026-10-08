@@ -1337,6 +1337,8 @@ textarea { resize: vertical; font-family: var(--mono); }
 /* Chats run down the left rather than across the top: they are long lived and
    unbounded in number, which is the case a tab strip handles worst. */
 .chat { flex: 1; display: flex; overflow: hidden; }
+/* The open chat: a banner over it when its agent has exited (PANE-14). */
+.chat-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .chat-list {
   width: 230px;
   flex: none;
@@ -1383,7 +1385,7 @@ textarea { resize: vertical; font-family: var(--mono); }
   text-overflow: ellipsis;
 }
 .chat-item-sub { font-size: 11px; color: var(--dimmer); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.chat-item .x { color: var(--dimmer); font-size: 14px; line-height: 1; opacity: 0; }
+.chat-item .x { display: inline-flex; color: var(--dimmer); font-size: 14px; line-height: 1; opacity: 0; }
 .chat-item:hover .x, .chat-item.active .x { opacity: 1; }
 .chat-item .x:hover { color: var(--red); }
 /* Chats the last launch did not put back (PANE-7), under the open ones. */

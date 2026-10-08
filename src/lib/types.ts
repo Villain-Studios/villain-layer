@@ -193,6 +193,8 @@ export interface AgentStatus {
   program: string;
   installed: boolean;
   path: string | null;
+  /** Whether it can pick a conversation back up: Restart and Resume (PANE-14). */
+  resumes: boolean;
 }
 
 export interface Resumable {

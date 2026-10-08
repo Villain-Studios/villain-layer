@@ -32,6 +32,9 @@ pub struct AgentDef {
     /// How to pick the previous conversation back up in the same directory.
     /// None means the CLI has no such flag, so a restart starts fresh.
     pub resume_args: Option<&'static [&'static str]>,
+    /// The flag that picks one conversation back up by the id the CLI
+    /// reported for it, the id after it: a restart in place (PANE-14).
+    pub resume_by_id: Option<&'static str>,
     /// Where the CLI keeps its transcripts, so the app can tell whether there
     /// is anything to resume before offering to.
     pub session_store: Option<SessionStore>,
@@ -194,18 +197,21 @@ fn with_trust(text: &str, dir: &Path) -> Option<String> {
 /// CLI started anywhere else, where those are unset, posts nothing. Always
 /// exits 0, so a hook can never fail or block the agent's turn.
 ///
-/// Only a notification is sent as the agent handed it over, since only there
-/// does the payload say anything the name does not. The rest post their name
-/// and throw the payload away: PostToolUse carries the tool's whole output,
-/// megabytes for a big read, sent on every call — and past the server's 2MB
-/// the post was refused and the event lost.
+/// Only a notification and a session's start are sent as the agent handed
+/// them over, since only there does the payload say anything the name does
+/// not: a notification's words, and which conversation this is, for a
+/// restart (PANE-14). The rest post their name and throw the payload away:
+/// PostToolUse carries the tool's whole output, megabytes for a big read,
+/// sent on every call — and past the server's 2MB the post was refused and
+/// the event lost.
 fn post_hook(event: &str) -> String {
-    let body = if event == "Notification" {
+    let whole = matches!(event, "Notification" | "SessionStart");
+    let body = if whole {
         "--data-binary @-".to_string()
     } else {
         format!("-d '{{\"hook_event_name\":\"{event}\"}}'")
     };
-    let drain = if event == "Notification" { "" } else { "cat >/dev/null; " };
+    let drain = if whole { "" } else { "cat >/dev/null; " };
     format!(
         "{drain}[ -n \"$VILLAIN_HOOK_URL\" ] && [ -n \"$VILLAIN_PANE\" ] && \
          curl -s -m 2 -o /dev/null -X POST \
@@ -526,6 +532,14 @@ fn opencode_config_with(existing: Option<&str>, spec: &str, mcp_url: Option<&str
     root.to_string()
 }
 
+/// Which conversation a hook's post comes from, where it says: what a
+/// restart resumes (PANE-14). Only a UUID is taken, since it goes on the
+/// CLI's command line and the post comes from whatever runs in the pane.
+pub fn hook_session(payload: &serde_json::Value) -> Option<String> {
+    let id = payload.get("session_id")?.as_str()?;
+    Some(uuid::Uuid::parse_str(id).ok()?.hyphenated().to_string())
+}
+
 /// What a hook's post says the agent is doing now. None when it says nothing
 /// new.
 pub fn hook_activity(
@@ -669,6 +683,7 @@ pub const AGENTS: &[AgentDef] = &[
         prompt: PromptMode::Positional,
         integration: Integration::Claude,
         resume_args: Some(&["--continue"]),
+        resume_by_id: Some("--resume"),
         session_store: Some(SessionStore::SlugUnderHome {
             dir: ".claude/projects",
             ext: "jsonl",
@@ -682,6 +697,7 @@ pub const AGENTS: &[AgentDef] = &[
         prompt: PromptMode::Flag("-i"),
         integration: Integration::Gemini,
         resume_args: None,
+        resume_by_id: None,
         session_store: None,
     },
     AgentDef {
@@ -692,6 +708,7 @@ pub const AGENTS: &[AgentDef] = &[
         prompt: PromptMode::Typed,
         integration: Integration::Opencode,
         resume_args: None,
+        resume_by_id: None,
         session_store: None,
     },
     AgentDef {
@@ -708,6 +725,7 @@ pub const AGENTS: &[AgentDef] = &[
         // are filed under a UUID with no directory in the name. Neither half
         // of a per-directory resume is available, so it is not offered.
         resume_args: None,
+        resume_by_id: None,
         session_store: None,
     },
 ];
@@ -719,6 +737,9 @@ pub struct AgentStatus {
     pub program: String,
     pub installed: bool,
     pub path: Option<String>,
+    /// Whether it can pick a conversation back up: Restart and Resume are
+    /// offered only then (PANE-14).
+    pub resumes: bool,
 }
 
 pub fn find(id: &str) -> Option<&'static AgentDef> {
@@ -737,6 +758,7 @@ pub fn available() -> Vec<AgentStatus> {
                 program: a.program.to_string(),
                 installed: path.is_some(),
                 path,
+                resumes: a.resume_args.is_some(),
             }
         })
         .collect()
@@ -928,6 +950,23 @@ mod tests {
         assert!(!after_tool.contains("@-") && after_tool.contains(r#"{"hook_event_name":"PostToolUse"}"#));
         let notice = claude["hooks"]["Notification"][0]["hooks"][0]["command"].as_str().unwrap();
         assert!(notice.contains("--data-binary @-"));
+    }
+
+    #[test]
+    fn a_session_start_says_which_conversation_it_is_and_only_an_id_is_taken() {
+        // Sent whole: it names the conversation a restart resumes (PANE-14).
+        let start = claude_hook_settings()["hooks"]["SessionStart"][0]["hooks"][0]["command"].as_str().unwrap().to_string();
+        assert!(start.contains("--data-binary @-"));
+
+        let id = "024e8fc6-e2f5-44cd-a238-12dc258b29c8";
+        let said = |v: serde_json::Value| hook_session(&v);
+        assert_eq!(said(serde_json::json!({"hook_event_name": "SessionStart", "session_id": id})).as_deref(), Some(id));
+        assert_eq!(said(serde_json::json!({"session_id": id.to_uppercase()})).as_deref(), Some(id), "as the CLI files it");
+        // It goes on a command line: a flag, or anything else, is not an id.
+        assert_eq!(said(serde_json::json!({"session_id": "--dangerously-skip-permissions"})), None);
+        assert_eq!(said(serde_json::json!({"session_id": "../../etc"})), None);
+        assert_eq!(said(serde_json::json!({"session_id": 7})), None);
+        assert_eq!(said(serde_json::json!({"hook_event_name": "Stop"})), None);
     }
 
     #[test]

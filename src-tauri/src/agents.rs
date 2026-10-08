@@ -7,6 +7,11 @@ use serde::Serialize;
 
 use crate::shellenv;
 
+mod sessions;
+
+pub(crate) use sessions::session_dir;
+pub use sessions::{resumable, Resumable};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PromptMode {
     /// `agent "prompt"`
@@ -27,6 +32,9 @@ pub struct AgentDef {
     /// How to pick the previous conversation back up in the same directory.
     /// None means the CLI has no such flag, so a restart starts fresh.
     pub resume_args: Option<&'static [&'static str]>,
+    /// The flag that picks one conversation back up by the id the CLI
+    /// reported for it, the id after it: a restart in place (PANE-14).
+    pub resume_by_id: Option<&'static str>,
     /// Where the CLI keeps its transcripts, so the app can tell whether there
     /// is anything to resume before offering to.
     pub session_store: Option<SessionStore>,
@@ -189,18 +197,21 @@ fn with_trust(text: &str, dir: &Path) -> Option<String> {
 /// CLI started anywhere else, where those are unset, posts nothing. Always
 /// exits 0, so a hook can never fail or block the agent's turn.
 ///
-/// Only a notification is sent as the agent handed it over, since only there
-/// does the payload say anything the name does not. The rest post their name
-/// and throw the payload away: PostToolUse carries the tool's whole output,
-/// megabytes for a big read, sent on every call — and past the server's 2MB
-/// the post was refused and the event lost.
+/// Only a notification and a session's start are sent as the agent handed
+/// them over, since only there does the payload say anything the name does
+/// not: a notification's words, and which conversation this is, for a
+/// restart (PANE-14). The rest post their name and throw the payload away:
+/// PostToolUse carries the tool's whole output, megabytes for a big read,
+/// sent on every call — and past the server's 2MB the post was refused and
+/// the event lost.
 fn post_hook(event: &str) -> String {
-    let body = if event == "Notification" {
+    let whole = matches!(event, "Notification" | "SessionStart");
+    let body = if whole {
         "--data-binary @-".to_string()
     } else {
         format!("-d '{{\"hook_event_name\":\"{event}\"}}'")
     };
-    let drain = if event == "Notification" { "" } else { "cat >/dev/null; " };
+    let drain = if whole { "" } else { "cat >/dev/null; " };
     format!(
         "{drain}[ -n \"$VILLAIN_HOOK_URL\" ] && [ -n \"$VILLAIN_PANE\" ] && \
          curl -s -m 2 -o /dev/null -X POST \
@@ -521,6 +532,14 @@ fn opencode_config_with(existing: Option<&str>, spec: &str, mcp_url: Option<&str
     root.to_string()
 }
 
+/// Which conversation a hook's post comes from, where it says: what a
+/// restart resumes (PANE-14). Only a UUID is taken, since it goes on the
+/// CLI's command line and the post comes from whatever runs in the pane.
+pub fn hook_session(payload: &serde_json::Value) -> Option<String> {
+    let id = payload.get("session_id")?.as_str()?;
+    Some(uuid::Uuid::parse_str(id).ok()?.hyphenated().to_string())
+}
+
 /// What a hook's post says the agent is doing now. None when it says nothing
 /// new.
 pub fn hook_activity(
@@ -664,6 +683,7 @@ pub const AGENTS: &[AgentDef] = &[
         prompt: PromptMode::Positional,
         integration: Integration::Claude,
         resume_args: Some(&["--continue"]),
+        resume_by_id: Some("--resume"),
         session_store: Some(SessionStore::SlugUnderHome {
             dir: ".claude/projects",
             ext: "jsonl",
@@ -677,6 +697,7 @@ pub const AGENTS: &[AgentDef] = &[
         prompt: PromptMode::Flag("-i"),
         integration: Integration::Gemini,
         resume_args: None,
+        resume_by_id: None,
         session_store: None,
     },
     AgentDef {
@@ -687,6 +708,7 @@ pub const AGENTS: &[AgentDef] = &[
         prompt: PromptMode::Typed,
         integration: Integration::Opencode,
         resume_args: None,
+        resume_by_id: None,
         session_store: None,
     },
     AgentDef {
@@ -703,6 +725,7 @@ pub const AGENTS: &[AgentDef] = &[
         // are filed under a UUID with no directory in the name. Neither half
         // of a per-directory resume is available, so it is not offered.
         resume_args: None,
+        resume_by_id: None,
         session_store: None,
     },
 ];
@@ -714,6 +737,9 @@ pub struct AgentStatus {
     pub program: String,
     pub installed: bool,
     pub path: Option<String>,
+    /// Whether it can pick a conversation back up: Restart and Resume are
+    /// offered only then (PANE-14).
+    pub resumes: bool,
 }
 
 pub fn find(id: &str) -> Option<&'static AgentDef> {
@@ -732,6 +758,7 @@ pub fn available() -> Vec<AgentStatus> {
                 program: a.program.to_string(),
                 installed: path.is_some(),
                 path,
+                resumes: a.resume_args.is_some(),
             }
         })
         .collect()
@@ -758,129 +785,10 @@ pub fn launch_args(def: &AgentDef, prompt: Option<&str>) -> (Vec<String>, Option
     }
 }
 
-/// A conversation this agent could pick up again in `cwd`.
-#[derive(Debug, Clone, Serialize)]
-pub struct Resumable {
-    pub agent_id: String,
-    pub name: String,
-    pub sessions: usize,
-    /// Unix seconds of the most recent transcript, for "last active" in the UI.
-    pub last_active: Option<i64>,
-}
-
-/// Claude Code and friends key their transcripts by working directory, with
-/// every non-alphanumeric character turned into a dash.
-fn slug(path: &str) -> String {
-    path.chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect()
-}
-
-/// Where `agent_id` keeps its transcripts for `cwd`, if it keeps them by folder.
-pub(crate) fn session_dir(agent_id: &str, cwd: &str) -> Option<std::path::PathBuf> {
-    #[allow(deprecated)]
-    let home = std::env::home_dir()?;
-    let SessionStore::SlugUnderHome { dir, .. } = find(agent_id)?.session_store?;
-    Some(home.join(dir).join(slug(cwd)))
-}
-
-/// Which agents have something to resume in this directory.
-///
-/// Read from each CLI's own transcript store rather than remembered by the
-/// app, so it stays true even for sessions the app did not start.
-pub fn resumable(cwd: &str) -> Vec<Resumable> {
-    #[allow(deprecated)]
-    let home = match std::env::home_dir() {
-        Some(h) => h,
-        None => return Vec::new(),
-    };
-
-    AGENTS
-        .iter()
-        .filter(|a| a.resume_args.is_some())
-        .filter_map(|a| {
-            let SessionStore::SlugUnderHome { dir, ext } = a.session_store?;
-            let store = home.join(dir).join(slug(cwd));
-
-            let mut newest: Option<i64> = None;
-            let mut count = 0usize;
-            for entry in std::fs::read_dir(&store).ok()?.flatten() {
-                if entry.path().extension().and_then(|e| e.to_str()) != Some(ext) || !continuable(&entry.path()) {
-                    continue;
-                }
-                count += 1;
-                if let Ok(secs) = entry
-                    .metadata()
-                    .and_then(|m| m.modified())
-                    .map(|t| t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() as i64)
-                {
-                    newest = Some(newest.map_or(secs, |n: i64| n.max(secs)));
-                }
-            }
-            (count > 0).then(|| Resumable {
-                agent_id: a.id.to_string(),
-                name: a.name.to_string(),
-                sessions: count,
-                last_active: newest,
-            })
-        })
-        .collect()
-}
-
-/// Whether a saved session is a conversation `--continue` picks up. Claude
-/// Code marks each entry with how it was started, and skips one-shot runs
-/// (`claude -p`, `entrypoint: sdk-cli`). The app's own PR description draft
-/// is one, run in the task folder: counted, it made the task folder look
-/// like where the conversation was, the agent was restarted there, and
-/// Claude said "No conversation found to continue" while the real one sat
-/// in the repo's folder. The first entry that says is enough; a transcript
-/// that never says is an older CLI's, and counts.
-fn continuable(path: &std::path::Path) -> bool {
-    use std::io::Read;
-    let mut head = Vec::with_capacity(16 * 1024);
-    if std::fs::File::open(path).and_then(|f| f.take(16 * 1024).read_to_end(&mut head)).is_err() {
-        return true;
-    }
-    let head = String::from_utf8_lossy(&head);
-    let Some(at) = head.find("\"entrypoint\":\"") else { return true };
-    !head[at + "\"entrypoint\":\"".len()..].starts_with("sdk")
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_one_shot_run_is_not_a_conversation_to_resume() {
-        let dir = std::env::temp_dir().join(format!("vl-sessions-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let write = |name: &str, body: &str| {
-            let p = dir.join(name);
-            std::fs::write(&p, body).unwrap();
-            p
-        };
-        let draft = write("a.jsonl", "{\"type\":\"queue-operation\"}\n{\"entrypoint\":\"sdk-cli\",\"cwd\":\"/t\"}\n");
-        let chat = write("b.jsonl", "{\"type\":\"summary\"}\n{\"entrypoint\":\"cli\",\"cwd\":\"/t/api\"}\n");
-        let old = write("c.jsonl", "{\"type\":\"user\",\"cwd\":\"/t\"}\n");
-        assert!(!continuable(&draft), "a claude -p run");
-        assert!(continuable(&chat));
-        assert!(continuable(&old), "an older CLI that never said");
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn slugs_a_working_directory_the_way_the_clis_do() {
-        // Matches the directories Claude Code actually creates.
-        assert_eq!(
-            slug("/Users/you/code/villain-layer"),
-            "-Users-you-code-villain-layer"
-        );
-        // A dot becomes a dash too, which is why hidden folders double up.
-        assert_eq!(
-            slug("/Users/you/.villain-worktrees/ACME-123/api"),
-            "-Users-you--villain-worktrees-ACME-123-api"
-        );
-    }
 
     #[test]
     fn only_agents_that_can_resume_are_considered() {
@@ -892,11 +800,6 @@ mod tests {
         for a in AGENTS.iter().filter(|a| a.id != "claude") {
             assert!(a.resume_args.is_none(), "{} should not claim resume", a.id);
         }
-    }
-
-    #[test]
-    fn a_directory_with_no_history_offers_nothing() {
-        assert!(resumable("/nonexistent/path/that/has/never/been/used").is_empty());
     }
 
     /// Its own sandbox per test: these write files, and a shared path would
@@ -1047,6 +950,23 @@ mod tests {
         assert!(!after_tool.contains("@-") && after_tool.contains(r#"{"hook_event_name":"PostToolUse"}"#));
         let notice = claude["hooks"]["Notification"][0]["hooks"][0]["command"].as_str().unwrap();
         assert!(notice.contains("--data-binary @-"));
+    }
+
+    #[test]
+    fn a_session_start_says_which_conversation_it_is_and_only_an_id_is_taken() {
+        // Sent whole: it names the conversation a restart resumes (PANE-14).
+        let start = claude_hook_settings()["hooks"]["SessionStart"][0]["hooks"][0]["command"].as_str().unwrap().to_string();
+        assert!(start.contains("--data-binary @-"));
+
+        let id = "024e8fc6-e2f5-44cd-a238-12dc258b29c8";
+        let said = |v: serde_json::Value| hook_session(&v);
+        assert_eq!(said(serde_json::json!({"hook_event_name": "SessionStart", "session_id": id})).as_deref(), Some(id));
+        assert_eq!(said(serde_json::json!({"session_id": id.to_uppercase()})).as_deref(), Some(id), "as the CLI files it");
+        // It goes on a command line: a flag, or anything else, is not an id.
+        assert_eq!(said(serde_json::json!({"session_id": "--dangerously-skip-permissions"})), None);
+        assert_eq!(said(serde_json::json!({"session_id": "../../etc"})), None);
+        assert_eq!(said(serde_json::json!({"session_id": 7})), None);
+        assert_eq!(said(serde_json::json!({"hook_event_name": "Stop"})), None);
     }
 
     #[test]

@@ -19,6 +19,9 @@ use crate::error::{Error, Result};
 use crate::shellenv;
 
 pub mod feed;
+mod text;
+
+pub use text::{readable_tail, strip_ansi};
 
 /// Roughly one screenful of history per pane, replayed when a terminal is
 /// first drawn or has fallen too far behind to catch up.
@@ -118,45 +121,6 @@ fn last_title(tail: &[u8]) -> Option<String> {
     found
 }
 
-/// Drop ANSI escapes so terminal output can be read as text.
-pub fn strip_ansi(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    let mut chars = input.chars().peekable();
-
-    while let Some(c) = chars.next() {
-        if c != '\u{1b}' {
-            if c != '\r' {
-                out.push(c);
-            }
-            continue;
-        }
-        match chars.next() {
-            // CSI: parameters then a final byte in @..~
-            Some('[') => {
-                for c in chars.by_ref() {
-                    if ('\u{40}'..='\u{7e}').contains(&c) {
-                        break;
-                    }
-                }
-            }
-            // OSC: runs to BEL or ST
-            Some(']') => {
-                while let Some(c) = chars.next() {
-                    if c == '\u{7}' {
-                        break;
-                    }
-                    if c == '\u{1b}' && chars.peek() == Some(&'\\') {
-                        chars.next();
-                        break;
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    out
-}
-
 /// Which notice, if any, the end of a pane's output is showing.
 ///
 /// Runs on every read, so it avoids the obvious version — a lossy UTF-8
@@ -175,29 +139,6 @@ fn notice_in(tail: &[u8], scratch: &mut Vec<u8>) -> Option<&'static str> {
     } else {
         None
     }
-}
-
-/// Terminal history as readable text: a TUI redraws constantly, so identical
-/// consecutive lines and blank runs are collapsed before taking the tail.
-pub fn readable_tail(raw: &str, max_lines: usize) -> String {
-    let plain = strip_ansi(raw);
-    let mut lines: Vec<&str> = Vec::new();
-
-    for line in plain.lines() {
-        let line = line.trim_end();
-        let blank = line.trim().is_empty();
-        if blank && lines.last().is_some_and(|l: &&str| l.trim().is_empty()) {
-            continue;
-        }
-        // A TUI repaints the same rows continually; one copy is enough.
-        if lines.last() == Some(&line) {
-            continue;
-        }
-        lines.push(line);
-    }
-
-    let start = lines.len().saturating_sub(max_lines);
-    lines[start..].join("\n").trim().to_string()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -293,6 +234,9 @@ struct PaneMeta {
     cleared_notice: Option<String>,
     /// When the notice now showing was raised.
     notice_at: DateTime<Utc>,
+    /// The conversation the agent last said it is in, from its hooks: what
+    /// a restart resumes (PANE-14).
+    session: Option<String>,
 }
 
 impl PaneMeta {
@@ -854,6 +798,7 @@ impl PtyManager {
                 title: String::new(),
                 cleared_notice: None,
                 notice_at: now,
+                session: None,
             }),
             pid,
             master: Mutex::new(pair.master),
@@ -1156,6 +1101,24 @@ impl PtyManager {
         Ok((meta.activity(watched, Utc::now()), meta.info.notice.clone()) != before)
     }
 
+    /// Which conversation the agent says it is in, from its hooks.
+    pub fn note_session(&self, id: &str, session: String) -> Result<()> {
+        self.get(id)?.meta.lock().session = Some(session);
+        Ok(())
+    }
+
+    /// The conversation the agent last said it was in (PANE-14).
+    pub fn session(&self, id: &str) -> Result<Option<String>> {
+        Ok(self.get(id)?.meta.lock().session.clone())
+    }
+
+    /// Put a pane where one started at `at` stood: the list is in the order
+    /// panes started, and a restarted one keeps its place (PANE-14).
+    pub fn keep_place(&self, id: &str, at: DateTime<Utc>) -> Result<()> {
+        self.get(id)?.meta.lock().info.started_at = at;
+        Ok(())
+    }
+
     /// Ask the process group to stop, and only insist if it will not.
     ///
     /// This matters more than it looks: insisting is SIGKILL, which an agent
@@ -1374,6 +1337,7 @@ mod tests {
             title: String::new(),
             cleared_notice: None,
             notice_at: now,
+            session: None,
         }
     }
 
@@ -1503,36 +1467,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn strips_the_escapes_a_tui_emits() {
-        let raw = "\u{1b}[32mgreen\u{1b}[0m plain\u{1b}[1;31mred\u{1b}[m";
-        assert_eq!(strip_ansi(raw), "green plainred");
-
-        // OSC title sequences end with BEL or ST.
-        assert_eq!(strip_ansi("\u{1b}]0;a title\u{7}after"), "after");
-        assert_eq!(strip_ansi("\u{1b}]0;t\u{1b}\\after"), "after");
-
-        // Carriage returns are progress-bar redraw, not content.
-        assert_eq!(strip_ansi("a\rb"), "ab");
-    }
-
-    #[test]
     fn recognises_the_trust_question_every_new_worktree_triggers() {
         let hit = |s: &str| TRUST_MARKERS.iter().any(|m| s.to_lowercase().contains(m));
         assert!(hit("Do you trust the files in this folder?"));
         assert!(hit("  Do you trust this folder?  "));
         // Not the usage-limit wording, which is handled separately.
         assert!(!hit("You've reached your usage limit"));
-    }
-
-    #[test]
-    fn collapses_the_repaints_and_keeps_the_tail() {
-        // A TUI rewrites the same row over and over.
-        let raw = "thinking\nthinking\nthinking\n\n\n\ndone\nfinal";
-        assert_eq!(readable_tail(raw, 10), "thinking\n\ndone\nfinal");
-
-        let many: String = (0..50).map(|i| format!("line {i}\n")).collect();
-        let tail = readable_tail(&many, 3);
-        assert_eq!(tail, "line 47\nline 48\nline 49");
     }
 
     #[test]

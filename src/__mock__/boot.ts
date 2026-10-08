@@ -252,6 +252,17 @@ const answer: Record<string, Answer> = {
     if (p) Object.assign(p, { running: false, exit_code: 143 });
     return null;
   },
+  // A new pane where the old one stood, as the backend keeps its place.
+  restart_pane: (a) => {
+    const at = world.panes.findIndex((x) => x.id === a.paneId);
+    if (at < 0) throw new Error("No such pane.");
+    const old = world.panes[at];
+    const p = newPane({ agentId: old.agent_id, checkoutId: old.checkout_id }, "agent", old.task_id);
+    world.panes = world.panes.filter((x) => x !== p && x !== old);
+    world.panes.splice(at, 0, { ...p, cwd: old.cwd, title: `${old.title.replace(/ \(resumed\)$/, "")} (resumed)`, started_at: old.started_at });
+    world.output[p.id] = `${old.title} resuming the conversation…\r\n`;
+    return world.panes[at];
+  },
 
   // Diff.
   // The same files for every task, as that task's own: a task made in the

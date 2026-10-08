@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../../lib/api";
 import { useStore } from "../../store";
-import type { AgentStatus, JiraIssue, JiraTransition, Project } from "../../lib/types";
+import type { AgentStatus, JiraIssue, Project } from "../../lib/types";
 import { Combo, Field, Modal } from "../ui";
 import { RepoPicker } from "../RepoPicker";
 import { suggestBase } from "../../lib/derive";
@@ -30,7 +30,6 @@ export function StartWorkDialog({
   const toast = useStore((s) => s.toast);
   const fail = useStore((s) => s.fail);
 
-  const [transitions, setTransitions] = useState<JiraTransition[]>([]);
   const [picked, setPicked] = useState<string[]>([]);
   const [reason, setReason] = useState<string | null>(null);
   /** Null until a default is picked; "" is the choice of no agent at all. */
@@ -56,16 +55,12 @@ export function StartWorkDialog({
   }, [firstInstalled, agentId]);
 
   useEffect(() => {
-    setTransitions([]);
     setReason(null);
     setSuffix("");
     setBase("");
     setBaseOptions([]);
     setPicked([]);
     let stop = false;
-    api.jiraTransitions(issue.key)
-      .then((t) => { if (!stop) setTransitions(t); })
-      .catch(() => { if (!stop) setTransitions([]); });
     // A suggestion, so it gives way to what was picked while it was out.
     api.suggestRepos({ issueKey: issue.key, epicKey: issue.epic_key })
       .then((s) => {
@@ -145,17 +140,6 @@ export function StartWorkDialog({
       fail(e);
     } finally {
       setStarting(false);
-    }
-  }
-
-  async function doTransition(t: JiraTransition) {
-    try {
-      await api.jiraTransition(issue.key, t.id);
-      toast("success", `${issue.key} → ${t.to_status}`);
-      onClose();
-      await refreshIssues();
-    } catch (e) {
-      fail(e);
     }
   }
 
@@ -267,18 +251,6 @@ export function StartWorkDialog({
           />
           Write a spec first: the agent starts from the Spec tab once you have agreed it
         </label>
-      )}
-
-      {transitions.length > 0 && (
-        <Field label="Move ticket">
-          <div className="row" style={{ flexWrap: "wrap" }}>
-            {transitions.map((t) => (
-              <button key={t.id} className="btn btn-sm" onClick={() => void doTransition(t)}>
-                {t.name}
-              </button>
-            ))}
-          </div>
-        </Field>
       )}
 
       {issue.description.trim() && (

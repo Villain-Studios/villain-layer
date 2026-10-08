@@ -103,8 +103,9 @@ export function CleanUp({ onClose, onDone }: { onClose: () => void; onDone: () =
       ) : (
         <>
           <div className="cleanup-intro">
-            Nothing goes until you press Remove. Ticked: loses nothing. Amber: read
-            why first. Greyed: not something the app can remove for you.
+            Nothing goes until you press Remove. Ticked: loses nothing. Amber: may
+            lose what it says, so it is left for you to tick. Greyed: not something
+            the app can remove for you.
           </div>
           {SECTIONS.map(({ kind, title }) => {
             const rows = items.filter((i) => i.kind === kind);

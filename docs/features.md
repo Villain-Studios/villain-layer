@@ -88,8 +88,13 @@ up** removes what tasks left behind.
   - task branches in the user's clone, left from before REPO-4 or taken
     over by a task (TASK-3), only when every commit on them is in the
     app's copy and they are not checked out;
-  - branches in the app's copies that no task uses, pre-selected only when
-    every commit on them is on origin;
+  - branches in the app's copies that no task uses, pre-selected when every
+    commit on them is on origin, or, in repos on the connected GitHub, when
+    a pull request has every commit on them: your newest from the branch,
+    merged, or, for a branch the app made to review one
+    (`review/<repo>-<n>`), that pull request. A squash merge leaves a
+    branch's commits on no branch once origin deletes it, so git alone
+    took every finished task's branch for unpushed work;
   - your branches on origin that are done with, in repos on the connected
     GitHub, as origin stood at the last Sync. Yours means your newest pull
     request from it is merged or closed, or, with no pull request of yours,
@@ -113,9 +118,9 @@ up** removes what tasks left behind.
   folder is removed only once it is empty.
 
 Code: `commands/projects.rs`, `commands/repos.rs`, `commands/cleanup.rs`,
-`commands/cleanup_remote.rs`, `git/store.rs`, `git/upkeep.rs`,
-`integrations/github/branches.rs`, `ReposView.tsx`, `AddRepos.tsx`,
-`CleanUp.tsx`.
+`commands/cleanup_folders.rs`, `commands/cleanup_remote.rs`, `git/store.rs`,
+`git/upkeep.rs`, `integrations/github/branches.rs`, `ReposView.tsx`,
+`AddRepos.tsx`, `CleanUp.tsx`.
 
 Known gaps:
 - Removing a repo leaves panes running in *surviving* tasks' checkouts of
@@ -126,7 +131,9 @@ Known gaps:
 - Removing a repo leaves its copy in `.repos/`. Adding the repo again
   reuses it; Clean up offers it once no worktree belongs to it.
 - A branch squash-merged and then deleted on origin has commits that are on
-  no remote branch, so Clean up does not pre-select it.
+  no remote branch. In a repo not on the connected GitHub, or with no pull
+  request of yours from it, Clean up cannot tell it from unpushed work and
+  does not pre-select it.
 - Task branches are not in the user's clone until pushed and fetched.
 
 ## 2. Tasks

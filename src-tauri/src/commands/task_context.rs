@@ -9,7 +9,8 @@
 //! the app had already fetched.
 //!
 //! It also carries what earlier tasks learned about each repository here
-//! (MEM-4), with how likely each note is to be out of date.
+//! (MEM-4), with how likely each note is to be out of date, and the spec
+//! the user agreed for the work (SPEC-4).
 
 use std::path::Path;
 
@@ -33,6 +34,9 @@ pub(crate) const TICKET_FILE: &str = "TICKET.md";
 /// A description longer than this is cut, and says so. The context file is
 /// read into every turn of every agent in the task.
 const MAX_DESCRIPTION: usize = 8_000;
+
+/// The same for the spec (SPEC-4). Past it, `SPEC.md` has the rest.
+const MAX_SPEC: usize = 8_000;
 
 /// Bytes of notes per repository in the context file (MEM-4). The rest are
 /// counted, and `repo_notes` has them.
@@ -58,7 +62,8 @@ pub(crate) fn write_task_context(state: &AppState, task: &Task) -> Result<()> {
         return Ok(());
     };
     let ticket = std::fs::read_to_string(dir.join(TICKET_FILE)).ok();
-    let mut md = task_context(task, &task_repos(state, task), ticket.as_deref());
+    let spec = super::spec::saved_spec(state, task);
+    let mut md = task_context(task, &task_repos(state, task), ticket.as_deref(), spec.as_deref());
     md.push_str(&notes_section(&task_notes(state, task), chrono::Utc::now().timestamp_millis()));
 
     std::fs::write(dir.join("CLAUDE.md"), &md)?;
@@ -157,8 +162,14 @@ fn note_line(n: &RepoNote, now: i64) -> String {
 }
 
 /// The context file's text. `repos` are (folder, clone it came from) pairs,
-/// and `ticket` is the saved `TICKET.md`, if there is one.
-fn task_context(task: &Task, repos: &[(String, String)], ticket: Option<&str>) -> String {
+/// `ticket` is the saved `TICKET.md` and `spec` the saved `SPEC.md`, if
+/// there are.
+fn task_context(
+    task: &Task,
+    repos: &[(String, String)],
+    ticket: Option<&str>,
+    spec: Option<&str>,
+) -> String {
     let mut md = format!(
         "# {}\n\nWritten by Villain Layer. You are in the task folder, not inside a \
          repository: each repository below is checked out as a folder here, all on \
@@ -182,6 +193,9 @@ This task reviews pull request {}#{}{}, at commit `{}`: {}.              `{}` is
             r.url,
             task.branch,
         ));
+    }
+    if let Some(spec) = spec.filter(|s| !s.trim().is_empty()) {
+        md.push_str(&spec_section(spec));
     }
     match ticket.filter(|t| !t.trim().is_empty()) {
         Some(ticket) => {
@@ -228,6 +242,37 @@ This task reviews pull request {}#{}{}, at commit `{}`: {}.              `{}` is
         "is saved, ask the user to sign in or to save one. An app signed in on one port ",
         "of this machine is signed in on another with `browser_copy_session`.\n",
     ));
+    md
+}
+
+/// The spec, as the context file shows it (SPEC-4). Unlike the ticket it is
+/// not quoted: the user wrote or agreed every line, so it is theirs to
+/// instruct with. Its headings go down a level, under this one.
+fn spec_section(spec: &str) -> String {
+    let mut md = String::from(concat!(
+        "## The spec\n\n",
+        "The user's spec for this work, which they wrote or agreed. Its acceptance ",
+        "criteria are what done means: meet each one, and say which you could not. ",
+        "Where it and the ticket disagree, the spec wins. Leave alone what it puts out ",
+        "of scope, and ask the user its open questions rather than guessing. It is ",
+        "`SPEC.md` in this folder.\n\n",
+    ));
+    let (shown, cut) = cut_at(spec.trim(), MAX_SPEC);
+    let mut fence = false;
+    for line in shown.lines() {
+        if line.trim_start().starts_with("```") {
+            fence = !fence;
+        }
+        if !fence && line.starts_with('#') {
+            md.push('#');
+        }
+        md.push_str(line);
+        md.push('\n');
+    }
+    if cut {
+        md.push_str("\n(Cut short here. `SPEC.md` has the rest.)\n");
+    }
+    md.push('\n');
     md
 }
 
@@ -344,7 +389,7 @@ mod tests {
     fn the_context_file_carries_the_saved_ticket_rather_than_only_its_link() {
         let repos = vec![("api".to_string(), "/repos/api".to_string())];
         let ticket = ticket_markdown(&issue());
-        let md = task_context(&task(), &repos, Some(&ticket));
+        let md = task_context(&task(), &repos, Some(&ticket), None);
 
         assert!(md.contains("## The ticket: ACME-12 Refunds fail for split payments"));
         assert!(md.contains("Bug · priority High · labels payments"));
@@ -367,17 +412,40 @@ mod tests {
             }),
             ..task()
         };
-        let md = task_context(&review, &[], None);
+        let md = task_context(&review, &[], None, None);
         assert!(md.contains("reviews pull request acme/api#61 by ana, at commit `abc123`"));
         assert!(md.contains("Do not push"));
-        assert!(!task_context(&task(), &[], None).contains("This is a review"));
+        assert!(!task_context(&task(), &[], None, None).contains("This is a review"));
     }
 
     #[test]
     fn a_task_whose_ticket_was_never_saved_still_gets_the_link() {
-        let md = task_context(&task(), &[], None);
+        let md = task_context(&task(), &[], None, None);
         assert!(md.contains("Ticket: https://acme.atlassian.net/browse/ACME-12"));
         assert!(md.contains("None yet."));
+    }
+
+    #[test]
+    fn the_spec_comes_before_the_ticket_as_the_users_own_words() {
+        let ticket = ticket_markdown(&issue());
+        let spec = "## Goal\nRefunds work.\n\n## Acceptance criteria\n- [ ] AC-1: Two cards are refunded.\n";
+        let md = task_context(&task(), &[], Some(&ticket), Some(spec));
+
+        let at_spec = md.find("## The spec").unwrap();
+        let at_ticket = md.find("## The ticket: ACME-12").unwrap();
+        assert!(at_spec < at_ticket);
+        assert!(md.contains("the spec wins"));
+        assert!(md.contains("\n### Acceptance criteria\n- [ ] AC-1: Two cards are refunded.\n"));
+        assert!(!md.contains("> - [ ] AC-1"));
+    }
+
+    #[test]
+    fn a_long_spec_is_cut_and_points_at_its_file() {
+        let long = format!("## Goal\n{}", "word ".repeat(MAX_SPEC));
+        let md = spec_section(&long);
+        assert!(md.contains("(Cut short here. `SPEC.md` has the rest.)"));
+        assert!(md.len() < MAX_SPEC + 1_000);
+        assert!(!spec_section("## Goal\nShort.").contains("Cut short"));
     }
 
     #[test]

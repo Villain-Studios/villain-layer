@@ -36,6 +36,7 @@ import type {
   RepoOutgoing,
   Settings,
   SlackConfig,
+  Spec,
   Started,
   Synced,
   Task,
@@ -221,6 +222,10 @@ export const api = {
       description: args.description,
       kind: args.kind,
     }),
+  readSpec: (taskId: string) => invoke<Spec | null>("read_spec", { taskId }),
+  saveSpec: (taskId: string, text: string) => invoke<Spec | null>("save_spec", { taskId, text }),
+  draftSpec: (taskId: string, requestId: string) =>
+    invoke<string>("draft_spec", { taskId, requestId }),
   requestPrDescription: (taskId: string, paneId: string) =>
     invoke<string>("request_pr_description", { taskId, paneId }),
   takePrDescription: (taskId: string) =>

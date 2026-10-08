@@ -987,7 +987,7 @@ Known gaps:
 | `~/Library/Application Support/eu.codevillain.villain-layer/` | `config.json`: repos, tasks, settings, saved panes. `messages.json`: the message center (MSG-4). `notes.json`: repo notes (MEM-7). At agent launch also `.mcp.json` (0600), `claude-hooks.json`, `copilot-plugin/`, `opencode-plugin.js` |
 | Keychain, service `eu.codevillain.villain-layer` | one item holding every token, paired phones' included (PHONE-3), and the passwords of the browser's saved sign-ins (BRW-18) |
 | `~/.villain-worktrees/` (settable) | task folders, `_chat/` rooms, and `.repos/`: the app's own copy of each repo (REPO-4) |
-| a task folder | the worktrees, `AGENTS.md` and `CLAUDE.md` (task context), `TICKET.md` (PANE-13), `.mcp.json`, and `.gemini/settings.json`, `PR_DESCRIPTION.md`, `PR_FEEDBACK.md`, and hand-offs too long to type (`CONFLICTS.md`, `REVIEW_COMMENTS.md`, `PR_DRAFT_REQUEST.md`, `FIRST_PROMPT.md`, PANE-11) as they come up |
+| a task folder | the worktrees, `AGENTS.md` and `CLAUDE.md` (task context), `TICKET.md` (PANE-13), `SPEC.md` (SPEC-3), `.mcp.json`, and `.gemini/settings.json`, `PR_DESCRIPTION.md`, `PR_FEEDBACK.md`, and hand-offs too long to type (`CONFLICTS.md`, `REVIEW_COMMENTS.md`, `PR_DRAFT_REQUEST.md`, `FIRST_PROMPT.md`, PANE-11) as they come up |
 | `~/.claude.json` | trust entries for the app's own folders only (PANE-10) |
 | `<config folder>/browser/` | the browser's own Chrome profile (BRW-1): cookies, sign-ins and storage of the pages opened there |
 | `~/Library/Logs/villain-layer/panic.log` | a crash's location and backtrace |
@@ -1328,6 +1328,58 @@ Known gaps:
   choose with the arrow keys and Enter, or by typing an option's first
   letters. Agents use `browser_select`.
 - The mouse pointer does not change over links and text fields.
+
+## 19. Specs
+
+A task can have a spec: what the work is for, what done means, and what it
+leaves alone, agreed before an agent starts. The Spec tab, first of a
+task's tabs, drafts one from the ticket, holds it while you edit it, and
+saves it beside the task, where every agent in the task reads it. Start
+agent there saves it and starts an agent on it. An agent started from the
+raw ticket had nothing that said when it was done, and nor had anyone
+checking its work.
+
+- **SPEC-1** A spec MUST have its parts under these headings: Goal,
+  Acceptance criteria, Out of scope, Open questions. Each acceptance
+  criterion is a list item under its heading, with its id first (`AC-1`,
+  `AC-2`, …); one without an id is numbered by its place in the list. The
+  tab MUST list the saved spec's criteria, count them on the tab, and warn
+  when it has none, since they are what done means.
+- **SPEC-2** Drafting MUST run a fresh one-shot model (Claude Code, Sonnet,
+  no tools, no MCP, no thinking) over the saved ticket (`TICKET.md`,
+  PANE-13), fenced off as data and not instructions, and the names of the
+  task's repositories. It streams into the editor. It invents no
+  requirement the ticket does not imply: what the ticket leaves unclear
+  goes under Open questions. A task with no saved ticket is drafted from
+  its name. A redraft over text in the editor asks first; a failed draft
+  puts back what the editor held.
+- **SPEC-3** A spec MUST reach agents only once saved: `SPEC.md` in the
+  task folder (never a worktree, DISK-1), written whole, and the context
+  files rewritten with it. A draft or an edit not saved reaches nobody, and
+  the tab says so. Saving an empty spec removes it. What the editor holds
+  is kept per task while the app runs, so switching tabs or tasks loses
+  nothing.
+- **SPEC-4** The context file (PANE-13) MUST carry the saved spec above the
+  ticket, as the user's own: its acceptance criteria are what done means,
+  it wins where it and the ticket disagree, what it puts out of scope is
+  left alone, and its open questions are asked rather than guessed. It is
+  not quoted as the ticket is, since the user wrote or agreed every line.
+  Its headings go a level down, under the app's. Past 8 KB it is cut, and
+  says `SPEC.md` has the rest.
+- **SPEC-5** An opening prompt for a task with a spec (`task_prompt`: the
+  launch dialog, Start agent, handoffs) MUST end by pointing at `SPEC.md`,
+  by its full path, so an agent started inside one repo finds it too.
+
+Code: `commands/spec.rs`, `commands/task_context.rs`, `oneshot.rs`,
+`SpecView.tsx`, `store.ts` (`specs`).
+
+Known gaps:
+- Drafting runs Claude Code, whichever agent will do the work.
+- The draft is written from the ticket, not from reading the code.
+- Agents already running are not told when the spec changes; one started
+  afterwards reads it.
+- What the editor holds and has not saved is lost when the app quits.
+- A draft cannot be stopped once started.
 
 ---
 

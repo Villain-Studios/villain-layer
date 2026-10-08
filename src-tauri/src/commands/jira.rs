@@ -378,13 +378,17 @@ pub async fn task_prompt(
         }
         None => task_repos(&state, &task),
     };
+    // SPEC-5: wherever the agent starts, it is told where the spec is.
+    let spec = super::spec::prompt_line(&state, &task)
+        .map(|line| format!("\n\n{line}"))
+        .unwrap_or_default();
 
     if let Some(key) = task.issue_key.as_deref() {
         if let Ok((client, _)) = jira_client(&state) {
             if let Ok(issue) = client.issue(key).await {
                 let prompt = ticket_prompt(&issue, &task, &repos, at_task_root);
                 keep_ticket(app, task, issue).await;
-                return Ok(prompt);
+                return Ok(prompt + &spec);
             }
         }
     }
@@ -418,7 +422,7 @@ pub async fn task_prompt(
         "Start by exploring the relevant code, then implement the change. Ask before \
          making sweeping refactors.",
     );
-    Ok(prompt)
+    Ok(prompt + &spec)
 }
 
 /// Where an agent is asked to leave a drafted pull request description.

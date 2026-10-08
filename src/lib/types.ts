@@ -544,6 +544,12 @@ export interface ReviewedHead {
   head: string;
 }
 
+/** A task's saved spec, and the acceptance criteria read from it (SPEC-1). */
+export interface Spec {
+  text: string;
+  criteria: { id: string; text: string }[];
+}
+
 export interface ReviewerRun {
   findings: Finding[];
   /** Each repo's HEAD the review was of. */

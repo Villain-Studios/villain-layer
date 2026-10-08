@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api } from "./lib/api";
 import { selectedTask, useStore, type View } from "./store";
@@ -8,6 +8,7 @@ import { Sidebar } from "./components/sidebar/Sidebar";
 import { Terminals } from "./components/Terminals";
 import { DiffView } from "./components/DiffView";
 import { PrPanel } from "./components/PrPanel";
+import { SpecView } from "./components/SpecView";
 import { TicketsView } from "./components/tickets/TicketsView";
 import { AgentsView } from "./components/AgentsView";
 import { ChatView } from "./components/ChatView";
@@ -173,6 +174,10 @@ function TaskMain({ task }: { task: TaskView }) {
   // from the task poll, which can be a minute behind a pane just opened.
   const paneCount = useStore((s) => s.panes.filter((p) => p.task_id === task.id).length);
   const [updating, setUpdating] = useState(false);
+  // The Spec tab's badge counts its criteria, so the spec is read with the task.
+  const criteria = useStore((s) => s.specs[task.id]?.saved?.criteria.length ?? 0);
+  const loadSpec = useStore((s) => s.loadSpec);
+  useEffect(() => { void loadSpec(task.id).catch(() => {}); }, [task.id, loadSpec]);
 
   const totals = taskTotals(task);
   // What the Diff tab lists by default: files with uncommitted changes. The
@@ -253,6 +258,9 @@ function TaskMain({ task }: { task: TaskView }) {
       </div>
 
       <div className="tabs">
+        <button className={tab === "spec" ? "active" : ""} onClick={() => setTab("spec")}>
+          Spec{criteria > 0 && <span className="badge">{criteria}</span>}
+        </button>
         <button
           className={tab === "terminals" ? "active" : ""}
           onClick={() => setTab("terminals")}
@@ -282,6 +290,7 @@ function TaskMain({ task }: { task: TaskView }) {
         >
           <Terminals task={task} />
         </div>
+        {tab === "spec" && <SpecView task={task} />}
         {tab === "diff" && <DiffView task={task} />}
         {tab === "pr" && <PrPanel task={task} onUpdateFromBase={() => setUpdating(true)} />}
       </div>

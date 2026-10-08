@@ -18,21 +18,15 @@ use tauri::{AppHandle, Emitter, Runtime};
 use crate::error::{Error, Result};
 use crate::shellenv;
 
+mod acp;
 pub mod feed;
+mod output;
+mod screen;
 mod text;
 
+use output::Output;
+use screen::{last_title, notice_in, NOTICE_TAIL, TITLE_TAIL};
 pub use text::{readable_tail, strip_ansi};
-
-/// Roughly one screenful of history per pane, replayed when a terminal is
-/// first drawn or has fallen too far behind to catch up.
-const SCROLLBACK_LIMIT: usize = 256 * 1024;
-
-/// How far past the limit scrollback may run before it is trimmed.
-///
-/// Trimming on every read once full meant moving 256KB to append a few bytes,
-/// hundreds of times a second for an agent that is redrawing. Letting it
-/// overshoot makes the move rare.
-const SCROLLBACK_SLACK: usize = 64 * 1024;
 
 /// How long to hold PTY bytes before shipping them to the webview.
 ///
@@ -56,90 +50,6 @@ const OUTPUT_GATHER: Duration = Duration::from_millis(4);
 /// A shell echoes at once; a TUI renders the change on its own schedule, a
 /// frame or two later. Past this, output is the program's own again.
 const ECHO_WINDOW: Duration = Duration::from_millis(250);
-
-/// How much of the end of the output is searched for trust and limit phrases.
-const NOTICE_TAIL: usize = 4096;
-
-/// Phrases a CLI prints when it is waiting on the user rather than working.
-///
-/// Every task is a brand-new directory, so the trust question is not a rare
-/// edge case — it is the first thing an agent asks on every new task, and an
-/// unanswered one looks exactly like an agent that has silently done nothing.
-const TRUST_MARKERS: &[&str] = &[
-    "do you trust the files in this folder",
-    "trust the files in this directory",
-    "do you trust this folder",
-];
-
-/// Phrases the agent CLIs print when they will not do any more work.
-///
-/// Best-effort and deliberately specific: matching a bare "rate limit" would
-/// fire whenever an agent read code about rate limiting. A bare "usage limit"
-/// was the same mistake — the prompt "add a usage limit to the API" is echoed
-/// as it is typed — and this notice never clears, so it flagged the pane for
-/// good and offered to hand off an agent that was fine.
-const LIMIT_MARKERS: &[&str] = &[
-    "usage limit reached",
-    "reached your usage limit",
-    "hit your usage limit",
-    "usage limit exceeded",
-    "rate limit reached",
-    "rate limit exceeded",
-    "quota exceeded",
-    "resource_exhausted",
-    "resource exhausted",
-    "insufficient_quota",
-    "out of credits",
-    "credit balance is too low",
-    "upgrade to continue",
-];
-
-/// How far back to look for the window title a CLI last set.
-const TITLE_TAIL: usize = 2048;
-
-/// The last whole window title set in `tail` (OSC 0 or 2), if any.
-///
-/// Read from the tail rather than the chunk just read: a title can straddle
-/// two reads, and then neither chunk holds all of it.
-fn last_title(tail: &[u8]) -> Option<String> {
-    let mut found = None;
-    let mut at = 0;
-    while let Some(off) = tail[at..].windows(2).position(|w| w == b"\x1b]") {
-        let start = at + off + 2;
-        let body = &tail[start..];
-        let Some(rest) = body.strip_prefix(b"0;").or_else(|| body.strip_prefix(b"2;")) else {
-            at = start;
-            continue;
-        };
-        // Ended by BEL or by ST; one with no end yet is still arriving.
-        let Some(end) = rest.iter().position(|&b| b == 0x07 || b == 0x1b) else {
-            break;
-        };
-        found = Some(String::from_utf8_lossy(&rest[..end]).to_string());
-        at = start + 2 + end;
-    }
-    found
-}
-
-/// Which notice, if any, the end of a pane's output is showing.
-///
-/// Runs on every read, so it avoids the obvious version — a lossy UTF-8
-/// decode and a Unicode lowercase of 4KB, two allocations a read. The phrases
-/// are all ASCII, so folding ASCII and blanking everything else keeps every
-/// match and lets `str::contains` do the searching. `scratch` is reused by
-/// the caller between reads.
-fn notice_in(tail: &[u8], scratch: &mut Vec<u8>) -> Option<&'static str> {
-    scratch.clear();
-    scratch.extend(tail.iter().map(|b| if b.is_ascii() { b.to_ascii_lowercase() } else { b' ' }));
-    let text = std::str::from_utf8(scratch).ok()?;
-    if LIMIT_MARKERS.iter().any(|m| text.contains(m)) {
-        Some("usage_limit")
-    } else if TRUST_MARKERS.iter().any(|m| text.contains(m)) {
-        Some("trust_prompt")
-    } else {
-        None
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -178,6 +88,9 @@ pub struct PaneInfo {
     /// UI gives the pane in place of the agent's (PANE-12). None until it
     /// says, and for a CLI that never does.
     pub topic: Option<String>,
+    /// An agent over ACP (§20), drawn as a conversation rather than a
+    /// terminal.
+    pub acp: bool,
 }
 
 /// What an agent is doing, as best the app can tell.
@@ -335,87 +248,35 @@ impl PaneMeta {
     }
 }
 
-/// What a pane has printed, and how much of it the webview has been sent.
-///
-/// Positions are counted from the pane's first byte, so the webview can say
-/// exactly how much it already has. That is what lets a terminal coming back
-/// on screen be sent only what it missed, instead of being wiped and
-/// repainted from the whole scrollback — which is the flash, and the pause,
-/// every time a task or a tab was switched.
-struct Output {
-    /// The most recent output, from `total - scrollback.len()` to `total`.
-    scrollback: Vec<u8>,
-    /// Every byte the process has printed.
-    total: u64,
-    /// Where the webview's feed has got to. Anything after this is waiting
-    /// for the next flush.
-    sent: u64,
-}
-
-impl Output {
-    fn start(&self) -> u64 {
-        self.total - self.scrollback.len() as u64
-    }
-
-    fn push(&mut self, chunk: &[u8]) {
-        self.scrollback.extend_from_slice(chunk);
-        self.total += chunk.len() as u64;
-        if self.scrollback.len() > SCROLLBACK_LIMIT + SCROLLBACK_SLACK {
-            let mut cut = self.scrollback.len() - SCROLLBACK_LIMIT;
-            // Start the kept history at a line, so a replay does not open on
-            // the back half of an escape sequence or of a UTF-8 character.
-            let look = &self.scrollback[cut..(cut + 4096).min(self.scrollback.len())];
-            if let Some(nl) = look.iter().position(|&b| b == b'\n') {
-                cut += nl + 1;
-            }
-            self.scrollback.drain(..cut);
-        }
-    }
-
-    /// Output since `from`, or all of it when `from` is no longer held.
-    fn since(&self, from: Option<u64>) -> (&[u8], bool) {
-        let start = self.start();
-        match from {
-            Some(f) if f >= start && f <= self.total => {
-                (&self.scrollback[(f - start) as usize..], false)
-            }
-            // A terminal that has never been drawn has nothing to clear.
-            // One that is too far behind has to start again.
-            other => (&self.scrollback, other.is_some()),
-        }
-    }
-
-    /// The output the feed has not carried yet, marking it carried.
-    fn take_unsent(&mut self) -> Option<(Vec<u8>, u64)> {
-        if self.sent >= self.total {
-            return None;
-        }
-        // More than the scrollback holds went by between flushes. Send what
-        // is left; the webview sees the gap and asks for a replay.
-        let from = self.sent.max(self.start());
-        let bytes = self.scrollback[(from - self.start()) as usize..].to_vec();
-        self.sent = self.total;
-        Some((bytes, self.total))
-    }
+/// How the app talks to what runs in a pane.
+enum Io {
+    /// A terminal: keys in, a screen out.
+    Pty {
+        master: Mutex<Box<dyn MasterPty + Send>>,
+        /// Keystrokes on their way to the process, written by a thread of the
+        /// pane's own.
+        ///
+        /// `pty_write` runs on the main thread, and a PTY's input queue is small:
+        /// a paste into an agent that is busy and not reading filled it, and the
+        /// write then sat on the main thread until the agent read — with the
+        /// window frozen for all of it. A queue keeps the keys in order and the
+        /// wait somewhere nobody is looking.
+        input: std::sync::mpsc::Sender<Vec<u8>>,
+        killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
+    },
+    /// An agent over ACP: prompts in, a conversation out (`acp/`, ACP-*).
+    /// Its scrollback holds the conversation's text copy (ACP-7).
+    Acp(Arc<crate::acp::Conn>),
 }
 
 struct Pane {
     meta: Mutex<PaneMeta>,
     /// The child's pid, which is also its process-group id: portable-pty calls
-    /// setsid() so the agent leads its own session. Signalling the group
-    /// reaches anything the agent spawned as well.
+    /// setsid() so the agent leads its own session, and an ACP agent is
+    /// started in a group of its own. Signalling the group reaches anything
+    /// the agent spawned as well.
     pid: Option<u32>,
-    master: Mutex<Box<dyn MasterPty + Send>>,
-    /// Keystrokes on their way to the process, written by a thread of the
-    /// pane's own.
-    ///
-    /// `pty_write` runs on the main thread, and a PTY's input queue is small:
-    /// a paste into an agent that is busy and not reading filled it, and the
-    /// write then sat on the main thread until the agent read — with the
-    /// window frozen for all of it. A queue keeps the keys in order and the
-    /// wait somewhere nobody is looking.
-    input: std::sync::mpsc::Sender<Vec<u8>>,
-    killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
+    io: Io,
     output: Mutex<Output>,
     flush_scheduled: AtomicBool,
     /// When the last event went out, so a burst is coalesced and a lone key
@@ -664,10 +525,9 @@ impl PtyManager {
         }
     }
 
-    pub fn spawn<R: Runtime>(&self, app: &AppHandle<R>, opts: SpawnOptions) -> Result<PaneInfo> {
-        if let Some(input) = &opts.initial_input {
-            too_long_to_type(input)?;
-        }
+    /// A place under `MAX_PANES` for a pane about to start, in a folder that
+    /// exists.
+    fn reserve(&self, cwd: &str) -> Result<Reserved<'_>> {
         // Checked before anything is allocated, so refusing costs nothing.
         let slot = {
             let panes = self.panes.lock();
@@ -687,9 +547,68 @@ impl PtyManager {
         // without a word. A worktree deleted by hand then got `claude
         // --continue` in the home folder — resuming the wrong conversation, or
         // walking out into Photos and Downloads.
-        if !std::path::Path::new(&opts.cwd).is_dir() {
-            return Err(Error::Pty(format!("{} no longer exists", opts.cwd)));
+        if !std::path::Path::new(cwd).is_dir() {
+            return Err(Error::Pty(format!("{cwd} no longer exists")));
         }
+        Ok(slot)
+    }
+
+    /// A new pane's record, not yet in the map.
+    fn new_pane(opts: &SpawnOptions, id: &str, pid: Option<u32>, io: Io) -> (PaneInfo, Arc<Pane>) {
+        let now = Utc::now();
+        let info = PaneInfo {
+            id: id.to_string(),
+            task_id: opts.task_id.clone(),
+            checkout_id: opts.checkout_id.clone(),
+            kind: opts.kind,
+            title: opts.title.clone(),
+            agent_id: opts.agent_id.clone(),
+            cwd: opts.cwd.clone(),
+            running: true,
+            exit_code: None,
+            started_at: now,
+            last_output_at: now,
+            notice: None,
+            activity: Activity::Idle,
+            activity_since: now,
+            topic: None,
+            acp: matches!(io, Io::Acp(_)),
+        };
+        let pane = Arc::new(Pane {
+            meta: Mutex::new(PaneMeta {
+                info: info.clone(),
+                stopping: false,
+                reported: None,
+                last_work: now,
+                last_input: Instant::now(),
+                prompted: opts.prompted || opts.initial_input.is_some(),
+                seen_at: now,
+                title: String::new(),
+                cleared_notice: None,
+                notice_at: now,
+                session: None,
+            }),
+            pid,
+            io,
+            output: Mutex::new(Output { scrollback: Vec::new(), total: 0, sent: 0 }),
+            flush_scheduled: AtomicBool::new(false),
+            last_flush: Mutex::new(Instant::now()),
+            typed: Mutex::new(None),
+            urgent: Mutex::new(false),
+            wake: parking_lot::Condvar::new(),
+            // Nothing is on screen until the webview attaches, and attaching
+            // collects whatever was printed before it did.
+            watched: AtomicBool::new(false),
+            printed: tokio::sync::watch::Sender::new(()),
+        });
+        (info, pane)
+    }
+
+    pub fn spawn<R: Runtime>(&self, app: &AppHandle<R>, opts: SpawnOptions) -> Result<PaneInfo> {
+        if let Some(input) = &opts.initial_input {
+            too_long_to_type(input)?;
+        }
+        let slot = self.reserve(&opts.cwd)?;
 
         let system = portable_pty::native_pty_system();
         let size = PtySize {
@@ -766,55 +685,9 @@ impl PtyManager {
             }
         });
 
-        let now = Utc::now();
-        let info = PaneInfo {
-            id: id.clone(),
-            task_id: opts.task_id.clone(),
-            checkout_id: opts.checkout_id.clone(),
-            kind: opts.kind,
-            title: opts.title.clone(),
-            agent_id: opts.agent_id.clone(),
-            cwd: opts.cwd.clone(),
-            running: true,
-            exit_code: None,
-            started_at: now,
-            last_output_at: now,
-            notice: None,
-            activity: Activity::Idle,
-            activity_since: now,
-            topic: None,
-        };
-
-        let pid = child.process_id();
-        let pane = Arc::new(Pane {
-            meta: Mutex::new(PaneMeta {
-                info: info.clone(),
-                stopping: false,
-                reported: None,
-                last_work: now,
-                last_input: Instant::now(),
-                prompted: opts.prompted || opts.initial_input.is_some(),
-                seen_at: now,
-                title: String::new(),
-                cleared_notice: None,
-                notice_at: now,
-                session: None,
-            }),
-            pid,
-            master: Mutex::new(pair.master),
-            input,
-            killer: Mutex::new(killer),
-            output: Mutex::new(Output { scrollback: Vec::new(), total: 0, sent: 0 }),
-            flush_scheduled: AtomicBool::new(false),
-            last_flush: Mutex::new(Instant::now()),
-            typed: Mutex::new(None),
-            urgent: Mutex::new(false),
-            wake: parking_lot::Condvar::new(),
-            // Nothing is on screen until the webview attaches, and attaching
-            // collects whatever was printed before it did.
-            watched: AtomicBool::new(false),
-            printed: tokio::sync::watch::Sender::new(()),
-        });
+        let typing = input.clone();
+        let io = Io::Pty { master: Mutex::new(pair.master), input, killer: Mutex::new(killer) };
+        let (info, pane) = Self::new_pane(&opts, &id, child.process_id(), io);
 
         self.panes.lock().insert(id.clone(), pane.clone());
         drop(slot);
@@ -953,7 +826,7 @@ impl PtyManager {
         }
 
         if let Some(input) = opts.initial_input {
-            let keys = pane.input.clone();
+            let keys = typing;
             std::thread::spawn(move || {
                 // Give the agent's TUI a moment to draw its prompt first.
                 std::thread::sleep(std::time::Duration::from_millis(1200));
@@ -978,6 +851,15 @@ impl PtyManager {
     /// answered, a turn interrupted — which nothing else would announce.
     pub fn write(&self, id: &str, data: &str) -> Result<bool> {
         let pane = self.get(id)?;
+        let input = match &pane.io {
+            Io::Pty { input, .. } => input,
+            // Esc stops a conversation and a digit answers its question
+            // (ACP-10); what that changes, the agent reports itself.
+            Io::Acp(conn) => {
+                conn.key(data);
+                return Ok(false);
+            }
+        };
         *pane.typed.lock() = Some(Instant::now());
         let changed = {
             let watched = pane.watched.load(Ordering::Acquire);
@@ -986,7 +868,7 @@ impl PtyManager {
             meta.typed(data);
             meta.activity(watched, Utc::now()) != before
         };
-        pane.input
+        input
             .send(data.as_bytes().to_vec())
             .map_err(|_| Error::Pty("the terminal has closed".into()))?;
         Ok(changed)
@@ -1000,10 +882,14 @@ impl PtyManager {
     /// shows up, but nothing is submitted until someone presses Enter again.
     /// A short gap between the two is enough for the TUI to accept the submit.
     pub fn submit(&self, id: &str, text: &str) -> Result<()> {
-        too_long_to_type(text)?;
         let pane = self.get(id)?;
+        let keys = match &pane.io {
+            Io::Pty { input, .. } => input.clone(),
+            // Nothing is typed into a conversation: it is sent whole (ACP-4).
+            Io::Acp(conn) => return conn.prompt(text),
+        };
+        too_long_to_type(text)?;
         pane.meta.lock().sent("\r");
-        let keys = pane.input.clone();
         let payload = text.as_bytes().to_vec();
         std::thread::spawn(move || {
             if keys.send(payload).is_ok() {
@@ -1016,8 +902,11 @@ impl PtyManager {
 
     pub fn resize(&self, id: &str, rows: u16, cols: u16) -> Result<()> {
         let pane = self.get(id)?;
+        let Io::Pty { master, .. } = &pane.io else {
+            return Ok(());
+        };
         pane.meta.lock().last_input = Instant::now();
-        let master = pane.master.lock();
+        let master = master.lock();
         master
             .resize(PtySize {
                 rows,
@@ -1138,8 +1027,8 @@ impl PtyManager {
             };
             // Negative pid signals the whole group, catching subprocesses too.
             unsafe { libc::kill(-(pid as i32), signal) };
-        } else {
-            let _ = pane.killer.lock().kill();
+        } else if let Io::Pty { killer, .. } = &pane.io {
+            let _ = killer.lock().kill();
         }
     }
 
@@ -1156,7 +1045,9 @@ impl PtyManager {
                 libc::kill(-(pid as i32), libc::SIGKILL);
             },
             _ => {
-                let _ = pane.killer.lock().kill();
+                if let Io::Pty { killer, .. } = &pane.io {
+                    let _ = killer.lock().kill();
+                }
             }
         }
     }
@@ -1327,6 +1218,7 @@ mod tests {
                 activity: Activity::Idle,
                 activity_since: now,
                 topic: None,
+                acp: false,
             },
             stopping: false,
             reported: None,
@@ -1382,22 +1274,6 @@ mod tests {
         let mut m = meta(true, 600);
         m.info.running = false;
         assert_eq!(m.activity(false, now), Activity::Idle);
-    }
-
-    #[test]
-    fn the_last_whole_title_is_the_one_read() {
-        let t = |b: &[u8]| last_title(b);
-        assert_eq!(t(b"\x1b]0;\xe2\x97\x87  Ready (api)\x07drawn"), Some("◇  Ready (api)".into()));
-        // Two in one read: the later wins. ST ends one as well as BEL does.
-        assert_eq!(
-            t(b"\x1b]2;one\x07text\x1b]0;two\x1b\\more"),
-            Some("two".into())
-        );
-        // Still arriving: the whole one before it stands.
-        assert_eq!(t(b"\x1b]0;done\x07\x1b]0;half"), Some("done".into()));
-        // Other OSC sequences are not titles.
-        assert_eq!(t(b"\x1b]10;?\x1b\\\x1b]9;hello\x07"), None);
-        assert_eq!(t(b"plain"), None);
     }
 
     #[test]
@@ -1465,76 +1341,6 @@ mod tests {
     }
 
     use super::*;
-
-    #[test]
-    fn recognises_the_trust_question_every_new_worktree_triggers() {
-        let hit = |s: &str| TRUST_MARKERS.iter().any(|m| s.to_lowercase().contains(m));
-        assert!(hit("Do you trust the files in this folder?"));
-        assert!(hit("  Do you trust this folder?  "));
-        // Not the usage-limit wording, which is handled separately.
-        assert!(!hit("You've reached your usage limit"));
-    }
-
-    #[test]
-    fn a_notice_is_found_through_colour_and_unicode() {
-        let mut scratch = Vec::new();
-        let tui = "\u{1b}[1m╭─ Do you trust the files in this folder? ─╮\u{1b}[0m".as_bytes();
-        assert_eq!(notice_in(tui, &mut scratch), Some("trust_prompt"));
-        // A usage limit outranks a trust question still on screen.
-        let both = b"Do you trust this folder?\n... You've reached your USAGE LIMIT";
-        assert_eq!(notice_in(both, &mut scratch), Some("usage_limit"));
-        // A tail cut through the middle of a character is still searchable.
-        let cut = &"é usage limit reached".as_bytes()[1..];
-        assert_eq!(notice_in(cut, &mut scratch), Some("usage_limit"));
-        assert_eq!(notice_in(b"added a rate limiter", &mut scratch), None);
-    }
-
-    fn output() -> Output {
-        Output { scrollback: Vec::new(), total: 0, sent: 0 }
-    }
-
-    #[test]
-    fn a_terminal_that_kept_up_is_sent_only_what_it_missed() {
-        let mut out = output();
-        out.push(b"hello ");
-        out.push(b"world");
-        assert_eq!(out.since(Some(6)), (&b"world"[..], false));
-        assert_eq!(out.since(Some(11)), (&b""[..], false));
-        // Never drawn: everything, and nothing to clear.
-        assert_eq!(out.since(None), (&b"hello world"[..], false));
-    }
-
-    #[test]
-    fn trimming_keeps_positions_and_starts_on_a_line() {
-        let mut out = output();
-        let line = [b'x'; 1023].iter().chain(b"\n").copied().collect::<Vec<u8>>();
-        while out.total < (SCROLLBACK_LIMIT + SCROLLBACK_SLACK + 4096) as u64 {
-            out.push(&line);
-        }
-        assert!(out.scrollback.len() <= SCROLLBACK_LIMIT + SCROLLBACK_SLACK);
-        assert_eq!(out.start() + out.scrollback.len() as u64, out.total);
-        // The kept history opens on a fresh line, not halfway through one.
-        assert_eq!(out.scrollback[0], b'x');
-        assert_eq!(out.start() % line.len() as u64, 0);
-
-        // A point that has been trimmed away means starting again.
-        let (all, reset) = out.since(Some(0));
-        assert!(reset);
-        assert_eq!(all.len(), out.scrollback.len());
-        let (tail, reset) = out.since(Some(out.total - 3));
-        assert!(!reset);
-        assert_eq!(tail, b"xx\n");
-    }
-
-    #[test]
-    fn the_feed_carries_each_byte_once() {
-        let mut out = output();
-        out.push(b"abc");
-        assert_eq!(out.take_unsent(), Some((b"abc".to_vec(), 3)));
-        assert_eq!(out.take_unsent(), None);
-        out.push(b"de");
-        assert_eq!(out.take_unsent(), Some((b"de".to_vec(), 5)));
-    }
 
     /// How long a keystroke's echo takes to reach the webview, quiet and
     /// beside a process printing every 20ms — an agent's spinner, a watcher.
@@ -1861,25 +1667,5 @@ mod tests {
         ptys.shutdown(Duration::from_secs(2));
         assert_eq!(started, MAX_PANES, "refused: {:?}", refused.lock());
         assert_eq!(ptys.list(None).len(), MAX_PANES);
-    }
-
-    #[test]
-    fn recognises_limit_messages_without_firing_on_prose() {
-        let hit = |s: &str| LIMIT_MARKERS.iter().any(|m| s.to_lowercase().contains(m));
-
-        assert!(hit("You've reached your usage limit. Resets at 3pm."));
-        assert!(hit("Error: quota exceeded for this model"));
-        assert!(hit("RESOURCE_EXHAUSTED"));
-        assert!(hit("Your credit balance is too low"));
-
-        assert!(hit("Claude usage limit reached. Your limit will reset at 5pm"));
-        assert!(hit("You've hit your usage limit for GPT-5"));
-
-        // Reading or writing code about rate limiting must not count.
-        assert!(!hit("added a rate limiter to the gateway"));
-        assert!(!hit("> add a usage limit to the orders API"));
-        assert!(!hit("Do you trust the files in this folder?"));
-        assert!(!hit("see docs/rate-limits.md for the policy"));
-        assert!(!hit("fn check_quota(user: &User) -> bool"));
     }
 }

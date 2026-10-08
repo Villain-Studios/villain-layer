@@ -4,7 +4,7 @@ import { useFocusedPane } from "../lib/goto";
 import { read, write } from "../lib/persist";
 import { useStore } from "../store";
 import { CHAT_TASK_ID, canRestart, paneName, paneState } from "../lib/derive";
-import { TerminalPane } from "./Terminal";
+import { PaneView } from "./AcpPane";
 import { PlusIcon } from "./icons";
 import { ContextMenu, Confirm } from "./ui";
 import { PaneExited, RestartButton, useRestart } from "./Restart";
@@ -82,11 +82,11 @@ export function ChatView() {
   // One start at a time: a second click while the first was spawning
   // opened a second chat.
   const starting = useRef(false);
-  async function start(agentId: string) {
+  async function start(agentId: string, acp = false) {
     if (starting.current) return;
     starting.current = true;
     try {
-      const pane = await api.spawnChat(agentId);
+      const pane = await api.spawnChat(agentId, null, acp);
       await refreshPanes();
       setActive(pane.id);
     } catch (e) {
@@ -106,7 +106,15 @@ export function ChatView() {
   }
 
   const addItems: MenuItem[] = installed.length
-    ? installed.map((a) => ({ label: a.name, onSelect: () => void start(a.id) }))
+    ? [
+        ...installed.map((a) => ({ label: a.name, onSelect: () => void start(a.id) })),
+        // The same agents as a conversation the app draws (§20).
+        ...installed.filter((a) => a.acp).map((a, i) => ({
+          label: `${a.name} · conversation (ACP)`,
+          onSelect: () => void start(a.id, true),
+          separated: i === 0,
+        })),
+      ]
     : [{ label: "No agent CLIs on your PATH", onSelect: () => {}, disabled: true }];
 
   const doomed = panes.find((p) => p.id === closing);
@@ -169,7 +177,7 @@ export function ChatView() {
       <PaneExited pane={panes.find((p) => p.id === active)} busy={restarting.has(active ?? "")} onResume={restart} />
       <div className="pane-stack">
         {panes.map((p) => (
-          <TerminalPane key={p.id} pane={p} visible={p.id === active} />
+          <PaneView key={p.id} pane={p} visible={p.id === active} />
         ))}
         {panes.length === 0 && (
           <div className="empty">

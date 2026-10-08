@@ -40,6 +40,15 @@ pub struct AgentDef {
     pub session_store: Option<SessionStore>,
     /// How the app plugs into this CLI for a launch.
     pub integration: Integration,
+    /// How to run it over ACP instead of in a terminal (§20), where it can.
+    pub acp: Option<AcpCommand>,
+}
+
+/// The command that runs an agent as an ACP server on its stdin and stdout.
+#[derive(Debug, Clone, Copy)]
+pub struct AcpCommand {
+    pub program: &'static str,
+    pub args: &'static [&'static str],
 }
 
 /// How the app plugs into an agent CLI for one launch: how the CLI says
@@ -688,6 +697,9 @@ pub const AGENTS: &[AgentDef] = &[
             dir: ".claude/projects",
             ext: "jsonl",
         }),
+        // Not Claude Code itself: Zed's adapter around the Claude Agent SDK,
+        // installed on its own, with the SDK version it bundles.
+        acp: Some(AcpCommand { program: "claude-agent-acp", args: &[] }),
     },
     AgentDef {
         id: "gemini",
@@ -699,6 +711,7 @@ pub const AGENTS: &[AgentDef] = &[
         resume_args: None,
         resume_by_id: None,
         session_store: None,
+        acp: Some(AcpCommand { program: "gemini", args: &["--acp"] }),
     },
     AgentDef {
         id: "opencode",
@@ -710,6 +723,7 @@ pub const AGENTS: &[AgentDef] = &[
         resume_args: None,
         resume_by_id: None,
         session_store: None,
+        acp: Some(AcpCommand { program: "opencode", args: &["acp"] }),
     },
     AgentDef {
         id: "copilot",
@@ -727,6 +741,8 @@ pub const AGENTS: &[AgentDef] = &[
         resume_args: None,
         resume_by_id: None,
         session_store: None,
+        // In public preview, as of 1.0.93.
+        acp: Some(AcpCommand { program: "copilot", args: &["--acp"] }),
     },
 ];
 
@@ -740,6 +756,9 @@ pub struct AgentStatus {
     /// Whether it can pick a conversation back up: Restart and Resume are
     /// offered only then (PANE-14).
     pub resumes: bool,
+    /// Whether it can run over ACP here: it has an ACP command, and that is
+    /// on the PATH (ACP-1).
+    pub acp: bool,
 }
 
 pub fn find(id: &str) -> Option<&'static AgentDef> {
@@ -759,6 +778,7 @@ pub fn available() -> Vec<AgentStatus> {
                 installed: path.is_some(),
                 path,
                 resumes: a.resume_args.is_some(),
+                acp: a.acp.is_some_and(|c| shellenv::which(c.program).is_some()),
             }
         })
         .collect()

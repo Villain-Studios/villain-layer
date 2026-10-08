@@ -175,6 +175,8 @@ export interface PaneInfo {
   activity_since: string;
   /** What the conversation is about, as the CLI named it. Show `paneName`, not this. */
   topic: string | null;
+  /** An agent over ACP (§20): drawn as a conversation, not a terminal. */
+  acp: boolean;
 }
 
 /** What a terminal coming on screen missed. See `pty_attach`. */
@@ -195,6 +197,8 @@ export interface AgentStatus {
   path: string | null;
   /** Whether it can pick a conversation back up: Restart and Resume (PANE-14). */
   resumes: boolean;
+  /** It can run over ACP here: it has an ACP command, on the PATH (ACP-1). */
+  acp: boolean;
 }
 
 export interface Resumable {
@@ -358,6 +362,7 @@ export interface TicketMove {
 export * from "./types-github";
 // The browser panel's (§18), likewise.
 export * from "./types-browser";
+export * from "./types-acp";
 
 export interface JiraConfig {
   base_url: string;
@@ -386,6 +391,8 @@ export interface SlackConfig {
 export interface UiPrefs {
   scale: number;
   terminal_font_size: number;
+  /** An ACP conversation's text, in px (ACP-15). */
+  conversation_font_size: number;
   restore_panes: boolean;
   trust_agent_dirs: boolean;
   sync_jira_status: boolean;

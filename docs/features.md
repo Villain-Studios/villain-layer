@@ -1537,7 +1537,7 @@ count and banner treats it like any other.
 
 | Agent | ACP command | Picks a conversation up by | Checked against |
 |---|---|---|---|
-| `claude` | `claude-agent-acp`, installed separately (`@agentclientprotocol/claude-agent-acp`, formerly `@zed-industries/`) | load, resume, list | adapter 0.22.2 |
+| `claude` | `claude-agent-acp`, installed separately (`@agentclientprotocol/claude-agent-acp`, formerly `@zed-industries/`) | load, resume, list | adapter 0.87.0 (and 0.22.2) |
 | `copilot` | `copilot --acp` | load, list | 1.0.93 |
 | `opencode` | `opencode acp` | load, resume, list | 1.18.35 |
 | `gemini` | `gemini --acp` | load | 0.63.0, `initialize` only: it would not open a conversation for a personal Google account |

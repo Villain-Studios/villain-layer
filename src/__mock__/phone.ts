@@ -4,7 +4,7 @@
  *
  *   ?paired=0     start unpaired: the code is 482913
  *   &typing=0     typing switched off on the Mac
- *   &theme=light  the Mac's theme: dark (default), light, system (SET-5)
+ *   &theme=light  the Mac's theme: dark (default), light, tokyo-night, system (SET-5)
  *   #pane=p-ask   open straight on a pane
  *
  * From the console:

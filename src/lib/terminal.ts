@@ -1,5 +1,5 @@
 import type { ITheme } from "@xterm/xterm";
-import type { Theme } from "./theme";
+import { isLight, type Theme } from "./theme";
 
 /** What every terminal in the app draws with, per theme: the window's and the phone's (SET-5). */
 const PALETTES: Record<Theme, ITheme> = {
@@ -29,15 +29,28 @@ const PALETTES: Record<Theme, ITheme> = {
     brightYellow: "#854d0e", brightBlue: "#1d4ed8", brightMagenta: "#6d28d9",
     brightCyan: "#155e75", brightWhite: "#9a9aa6",
   },
+  // folke's tokyonight_night terminal colours, on the page's own --bg.
+  "tokyo-night": {
+    background: "#1a1b26",
+    foreground: "#c0caf5",
+    cursor: "#c0caf5",
+    cursorAccent: "#1a1b26",
+    selectionBackground: "#283457",
+    black: "#15161e", red: "#f7768e", green: "#9ece6a", yellow: "#e0af68",
+    blue: "#7aa2f7", magenta: "#bb9af7", cyan: "#7dcfff", white: "#a9b1d6",
+    brightBlack: "#414868", brightRed: "#f7768e", brightGreen: "#9ece6a",
+    brightYellow: "#e0af68", brightBlue: "#7aa2f7", brightMagenta: "#bb9af7",
+    brightCyan: "#7dcfff", brightWhite: "#c0caf5",
+  },
 };
 
 /**
  * A terminal's options for `theme`. An agent picks its own colours, often as
  * exact RGB for a dark background, and xterm darkens any too faint to read
- * on a light one. Nothing changes in the dark, where agents expect to be.
+ * on a light one. Nothing changes on a dark one, where agents expect to be.
  */
 export function terminalTheme(theme: Theme): { theme: ITheme; minimumContrastRatio: number } {
-  return { theme: PALETTES[theme], minimumContrastRatio: theme === "light" ? 4.5 : 1 };
+  return { theme: PALETTES[theme], minimumContrastRatio: isLight(theme) ? 4.5 : 1 };
 }
 
 export const TERMINAL_FONT = '"SF Mono", "JetBrains Mono", Menlo, monospace';

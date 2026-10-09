@@ -7,10 +7,22 @@ import { useEffect, useState } from "react";
 import { readOneOf, write } from "./persist";
 import type { ThemeChoice } from "./types";
 
-export type Theme = "dark" | "light";
+export type Theme = Exclude<ThemeChoice, "system">;
 
-const CHOICES: readonly ThemeChoice[] = ["dark", "light", "system"];
+/** Every palette in `theme.css`, in the order the picker shows them. */
+export const THEMES: readonly { id: Theme; name: string; light: boolean }[] = [
+  { id: "dark", name: "Dark", light: false },
+  { id: "light", name: "Light", light: true },
+  { id: "tokyo-night", name: "Tokyo Night", light: false },
+];
+
+const CHOICES: readonly ThemeChoice[] = [...THEMES.map((t) => t.id), "system"];
 const systemLight = window.matchMedia("(prefers-color-scheme: light)");
+
+/** Whether `theme` is drawn dark on light, for what has to know (xterm's contrast). */
+export function isLight(theme: Theme): boolean {
+  return THEMES.some((t) => t.id === theme && t.light);
+}
 
 function resolve(choice: ThemeChoice, light = systemLight.matches): Theme {
   return choice === "system" ? (light ? "light" : "dark") : choice;
@@ -31,7 +43,8 @@ export function paintRemembered() {
 
 /** The theme the page is drawn in now, for what draws itself (xterm). */
 export function currentTheme(): Theme {
-  return document.documentElement.dataset.theme === "light" ? "light" : "dark";
+  const drawn = document.documentElement.dataset.theme;
+  return THEMES.find((t) => t.id === drawn)?.id ?? "dark";
 }
 
 /**

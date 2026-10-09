@@ -221,7 +221,7 @@ the repo count, running agents, uncommitted changes and the review verdict.
   and leave it blank (each repo's own default) when they do not. The box
   follows every change of repos while it still shows the dialog's own last
   suggestion; a base typed by hand stays.
-- **TASK-14** Open in Cursor (the task header, the Terminals tab, the
+- **TASK-14** Open in Cursor (the task header, the Agents tab, the
   sidebar's menu) MUST open the task folder in the Cursor IDE, and be
   offered only when the IDE is installed: `Cursor.app` in an Applications
   folder, or a `cursor` command that links into a `.app`. The Cursor agent
@@ -252,13 +252,13 @@ Known gaps:
 
 ## 3. Agents and terminals
 
-A task's Terminals tab holds its panes. "+" starts an agent (with an
-opening prompt made from the ticket, which can be edited), in a terminal
-or as a conversation (§20), resumes one, or opens a shell. When a task
-has several repos, a pane can be scoped to the whole task or to one
-repo. A pane can be handed off to another agent, or closed. The All
-agents view lists every agent pane in every task, with the ones that
-need you first.
+A task's Agents tab holds its panes: agents in a terminal, agents as a
+conversation (§20), and shells. "+" starts an agent (with an opening
+prompt made from the ticket, which can be edited), in a terminal or as a
+conversation, resumes one, or opens a shell. When a task has several
+repos, a pane can be scoped to the whole task or to one repo. A pane can
+be handed off to another agent, or closed. The All agents view lists
+every agent pane in every task, with the ones that need you first.
 
 | id | CLI | How it reports its state | How it gets the app's tools | Resume |
 |---|---|---|---|---|
@@ -295,7 +295,7 @@ Each of them can also run as a conversation the app draws, over ACP (§20).
   CLI can. At most 12 come back at launch (`RESTORE_LIMIT`), agents before
   shells, since a shell has no conversation to lose. A pane over the limit
   MUST NOT be forgotten: it waits, listed with Reopen and Forget (a chat
-  in the Chat view, a task's pane in its Terminals tab) until the user
+  in the Chat view, a task's pane in its Agents tab) until the user
   picks one, and the user is told how many wait. A waiting pane is never
   reopened by a later launch on its own. Restoring used to put back the
   first 12 in the order they were opened and forget the rest, so the
@@ -437,7 +437,7 @@ integrations, the app's tools, the repos and the tasks in flight.
 - **CHAT-2** A chat that is done MUST NOT count as needing you. One that is
   asking does. Its banners open the Chat view.
 - **CHAT-3** A task a chat's agent created (`start_work`, `create_task`)
-  MUST say so in its Terminals tab, with the chat's name and state and a
+  MUST say so in its Agents tab, with the chat's name and state and a
   way to open it, for as long as that chat is open. The agent goes on
   working on the task from the chat, so its pane is never one of the
   task's: without this, the task read "No panes yet" while the work was

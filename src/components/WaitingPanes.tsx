@@ -96,7 +96,7 @@ export function WaitingChats() {
   );
 }
 
-/** A task's panes the last launch did not put back, at the top of its Terminals tab. */
+/** A task's panes the last launch did not put back, at the top of its Agents tab. */
 export function WaitingTaskPanes({ taskId }: { taskId: string }) {
   const waiting = useWaiting(taskId);
   const agents = useStore((s) => s.agents);

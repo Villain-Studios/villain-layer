@@ -159,7 +159,7 @@ pub fn restore_panes(app: &AppHandle) {
     let waiting = state.config.update(|c| wait_for_the_rest(&mut c.saved_panes, &putting_back)).unwrap_or(0);
     if waiting > 0 {
         let text = format!(
-            "{waiting} {} not reopened: at most {RESTORE_LIMIT} come back at launch. {} in the Chat view and in {} tasks' Terminals tab, to reopen or forget.",
+            "{waiting} {} not reopened: at most {RESTORE_LIMIT} come back at launch. {} in the Chat view and in {} tasks' Agents tab, to reopen or forget.",
             if waiting == 1 { "pane was" } else { "panes were" },
             if waiting == 1 { "It waits" } else { "They wait" },
             if waiting == 1 { "its" } else { "their" },
@@ -307,7 +307,7 @@ fn put_back(app: &AppHandle, state: &AppState, pane: &SavedPane, resumed: &mut H
 }
 
 /// A pane a launch did not put back (PANE-7), as the Chat view and a task's
-/// Terminals tab list it.
+/// Agents tab list it.
 #[derive(Debug, Clone, Serialize)]
 pub struct WaitingPane {
     /// Its saved id: what Reopen and Forget name.

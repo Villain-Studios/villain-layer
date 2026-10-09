@@ -318,7 +318,9 @@ textarea { resize: vertical; font-family: var(--mono); }
 .btn-icon { display: inline-flex; align-items: center; justify-content: center; padding: 4px 6px; }
 .browser-address { flex: 1; min-width: 0; display: flex; }
 .browser-address input { flex: 1; min-width: 0; font-size: 12.5px; padding: 4px 8px; }
-.browser-screen { flex: 1; min-height: 0; position: relative; overflow: hidden; background: #fff; outline: none; }
+/* Not white: the screen shows before the first frame, and a resize clears
+   the canvas until the next one, and white there was a flash in a dark app. */
+.browser-screen { flex: 1; min-height: 0; position: relative; overflow: hidden; background: var(--bg); outline: none; }
 .browser-screen.focused { box-shadow: inset 0 0 0 1px var(--accent-dim); }
 .browser-screen canvas { position: absolute; inset: 0; display: block; cursor: default; }
 .browser-screen .empty { position: absolute; inset: 0; background: var(--panel); }

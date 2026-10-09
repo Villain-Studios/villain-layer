@@ -1248,7 +1248,9 @@ ring marks where it clicked.
   pixel per CSS pixel instead, which reaches the panel in about 15ms,
   until the page has been still for 150ms. A single change, a click, a
   key or a blinking caret, is drawn sharp: text MUST NOT flip between
-  sharp and blurred. A hidden panel costs nothing. ⌘C and ⌘X put the page's
+  sharp and blurred. Before the first frame, and while a resize waits for
+  the next, the screen MUST be the app's background, never a white
+  flash. A hidden panel costs nothing. ⌘C and ⌘X put the page's
   selection on the Mac's clipboard (a headless Chrome copies to one of its
   own); ⌘L, ⌘R, ⌘[ and ⌘] are the address bar, reload, back and forward.
   The user may open any page; BRW-3 is about what agents may read, and the

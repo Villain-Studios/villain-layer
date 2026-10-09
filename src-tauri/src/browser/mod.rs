@@ -105,6 +105,9 @@ struct Inner {
     drivers: HashMap<String, control::Driver>,
     /// Windows pages opened, being attached as tabs (BRW-14).
     adopting: u32,
+    /// Every window a page opened that the app has heard of, made a tab or
+    /// not, so `Page::settle` can tell one still on its way.
+    heard: HashSet<String>,
 }
 
 impl Inner {

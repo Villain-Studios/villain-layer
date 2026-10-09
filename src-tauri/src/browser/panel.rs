@@ -91,9 +91,9 @@ pub(super) struct Watch {
     /// When the page will have been still long enough to be drawn sharp, if
     /// that is waited for.
     still_due: Option<Instant>,
-    /// When the last changes came while sharp: only a run of them is the
-    /// page moving (`MOVING`).
-    recent: std::collections::VecDeque<Instant>,
+    /// When the last changes were drawn while sharp, in seconds: only a run
+    /// of them is the page moving (`MOVING`).
+    recent: std::collections::VecDeque<f64>,
     /// When the panel's size was last set again for a frame of another one.
     resized: Option<Instant>,
 }
@@ -240,6 +240,25 @@ impl Browser {
 
 }
 
+/// When Chrome drew a frame, in seconds, or now if it does not say.
+fn drawn_at(params: &Value) -> f64 {
+    params.pointer("/metadata/timestamp").and_then(Value::as_f64).unwrap_or_else(|| {
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64())
+    })
+}
+
+/// Whether a change drawn at `at` makes the page moving: `MOVING.0` of them
+/// within `MOVING.1`, by when Chrome drew them. Counted by when they came, a
+/// busy machine handed over frames of separate caret blinks together, and a
+/// still page was drawn blurred.
+fn moving(recent: &mut std::collections::VecDeque<f64>, at: f64) -> bool {
+    recent.push_back(at);
+    while recent.front().is_some_and(|t| at - t > MOVING.1.as_secs_f64()) {
+        recent.pop_front();
+    }
+    recent.len() >= MOVING.0
+}
+
 /// The screencast's settings: one pixel per CSS pixel while the page moves,
 /// the screen's own sharpness once it is still.
 ///
@@ -329,13 +348,7 @@ impl Browser {
             let wait = w.next.saturating_duration_since(now);
             w.next = now + wait + FRAME_GAP;
             let moved = !std::mem::take(&mut w.switching);
-            if moved && w.sharp {
-                w.recent.push_back(now);
-                while w.recent.front().is_some_and(|t| now.duration_since(*t) > MOVING.1) {
-                    w.recent.pop_front();
-                }
-            }
-            let soften = moved && w.sharp && w.recent.len() >= MOVING.0;
+            let soften = moved && w.sharp && moving(&mut w.recent, drawn_at(&e.params));
             if soften {
                 w.recent.clear();
             }
@@ -526,6 +539,21 @@ mod tests {
         let h=''; for(let i=0;i<400;i++){h+=`<div class=card><h3>Booking ${i}</h3><div class=row><span class=pill>Flight</span><span class=pill>Hotel</span></div><p>Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris.</p><table><tr><td>Traveler</td><td>Ada Lovelace</td><td>SEK 12 400</td></tr></table></div>`}
         document.body.innerHTML=h;
     </script></body></html>"#;
+
+    /// Frames of separate caret blinks, half a second apart as Chrome drew
+    /// them, came three within 250ms on a busy machine: the page moving, so
+    /// a still page was blurred. Judged by when they were drawn, they are
+    /// not; a scroll's frames, drawn close together, still are.
+    #[test]
+    fn frames_handed_over_together_are_judged_by_when_they_were_drawn() {
+        let blinks = [100.0, 100.5, 101.0];
+        let mut recent = std::collections::VecDeque::new();
+        assert!(!blinks.iter().any(|&at| moving(&mut recent, at)));
+        let scroll = [200.0, 200.05, 200.1];
+        let mut recent = std::collections::VecDeque::new();
+        assert_eq!(scroll.iter().map(|&at| moving(&mut recent, at)).collect::<Vec<_>>(), [false, false, true]);
+        assert_eq!(drawn_at(&json!({ "metadata": { "timestamp": 1791572707.5 } })), 1791572707.5);
+    }
 
     /// Against a real Chrome: a caret blinking in a field changes the page
     /// twice a second, and a click changes it once, and the page stays sharp

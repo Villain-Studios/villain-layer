@@ -4,6 +4,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api } from "./lib/api";
 import { prepareNotifications } from "./lib/notify";
 import { stoppedOnPurpose, useStore } from "./store";
+import { useSpecs } from "./lib/specs";
 import { CHAT_TASK_ID } from "./lib/derive";
 import { goTo } from "./lib/goto";
 import type { Target } from "./lib/types";
@@ -288,13 +289,14 @@ export function Watchers() {
     return () => { void p.then((un) => un()); };
   }, [refreshPanes]);
 
-  // A spec being drafted (SPEC-2), into whichever task's editor asked for it,
-  // shown or not.
+  // A spec being drafted (SPEC-5), into whichever task's editors asked for
+  // it, shown or not; and a step an agent ticked (SPEC-13).
   useEffect(() => {
-    const p = listen<{ request_id: string; text: string }>("spec:draft", (e) => {
-      useStore.getState().specChunk(e.payload.request_id, e.payload.text);
+    const p = listen<{ request_id: string; checkout_id: string; text: string }>("spec:draft", (e) => {
+      useSpecs.getState().chunk(e.payload.request_id, e.payload.checkout_id, e.payload.text);
     });
-    return () => { void p.then((un) => un()); };
+    const q = listen<string>("spec:changed", (e) => useSpecs.getState().changed(e.payload));
+    return () => { void p.then((un) => un()); void q.then((un) => un()); };
   }, []);
 
   // Hitting a usage limit is the one thing worth interrupting for: the agent

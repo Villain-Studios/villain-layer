@@ -9,6 +9,7 @@ import { Terminals } from "./components/Terminals";
 import { DiffView } from "./components/DiffView";
 import { PrPanel } from "./components/PrPanel";
 import { SpecView } from "./components/SpecView";
+import { specProgress, useSpecs } from "./lib/specs";
 import { TicketsView } from "./components/tickets/TicketsView";
 import { AgentsView } from "./components/AgentsView";
 import { ChatView } from "./components/ChatView";
@@ -174,9 +175,11 @@ function TaskMain({ task }: { task: TaskView }) {
   // from the task poll, which can be a minute behind a pane just opened.
   const paneCount = useStore((s) => s.panes.filter((p) => p.task_id === task.id).length);
   const [updating, setUpdating] = useState(false);
-  // The Spec tab's badge counts its criteria, so the spec is read with the task.
-  const criteria = useStore((s) => s.specs[task.id]?.saved?.criteria.length ?? 0);
-  const loadSpec = useStore((s) => s.loadSpec);
+  // The Spec tab's badge says how far the work is through its steps, or how
+  // many requirements there are before it has any (SPEC-8), so the spec is
+  // read with the task.
+  const specBadge = useSpecs((s) => specProgress(s.byTask[task.id]?.spec ?? null));
+  const loadSpec = useSpecs((s) => s.load);
   useEffect(() => { void loadSpec(task.id).catch(() => {}); }, [task.id, loadSpec]);
 
   const totals = taskTotals(task);
@@ -259,7 +262,7 @@ function TaskMain({ task }: { task: TaskView }) {
 
       <div className="tabs">
         <button className={tab === "spec" ? "active" : ""} onClick={() => setTab("spec")}>
-          Spec{criteria > 0 && <span className="badge">{criteria}</span>}
+          Spec{specBadge && <span className="badge">{specBadge}</span>}
         </button>
         <button
           className={tab === "terminals" ? "active" : ""}

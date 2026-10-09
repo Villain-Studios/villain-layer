@@ -424,7 +424,7 @@ const GENERATED_FILES: &[&str] = &[
     "CLAUDE.md",
     "AGENTS.md",
     super::task_context::TICKET_FILE,
-    super::spec::SPEC_FILE,
+    super::spec::LEGACY_FILE,
     ".mcp.json",
     "PR_DESCRIPTION.md",
     super::github::FEEDBACK_FILE,
@@ -474,7 +474,9 @@ const LEFT_BY_OTHERS: &[&str] = &[".claude/settings.local.json", ".DS_Store"];
 /// Whether a file in a task folder, by its path there, is one that goes
 /// with the task.
 pub(crate) fn is_generated(rel: &str) -> bool {
-    GENERATED_FILES.contains(&rel) || LEFT_BY_OTHERS.contains(&rel)
+    GENERATED_FILES.contains(&rel)
+        || LEFT_BY_OTHERS.contains(&rel)
+        || rel.starts_with(&format!("{}/", super::spec::DRAFTS))
 }
 
 /// Take those files out of a task folder: when the task is deleted
@@ -484,6 +486,9 @@ pub(crate) fn remove_generated(dir: &Path) {
     for name in GENERATED_FILES.iter().chain(LEFT_BY_OTHERS) {
         let _ = std::fs::remove_file(dir.join(name));
     }
+    // Spec drafts not approved, and what is known of the spec beside them
+    // (SPEC-6): what was approved is in the repository, or the app's folder.
+    let _ = std::fs::remove_dir_all(dir.join(super::spec::DRAFTS));
     // The folders those sit in, if that emptied them.
     for sub in [".gemini", ".claude"] {
         let _ = std::fs::remove_dir(dir.join(sub));

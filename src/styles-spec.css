@@ -1,0 +1,46 @@
+/* A task's specs (§19): repositories, the three files in turn, the editor,
+   and beside it the requirements, the tasks and Start agent. */
+.spec { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.spec-repos { display: flex; gap: 4px; padding: 8px 14px 0; }
+.spec-repo { display: flex; align-items: center; gap: 6px; padding: 4px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: transparent; font-family: var(--mono); font-size: 13px; }
+.spec-repo.active { border-color: var(--accent-dim); background: var(--panel-2); }
+.spec-repo .muted { font-size: 11px; color: var(--dim); }
+.spec-steps { display: flex; align-items: center; gap: 6px; padding: 8px 14px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.spec-step { display: flex; align-items: center; gap: 8px; padding: 5px 10px; border: 1px solid transparent; border-radius: var(--radius); background: transparent; }
+.spec-step.active { border-color: var(--accent-dim); background: var(--panel-2); }
+.spec-num { width: 20px; height: 20px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; border: 1px solid var(--border); color: var(--dim); }
+.spec-num.done { border-color: var(--green); color: var(--green); }
+.spec-state { font-size: 11px; color: var(--dim); }
+.spec-state.approved { color: var(--green); }
+.spec-state.draft, .spec-state.changed, .spec-state.out-of-date { color: var(--amber); }
+.spec-home { font-family: var(--mono); font-size: 12px; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.spec-tell { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--border-soft); background: color-mix(in srgb, var(--amber) 8%, transparent); }
+.spec-bar { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.spec-body { flex: 1; min-height: 0; display: flex; }
+.spec-editor { flex: 1; min-width: 0; resize: none; border: 0; border-radius: 0; padding: 14px 18px; line-height: 1.55; background: var(--bg); }
+.spec-side { width: 330px; flex: none; overflow-y: auto; border-left: 1px solid var(--border); background: var(--panel); display: flex; flex-direction: column; }
+.spec-side section { padding: 12px 14px; border-bottom: 1px solid var(--border-soft); }
+.spec-side h3 { margin: 0 0 8px; font-size: 12px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.04em; }
+.spec-side h3 .muted { text-transform: none; letter-spacing: 0; }
+.spec-side p { margin: 0; line-height: 1.45; }
+.spec-reqs { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.spec-reqs li { line-height: 1.45; }
+.spec-reqs b { font-family: var(--mono); font-size: 11px; color: var(--accent); margin-right: 6px; }
+.spec-verdict { font-size: 11px; margin-right: 6px; padding: 0 5px; border-radius: 4px; border: 1px solid currentColor; }
+.spec-verdict.met { color: var(--green); }
+.spec-verdict.not-met { color: var(--red); }
+.spec-verdict.unclear { color: var(--amber); }
+.spec-check { margin-top: 10px; align-items: center; gap: 8px; }
+.spec-stale { color: var(--amber); }
+.spec-tasks { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.spec-tasks li { display: flex; gap: 8px; line-height: 1.4; }
+.spec-tasks li.done { color: var(--dim); }
+.spec-tasks .mark { width: 1em; flex: none; text-align: center; color: var(--dim); }
+.spec-tasks li.done .mark { color: var(--green); }
+.spec-startbox { display: flex; flex-direction: column; gap: 6px; border-bottom: 0 !important; }
+.spec-startbox select { width: 100%; }
+.spec-startbox .btn { align-self: flex-start; }
+.spec-start p { max-width: 560px; }
+.spec-kind { gap: 16px; margin-bottom: 4px; }
+.spec-kind label { display: flex; align-items: center; gap: 6px; }
+.spec-kind input { width: auto; }

@@ -556,6 +556,10 @@ pub async fn draft_pr_description(
     // the helper that decides it, rather than a second opinion that will not
     // follow when that one changes its mind.
     let cwd = PathBuf::from(resolve_scope(&state, &task, None)?.0);
+    let spec = {
+        let task = task.clone();
+        super::blocking(app.clone(), move |state| Ok(super::spec::pr_section(state, &task))).await?
+    };
 
     let out = tauri::async_runtime::spawn_blocking(move || -> Result<String> {
     // Built in here, not before: gathering the change is a git log, a stat
@@ -571,8 +575,8 @@ pub async fn draft_pr_description(
             "through the diff file by file, and do not pad it — a few short sections is ",
             "right for most changes.\n\n",
             "Reply with the Markdown body and nothing else: no preamble, no closing ",
-            "remark, no code fence around the whole thing.\n\n",
-            "# The change\n{context}\n",
+            "remark, no code fence around the whole thing.{spec_ask}\n\n",
+            "# The change\n{context}\n{spec}",
         ),
         branch = branch,
         key = issue_key
@@ -580,6 +584,13 @@ pub async fn draft_pr_description(
             .map(|k| format!(" for {k}"))
             .unwrap_or_default(),
         context = review_context(&repos),
+        spec_ask = if spec.is_empty() {
+            ""
+        } else {
+            " End with a short Spec section: where each repository's spec is, and each \
+             requirement with the check's answer as given, saying so where none was run."
+        },
+        spec = if spec.is_empty() { String::new() } else { format!("\n# The spec{spec}") },
     );
         oneshot_haiku(&program, &cwd, &prompt, |text| {
             let _ = app.emit("pr:draft", DraftChunk { task_id: &task_id, text });

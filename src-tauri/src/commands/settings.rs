@@ -63,10 +63,15 @@ pub fn take_notices(state: State<AppState>) -> Vec<AppNotice> {
 }
 
 #[tauri::command]
-pub fn set_ui_prefs(state: State<AppState>, ui: UiPrefs) -> Result<()> {
+pub fn set_ui_prefs(app: AppHandle, state: State<AppState>, ui: UiPrefs) -> Result<()> {
     // Clamp rather than reject: the UI sends slider values.
     let ui = UiPrefs {
         scale: ui.scale.clamp(0.8, 1.6),
+        theme: if crate::config::THEMES.contains(&ui.theme.as_str()) {
+            ui.theme
+        } else {
+            crate::config::UiPrefs::default().theme
+        },
         terminal_font_size: ui.terminal_font_size.clamp(9, 24),
         conversation_font_size: ui.conversation_font_size.clamp(9, 24),
         restore_panes: ui.restore_panes,
@@ -82,7 +87,16 @@ pub fn set_ui_prefs(state: State<AppState>, ui: UiPrefs) -> Result<()> {
             crate::config::UiPrefs::default().reviewer_model
         },
     };
-    state.config.update(|c| c.ui = ui)
+    let before = state.config.read().ui.theme;
+    let theme = ui.theme.clone();
+    state.config.update(|c| c.ui = ui)?;
+    crate::theme::apply(&app, &theme);
+    // A paired phone draws in the app's theme too, and would otherwise not
+    // know until a pane changed.
+    if theme != before {
+        crate::phone::changed();
+    }
+    Ok(())
 }
 
 /// A banner, and what a click on it should open: `target` is handed back

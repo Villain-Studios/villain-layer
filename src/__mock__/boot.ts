@@ -14,6 +14,7 @@
  *   &task=t-login          the selected task (none: the All agents overview)
  *   &tab=terminals|diff|pr
  *   &loop=checking|held|passed|gave_up   the task's agents on a loop (§21)
+ *   &theme=dark|light|system   the saved theme (SET-5)
  *
  * From the console, or a browser tool's JavaScript:
  *
@@ -42,6 +43,8 @@ const params = new URLSearchParams(location.search);
 const scenarios = new Map(Object.entries(SCENARIOS));
 const world = (scenarios.get(params.get("scenario") ?? "busy") ?? SCENARIOS.busy)();
 const calls: { cmd: string; args: Args }[] = [];
+const theme = params.get("theme");
+if (theme) world.settings.ui.theme = theme as typeof world.settings.ui.theme;
 for (const p of world.panes) if (p.acp) seedAcp(p.id);
 for (const p of world.panes) {
   const phase = params.get("loop");

@@ -169,12 +169,12 @@ async fn pair<R: Runtime>(State(app): State<AppHandle<R>>, Json(body): Json<Pair
 async fn overview<R: Runtime>(State(app): State<AppHandle<R>>, device: Device) -> Response {
     let typing = phone().typing();
     let groups = blocking(app, |state| {
-        let tasks = state.config.read().tasks;
-        Ok(view::groups(&tasks, state.ptys.list(None)))
+        let config = state.config.read();
+        Ok((view::groups(&config.tasks, state.ptys.list(None)), config.ui.theme))
     })
     .await;
     match groups {
-        Ok(groups) => Json(view::Overview { device: device.name, typing, groups }).into_response(),
+        Ok((groups, theme)) => Json(view::Overview { device: device.name, typing, theme, groups }).into_response(),
         Err(e) => fail(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }

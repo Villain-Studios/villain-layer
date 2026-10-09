@@ -401,8 +401,12 @@ export interface SlackConfig {
   allow_agent_posts: boolean;
 }
 
+export type ThemeChoice = "dark" | "light" | "system";
+
 export interface UiPrefs {
   scale: number;
+  /** The app's colours (SET-5); "system" follows the Mac's appearance. */
+  theme: ThemeChoice;
   terminal_font_size: number;
   /** An ACP conversation's text, in px (ACP-15). */
   conversation_font_size: number;

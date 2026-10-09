@@ -4,6 +4,7 @@ import { Overview } from "./Overview";
 import { PaneView } from "./PaneView";
 import { Pair } from "./Pair";
 import type { Overview as Data } from "./types";
+import { useTheme } from "../lib/theme";
 
 /** The pane open, if one is: `#pane=<id>`, so Back on the phone goes back. */
 function paneInHash(): string | null {
@@ -17,6 +18,12 @@ export function App() {
   const [live, setLive] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pane, setPane] = useState(paneInHash);
+  // The app's theme (SET-5); "system" is this phone's own appearance.
+  const theme = useTheme(data?.theme);
+  useEffect(() => {
+    const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
+    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", bg);
+  }, [theme]);
 
   useEffect(() => {
     const onToken = () => setPaired(token() !== null);
@@ -73,6 +80,7 @@ export function App() {
         id={pane}
         pane={open ?? null}
         typing={data?.typing ?? false}
+        theme={theme}
         onBack={() => history.length > 1 ? history.back() : (location.hash = "")}
       />
     );

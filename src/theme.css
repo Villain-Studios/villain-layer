@@ -1,0 +1,85 @@
+/* Every colour the app draws with, per theme (SET-5): the window's page and
+   the phone's. A colour written anywhere else is one a theme cannot reach,
+   so it becomes a token here, or a color-mix of one.
+
+   Dark until told otherwise, as the app was before there was a choice.
+   `lib/theme.ts` sets data-theme on <html>; `theme.rs` paints the window
+   behind the page in --bg; the terminals' palettes are in `lib/terminal.ts`. */
+
+:root {
+  --bg: #0c0c11;
+  --panel: #12121a;
+  --panel-2: #171722;
+  --border: #23232f;
+  --border-soft: #1c1c27;
+  --text: #dcdce6;
+  --dim: #7d7d8c;
+  --dimmer: #55555f;
+  /* The top bar's and the sub-views' tabs not chosen: a step above --dim. */
+  --tab-text: #a8a8b8;
+  --tab-count: #8a8a98;
+  --accent: #a78bfa;
+  /* A border or highlight in the accent. */
+  --accent-dim: #6d5ba8;
+  /* A primary button, under --on-accent text. One colour with --accent-dim
+     in the dark; on white, a border that soft is a fill too faint to read on. */
+  --accent-fill: #6d5ba8;
+  --on-accent: #f5f3ff;
+  --green: #4ade80;
+  --red: #f87171;
+  --amber: #fbbf24;
+  --blue: #60a5fa;
+  /* Outlines in the status colours, for chips and pills. */
+  --green-line: #26402f;
+  --red-line: #452a2a;
+  --amber-line: #45392a;
+  --blue-line: #2a3a52;
+  /* A diff's added and removed text. */
+  --add-text: #a7f3c0;
+  --del-text: #fca5a5;
+  /* A button that destroys something, and the text on it. */
+  --danger-fill: #7f2d2d;
+  --on-danger: #ffe4e4;
+  --on-red: #2a0f0f;
+  --scroll: #2a2a38;
+  --scroll-hover: #363648;
+  /* Shadows and the dimming behind a dialog, as a share of this. */
+  --shade: #000;
+
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  --bg: #ffffff;
+  --panel: #f6f6f9;
+  --panel-2: #ececf1;
+  --border: #d8d8e0;
+  --border-soft: #e6e6ec;
+  --text: #1c1c24;
+  --dim: #5e5e6c;
+  --dimmer: #8c8c99;
+  --tab-text: #44444f;
+  --tab-count: #6a6a77;
+  --accent: #6d28d9;
+  --accent-dim: #c4b5fd;
+  --accent-fill: #7c3aed;
+  --on-accent: #ffffff;
+  --green: #15803d;
+  --red: #dc2626;
+  --amber: #b45309;
+  --blue: #2563eb;
+  --green-line: #bbe3c8;
+  --red-line: #f3c7c7;
+  --amber-line: #efd5ab;
+  --blue-line: #c3d5f7;
+  --add-text: #166534;
+  --del-text: #991b1b;
+  --danger-fill: #b91c1c;
+  --on-danger: #ffffff;
+  --on-red: #ffffff;
+  --scroll: #cdcdd6;
+  --scroll-hover: #b5b5c2;
+  --shade: rgba(30, 30, 50, 0.4);
+
+  color-scheme: light;
+}

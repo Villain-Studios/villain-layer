@@ -28,6 +28,8 @@ export interface Group {
 export interface Overview {
   device: string;
   typing: boolean;
+  /** The app's theme (SET-5): the phone draws in it too. */
+  theme: "dark" | "light" | "system";
   groups: Group[];
 }
 

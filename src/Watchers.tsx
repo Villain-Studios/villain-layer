@@ -8,6 +8,8 @@ import { useSpecs } from "./lib/specs";
 import { CHAT_TASK_ID } from "./lib/derive";
 import { goTo } from "./lib/goto";
 import type { Target } from "./lib/types";
+import { useTheme } from "./lib/theme";
+import { themeTerminals } from "./components/Terminal";
 
 /**
  * Tauri emits an unfocused event while the window is still coming up.
@@ -46,6 +48,10 @@ export function Watchers() {
   const setAppActive = useStore((s) => s.setAppActive);
   const toast = useStore((s) => s.toast);
   const fail = useStore((s) => s.fail);
+
+  // The page's colours, and the terminals', which xterm draws itself (SET-5).
+  const theme = useTheme(useStore((s) => s.settings?.ui.theme));
+  useEffect(() => themeTerminals(theme), [theme]);
 
   /**
    * When each GitHub sweep last ran. Their timers were set afresh on every

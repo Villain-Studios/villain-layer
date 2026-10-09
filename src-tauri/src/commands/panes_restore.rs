@@ -35,6 +35,7 @@ pub(crate) fn remember_pane(state: &AppState, pane: &PaneInfo) {
         waiting: false,
         acp: pane.acp,
         session: None,
+        on_loop: None,
     };
     let live: HashSet<String> = state.ptys.list(None).into_iter().map(|p| p.id).collect();
     let _ = state.config.update(|c| {
@@ -45,6 +46,8 @@ pub(crate) fn remember_pane(state: &AppState, pane: &PaneInfo) {
         if saved.acp {
             saved.session = state.ptys.session(&saved.id).ok().flatten();
         }
+        // Recorded again, the pane keeps the loop it is on (LOOP-11).
+        saved.on_loop = c.saved_panes.iter().find(|p| p.id == saved.id).and_then(|p| p.on_loop.clone());
         // Replace rather than append: recording the same pane twice is how a
         // restore that also recorded what it restored doubled this list on
         // every launch.
@@ -197,7 +200,13 @@ pub fn restore_panes(app: &AppHandle) {
         // made every restart double the list. A pane that did not come back
         // keeps its entry, to be tried again at the next few launches.
         match put_back(app, &state, &pane, &mut resumed) {
-            Back::Opened(_) | Back::Gone(_) => forget(&pane.id),
+            Back::Opened(p) => {
+                if let Some(kept) = &pane.on_loop {
+                    super::loops::resume_loop(app, &state, &p, kept);
+                }
+                forget(&pane.id)
+            }
+            Back::Gone(_) => forget(&pane.id),
             Back::Failed(e) => {
                 eprintln!("could not restore a pane: {e}");
                 failed(&pane.id);
@@ -208,7 +217,7 @@ pub fn restore_panes(app: &AppHandle) {
 
 /// How putting one saved pane back went.
 enum Back {
-    Opened(PaneInfo),
+    Opened(Box<PaneInfo>),
     /// What it belonged to is gone, so there is nothing to put back: why.
     Gone(&'static str),
     Failed(Error),
@@ -228,7 +237,7 @@ fn put_back(app: &AppHandle, state: &AppState, pane: &SavedPane, resumed: &mut H
         if pane.acp {
             let resume = Resume::Restart { cwd: pane.cwd.clone().unwrap_or_default(), session: pane.session.clone() };
             return match open_chat(app, state, agent_id, None, room, resume, true) {
-                Ok(p) => Back::Opened(p),
+                Ok(p) => Back::Opened(Box::new(p)),
                 Err(e) => Back::Failed(e),
             };
         }
@@ -240,7 +249,7 @@ fn put_back(app: &AppHandle, state: &AppState, pane: &SavedPane, resumed: &mut H
         });
         // No remember_pane here: spawning records the pane itself.
         return match open_chat(app, state, agent_id, None, room, Resume::newest_if(resume), false) {
-            Ok(p) => Back::Opened(p),
+            Ok(p) => Back::Opened(Box::new(p)),
             Err(e) => Back::Failed(e),
         };
     }
@@ -292,7 +301,7 @@ fn put_back(app: &AppHandle, state: &AppState, pane: &SavedPane, resumed: &mut H
         _ => open_shell(app, state, pane.task_id.clone(), pane.checkout_id.clone(), None, None),
     };
     match restored {
-        Ok(p) => Back::Opened(p),
+        Ok(p) => Back::Opened(Box::new(p)),
         Err(e) => Back::Failed(e),
     }
 }
@@ -382,7 +391,12 @@ pub(crate) fn reopen_waiting_pane_inner(app: &AppHandle, state: &AppState, id: &
     let mut resumed: HashSet<(String, String)> =
         state.ptys.list(None).into_iter().filter_map(|p| Some((p.agent_id?, p.cwd))).collect();
     let out = match put_back(app, state, &pane, &mut resumed) {
-        Back::Opened(p) => Ok(p),
+        Back::Opened(p) => {
+            if let Some(kept) = &pane.on_loop {
+                super::loops::resume_loop(app, state, &p, kept);
+            }
+            Ok(*p)
+        }
         Back::Gone(why) => Err(Error::NotFound(format!("It cannot be reopened: {why}."))),
         Back::Failed(e) => {
             // Back on the list, to try again or to forget.
@@ -419,6 +433,7 @@ mod tests {
             waiting: false,
             acp: false,
             session: None,
+            on_loop: None,
         }
     }
 

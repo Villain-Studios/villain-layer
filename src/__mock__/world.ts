@@ -129,7 +129,7 @@ function issue(key: string, summary: string, status: string, category: string, e
 const copies = "/Users/you/.villain-worktrees/.repos";
 const projects: Project[] = [
   { id: "p-api", name: "api", path: "/Users/you/code/api", default_branch: "main", group: "platform", store: `${copies}/api.git` },
-  { id: "p-web", name: "web", path: "/Users/you/code/web", default_branch: "main", group: "platform", store: `${copies}/web.git` },
+  { id: "p-web", name: "web", path: "/Users/you/code/web", default_branch: "main", group: "platform", store: `${copies}/web.git`, check: "bun run check" },
   { id: "p-infra", name: "infra", path: "/Users/you/code/infra", default_branch: "main", group: null, store: null },
 ];
 

@@ -18,6 +18,7 @@ import type {
   JiraIssueType,
   JiraPage,
   JiraTransition,
+  LoopView,
   PaneInfo,
   Project,
   ProjectNotes,
@@ -78,6 +79,9 @@ export const api = {
     invoke<Project>("locate_project", { projectId, path }),
   setProjectUpdateBy: (projectId: string, by: UpdateBy | null) =>
     invoke<void>("set_project_update_by", { projectId, by }),
+  /** The command a loop runs in a repository (LOOP-1); null clears it. */
+  setProjectCheck: (projectId: string, command: string | null) =>
+    invoke<void>("set_project_check", { projectId, command }),
   syncRepos: (projectIds: string[]) => invoke<Synced[]>("sync_repos", { projectIds }),
   cleanupPlan: () => invoke<CleanupItem[]>("cleanup_plan"),
   cleanupApply: (ids: string[]) => invoke<Cleaned[]>("cleanup_apply", { ids }),
@@ -147,6 +151,13 @@ export const api = {
   killPane: (paneId: string) => invoke<void>("kill_pane", { paneId }),
   /** Stop an agent and start it again where it was, on its conversation (PANE-14). */
   restartPane: (paneId: string) => invoke<PaneInfo>("restart_pane", { paneId }),
+
+  // a loop (§21)
+  /** Put a running agent on a loop: its checks run at each turn's end (LOOP-2). */
+  startLoop: (paneId: string, rounds: number) => invoke<LoopView>("start_loop", { paneId, rounds }),
+  stopLoop: (paneId: string) => invoke<void>("stop_loop", { paneId }),
+  /** The agent's loop, running or ended; null if it was never on one. */
+  loopView: (paneId: string) => invoke<LoopView | null>("loop_view", { paneId }),
 
   // an agent over ACP (§20); `ptyDetach` says it is off screen, as for a terminal
   /** What changed since `since`, and the pane is on screen from now (ACP-7). */

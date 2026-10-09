@@ -13,6 +13,7 @@
  *   &view=work|tickets|reviews|chat|repos
  *   &task=t-login          the selected task (none: the All agents overview)
  *   &tab=terminals|diff|pr
+ *   &loop=checking|held|passed|gave_up   the task's agents on a loop (§21)
  *
  * From the console, or a browser tool's JavaScript:
  *
@@ -29,6 +30,7 @@ import { emit } from "@tauri-apps/api/event";
 import type { BrowserView, Catchup, Cleaned, FlowStatus, Message, PaneInfo, PhoneStatus, Project, RepoUpdate, Synced, TaskView } from "../lib/types";
 import { ago, SCENARIOS } from "./world";
 import { acpAnswers, seedAcp } from "./acp";
+import { loopAnswers, seedLoop } from "./loop";
 import { specAnswers } from "./spec";
 
 type Args = Record<string, unknown>;
@@ -41,6 +43,10 @@ const scenarios = new Map(Object.entries(SCENARIOS));
 const world = (scenarios.get(params.get("scenario") ?? "busy") ?? SCENARIOS.busy)();
 const calls: { cmd: string; args: Args }[] = [];
 for (const p of world.panes) if (p.acp) seedAcp(p.id);
+for (const p of world.panes) {
+  const phase = params.get("loop");
+  if (phase && p.task_id === params.get("task") && p.kind === "agent" && p.running) seedLoop(p.id, p.task_id, phase);
+}
 const overrides = new Map<string, Answer>();
 
 /** Base64 of the UTF-8 bytes, as the backend sends it, and how many bytes that was. */
@@ -230,6 +236,7 @@ const answer: Record<string, Answer> = {
   pty_resize: () => null,
   pty_detach: () => null,
   ...acpAnswers,
+  ...loopAnswers(world.projects),
   resumable_agents: () => [],
   task_prompt: () => "Work on ACME-123: Fix login race.\n\nThe ticket says…",
   // Specs (§19). A draft arrives in pieces, as the real one does.

@@ -52,6 +52,13 @@ pub(crate) fn waiting(info: &PaneInfo) -> Option<&'static str> {
     }
 }
 
+/// A finished turn a loop handed back says how the loop ended, or why it
+/// waits (LOOP-8), rather than only that the agent finished: that much was
+/// true of every round before it.
+fn loop_said(info: &PaneInfo) -> Option<&str> {
+    (info.activity == Activity::Done && info.notice.is_none()).then_some(info.loop_said.as_deref()).flatten()
+}
+
 /// What one pass found that is worth a banner.
 #[derive(Debug, PartialEq)]
 struct News {
@@ -97,7 +104,7 @@ impl Watch {
                         pane_id: info.id.clone(),
                         task_id: info.task_id.clone(),
                         title: info.title.clone(),
-                        what: what.to_string(),
+                        what: loop_said(info).unwrap_or(what).to_string(),
                         level: if info.notice.as_deref() == Some("usage_limit") {
                             Level::Error
                         } else {
@@ -267,6 +274,7 @@ mod tests {
             activity_since: now,
             topic: None,
             acp: false,
+            loop_said: None,
         }
     }
 
@@ -289,6 +297,18 @@ mod tests {
         let mut exited = pane("x", Activity::Done);
         exited.running = false;
         assert!(waiting(&exited).is_none());
+    }
+
+    #[test]
+    fn a_turn_a_loop_handed_back_says_how_the_loop_ended() {
+        let mut watch = Watch::default();
+        let mut p = pane("a", Activity::Working);
+        watch.pass(&[(p.clone(), false)], Instant::now());
+        p.activity = Activity::Done;
+        p.loop_said = Some("passed its checks — your turn".into());
+        let (_, news) = watch.pass(&[(p, false)], Instant::now());
+        assert_eq!(news.len(), 1);
+        assert_eq!(news[0].what, "passed its checks — your turn");
     }
 
     #[test]

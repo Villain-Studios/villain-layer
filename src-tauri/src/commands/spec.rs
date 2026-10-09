@@ -602,6 +602,7 @@ mod tests {
                 update_by: None,
                 spec_folder: None,
                 specs_in_app: !in_repo,
+                check: None,
             },
             folder: "api".into(),
             dir,

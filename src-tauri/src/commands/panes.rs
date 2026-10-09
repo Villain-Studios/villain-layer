@@ -433,6 +433,7 @@ const GENERATED_FILES: &[&str] = &[
     "REVIEW_COMMENTS.md",
     "PR_DRAFT_REQUEST.md",
     FIRST_PROMPT,
+    crate::loops::CHECKS_FILE,
 ];
 
 /// An opening prompt too long to type, for a CLI that takes it typed.

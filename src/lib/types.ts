@@ -12,6 +12,8 @@ export interface Project {
   /** How Update from base updates branches here: set in Repos, or the way it
    *  was last updated. Absent: guessed from its history (UPD-7). */
   update_by?: UpdateBy | null;
+  /** What says the work here is done, run by a loop (LOOP-1). */
+  check?: string | null;
   /** Where specs are committed here (SPEC-1). Absent: `specs`. */
   spec_folder?: string | null;
   /** Specs are kept by the app instead of committed here (SPEC-3). */
@@ -368,6 +370,7 @@ export * from "./types-spec";
 // The browser panel's (§18), likewise.
 export * from "./types-browser";
 export * from "./types-acp";
+export * from "./types-loop";
 
 export interface JiraConfig {
   base_url: string;

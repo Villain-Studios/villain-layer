@@ -94,6 +94,15 @@ export function ReposView() {
     }
   }
 
+  async function setCheck(p: Project, command: string) {
+    try {
+      await api.setProjectCheck(p.id, command || null);
+      await refreshRepos();
+    } catch (e) {
+      fail(e);
+    }
+  }
+
   async function setSpecs(p: Project, inApp: boolean, folder: string) {
     try {
       await api.setProjectSpecs(p.id, inApp, folder);
@@ -307,6 +316,8 @@ export function ReposView() {
                       view moves the leading slash to the end. */}
                   <span className="rpath" title={p.path}><bdi>{p.path}</bdi></span>
                   {h?.origin && <span className="rorigin" title={`Fetches from ${h.origin}`}>{h.origin}</span>}
+                  <div className="spacer" />
+                  <CheckCommand p={p} onSave={(command) => void setCheck(p, command)} />
                 </div>
                 {problem && (
                   <div className="repo-problem">
@@ -400,6 +411,27 @@ function UpdateByPicker({ p, h, onChange }: {
       <option value="merge">merges</option>
       <option value="rebase">rebases</option>
     </select>
+  );
+}
+
+/** What a loop runs here (LOOP-1), saved on Enter or leaving the field. */
+function CheckCommand({ p, onSave }: { p: Project; onSave: (command: string) => void }) {
+  const [value, setValue] = useState(p.check ?? "");
+  useEffect(() => setValue(p.check ?? ""), [p.check]);
+  return (
+    <input
+      className="repo-check mono"
+      value={value}
+      placeholder="check command, for loops"
+      title="What says the work here is done (bun run check, cargo test). A loop runs it after each of an agent's turns."
+      spellCheck={false}
+      onChange={(e) => setValue(e.target.value)}
+      onBlur={() => { if (value.trim() !== (p.check ?? "")) onSave(value.trim()); }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") e.currentTarget.blur();
+        if (e.key === "Escape") setValue(p.check ?? "");
+      }}
+    />
   );
 }
 

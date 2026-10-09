@@ -87,7 +87,7 @@ export function TicketFlowSettings() {
           const pick = (stage: "review" | "merged", chosen: FlowStatus | null | undefined) => (
             <select
               value={chosen?.id ?? ""}
-              style={{ width: "auto" }}
+              style={{ width: "100%" }}
               onChange={(e) => void choose(p, stage, e.target.value)}
             >
               <option value="">leave the ticket</option>
@@ -101,7 +101,7 @@ export function TicketFlowSettings() {
           const start = (
             <select
               value={started.to === "status" ? started.id : started.to === "leave" ? "leave" : ""}
-              style={{ width: "auto" }}
+              style={{ width: "100%" }}
               onChange={(e) => void chooseStart(p, e.target.value)}
             >
               <option value="">first in-progress status</option>
@@ -112,21 +112,32 @@ export function TicketFlowSettings() {
             </select>
           );
           return (
-            <div key={p} className="row" style={{ gap: 10, flexWrap: "wrap", marginBottom: 8, fontSize: 13 }}>
-              <b className="mono" style={{ minWidth: 60 }}>{p}</b>
+            <div key={p} style={{ marginBottom: 14, fontSize: 13 }}>
+              <b className="mono">{p}</b>
               {typeof list === "string" ? (
-                <span style={{ color: "var(--red)" }}>{list}</span>
+                <div style={{ color: "var(--red)", marginTop: 6 }}>{list}</div>
               ) : !list ? (
-                <span className="muted">Reading its statuses…</span>
+                <div className="muted" style={{ marginTop: 6 }}>Reading its statuses…</div>
               ) : (
-                <>
-                  <span className="muted">work starts →</span>
+                // One under the other, in the order a ticket meets them. In
+                // one row they wrapped wherever the width ran out, and the
+                // last step landed under the project's name.
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "max-content minmax(0, 280px)",
+                    gap: "8px 14px",
+                    alignItems: "center",
+                    marginTop: 8,
+                  }}
+                >
+                  <span className="muted">Work starts →</span>
                   {start}
                   <span className="muted">PR ready for review →</span>
                   {pick("review", flow?.review)}
-                  <span className="muted">every PR merged →</span>
+                  <span className="muted">Every PR merged →</span>
                   {pick("merged", flow?.merged)}
-                </>
+                </div>
               )}
             </div>
           );

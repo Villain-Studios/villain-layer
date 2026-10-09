@@ -687,12 +687,14 @@ impl PtyManager {
         // One at a time. Panes start from several threads at once (restoring,
         // MCP calls, the blocking pool), and macOS's openpty called from two
         // threads together fails one of them with "Unknown error: -6": a
-        // third of forty racing spawns, in the pane-cap test.
+        // third of forty racing spawns, in the pane-cap test. And again if it
+        // fails: on a busy Mac it now and then answers "Device not configured"
+        // and works a moment later, which failed whatever started then.
         static OPENING: Mutex<()> = Mutex::new(());
-        let pair = {
+        let pair = retried(|| {
             let _one = OPENING.lock();
             system.openpty(size)
-        }
+        })
         .map_err(|e| Error::Pty(format!("openpty: {e}")))?;
 
         let id = uuid::Uuid::new_v4().to_string();
@@ -1302,6 +1304,20 @@ impl PtyManager {
     }
 }
 
+/// `open` until it works, five more times at most, waiting longer each time.
+fn retried<T, E>(mut open: impl FnMut() -> std::result::Result<T, E>) -> std::result::Result<T, E> {
+    let mut wait = Duration::from_millis(20);
+    loop {
+        match open() {
+            Err(_) if wait <= Duration::from_millis(320) => {
+                std::thread::sleep(wait);
+                wait *= 2;
+            }
+            done => return done,
+        }
+    }
+}
+
 /// An agent's process ended: its run goes in the log (RUN-1). Before the
 /// pane reads as exited, so quitting, which waits for that, finds the run
 /// in memory to save.
@@ -1670,6 +1686,18 @@ mod tests {
             "closing a shell took {:?}",
             started.elapsed()
         );
+    }
+
+    /// openpty on a busy Mac failed with "Device not configured" and worked a
+    /// moment later; whatever started then failed with it.
+    #[test]
+    fn opening_a_terminal_is_tried_again_before_it_fails() {
+        let mut tries = 0;
+        assert_eq!(retried(|| { tries += 1; if tries < 3 { Err("busy") } else { Ok(tries) } }), Ok(3));
+        let (mut tries, started) = (0, Instant::now());
+        assert_eq!(retried(|| { tries += 1; Err::<(), _>("gone") }), Err("gone"));
+        assert_eq!(tries, 6, "and gives up");
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 
     /// `/clear` starts a new conversation in the same process. Its run's

@@ -23,6 +23,10 @@ Coding agents need context: tickets, repositories, credentials for Jira and GitH
 
 Most solutions either give agents full access to your credentials, or make you manage branches, worktrees, and context files manually.
 
+## Local-first
+
+Everything runs on your machine. The MCP server agents talk to runs on `127.0.0.1` and never leaves the machine—even when phone access is enabled. Agents never hold your credentials: they request actions through the MCP server, you see what they want, and the app executes it only after confirmation. No logs or telemetry are sent to external servers.
+
 ## Demo
 
 [![Download for macOS](https://img.shields.io/badge/Download-macOS-blue)](https://github.com/Villain-Studios/villain-layer/releases/latest)
@@ -165,11 +169,9 @@ Complete list in [`docs/features.md`](docs/features.md#14-what-the-app-writes-on
 Possible future directions:
 
 - AI review step (second agent reviews work against the spec)
-- Run history and session replay
-- OpenTelemetry export for distributed tracing
-- Hosted MCP server for remote agents
-- Demo mode with mock integrations
-- Architecture diagram generator from codebase
+- Local dashboard for reviewing runs (agent, duration, result, loop rounds, error rate, tokens)
+- Demo mode with mock data
+- Architecture diagram
 
 Not promises—just ideas under consideration.
 
@@ -191,18 +193,7 @@ Not promises—just ideas under consideration.
 
 ## Author
 
-**Villain Layer** is built by [Michael Lazarski](https://codevillain.eu) (Code Villain).
-
-Senior engineer with deep experience in developer tooling, macOS app development, and systems integration. Available for senior/staff roles in developer tools, platform engineering, and technical leadership.
-
-Open to:
-- Staff/Senior Engineer roles (developer tools, platform, infrastructure)
-- Technical lead positions
-- Contract/consulting for developer tooling and automation
-
-Contact: [codevillain@proton.me](mailto:codevillain@proton.me)
-
-Portfolio: [codevillain.eu](https://codevillain.eu)
+Built by [Michael Lazarski](https://codevillain.eu) (Code Villain). Contact: [codevillain@proton.me](mailto:codevillain@proton.me)
 
 ## License
 

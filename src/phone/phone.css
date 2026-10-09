@@ -1,21 +1,9 @@
 /* The phone's page (PHONE-*): the app's colours, a phone's proportions. */
 :root {
-  --bg: #0c0c11;
-  --panel: #12121a;
-  --panel-2: #171722;
-  --border: #23232f;
-  --text: #dcdce6;
-  --dim: #7d7d8c;
-  --dimmer: #55555f;
-  --accent: #a78bfa;
-  --accent-dim: #6d5ba8;
-  --green: #4ade80;
-  --red: #f87171;
-  --amber: #fbbf24;
+  /* The colours are the app's own, in ../theme.css (SET-5). */
   --mono: "SF Mono", "JetBrains Mono", Menlo, monospace;
   --sans: -apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif;
   --radius: 8px;
-  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -40,7 +28,7 @@ button {
   padding: 8px 12px;
 }
 button:disabled { opacity: 0.4; }
-button.primary { background: var(--accent-dim); border-color: var(--accent-dim); color: #fff; }
+button.primary { background: var(--accent-fill); border-color: var(--accent-fill); color: var(--on-accent); }
 input {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -62,7 +50,7 @@ input:focus { outline: none; border-color: var(--accent-dim); }
 .note { color: var(--dim); font-size: 13px; padding: 8px 16px; border-top: 1px solid var(--border); }
 
 .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--dimmer); display: inline-block; }
-.dot.live { background: var(--green); box-shadow: 0 0 6px rgba(74, 222, 128, 0.6); }
+.dot.live { background: var(--green); box-shadow: 0 0 6px color-mix(in srgb, var(--green) 60%, transparent); }
 .dot.idle { background: var(--amber); }
 .dot.gone { background: var(--red); }
 
@@ -89,7 +77,7 @@ input:focus { outline: none; border-color: var(--accent-dim); }
 .summary { padding: 14px 16px 4px; color: var(--dim); font-size: 14px; }
 .group { margin: 10px 12px; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
 .group h2 { font-size: 14px; font-weight: 600; margin: 0; padding: 10px 12px; display: flex; gap: 8px; align-items: baseline; }
-.group.waiting { border-color: rgba(251, 191, 36, 0.45); }
+.group.waiting { border-color: color-mix(in srgb, var(--amber) 45%, transparent); }
 .group-head {
   display: flex;
   align-items: center;
@@ -121,7 +109,7 @@ input:focus { outline: none; border-color: var(--accent-dim); }
   border-radius: 0;
   padding: 12px;
 }
-.pane-row.waiting { background: rgba(251, 191, 36, 0.06); }
+.pane-row.waiting { background: color-mix(in srgb, var(--amber) 6%, transparent); }
 .pane-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .pane-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pane-state { font-size: 13px; color: var(--dim); display: flex; align-items: center; gap: 6px; }
@@ -148,7 +136,7 @@ input:focus { outline: none; border-color: var(--accent-dim); }
   user-select: text;
 }
 .term { width: max-content; }
-.term .xterm-viewport { overflow-y: hidden; }
+.term .xterm-viewport { overflow-y: hidden; background-color: var(--bg); }
 
 .typing {
   flex: none;

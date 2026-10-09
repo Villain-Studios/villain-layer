@@ -4,6 +4,7 @@
  *
  *   ?paired=0     start unpaired: the code is 482913
  *   &typing=0     typing switched off on the Mac
+ *   &theme=light  the Mac's theme: dark (default), light, system (SET-5)
  *   #pane=p-ask   open straight on a pane
  *
  * From the console:
@@ -35,7 +36,8 @@ const groups: Group[] = [
   { id: "t-docs", name: "Setup guide typos", key: "ACME-140", panes: [] },
 ];
 
-const world: Overview = { device: "iPhone", typing: params.get("typing") !== "0", groups };
+const theme = (params.get("theme") ?? "dark") as Overview["theme"];
+const world: Overview = { device: "iPhone", typing: params.get("typing") !== "0", theme, groups };
 const calls: { path: string; body: unknown }[] = [];
 const streams = new Map<string, Set<ReadableStreamDefaultController<Uint8Array>>>();
 const enc = new TextEncoder();

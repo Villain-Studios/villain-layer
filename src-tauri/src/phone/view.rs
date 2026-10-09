@@ -15,6 +15,8 @@ pub struct Overview {
     pub device: String,
     /// Whether the phone may type into agents (PHONE-7).
     pub typing: bool,
+    /// The app's theme (SET-5), which the phone's page draws in too.
+    pub theme: String,
     pub groups: Vec<Group>,
 }
 

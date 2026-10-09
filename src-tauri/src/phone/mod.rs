@@ -237,6 +237,12 @@ pub async fn apply(app: AppHandle) {
     let _ = app.emit("phone:changed", ());
 }
 
+/// Phones look again: something their page shows changed outside the panes
+/// (the theme, SET-5).
+pub fn changed() {
+    phone().changed();
+}
+
 /// The overview changes when a pane does. Registered once, when the server
 /// first starts.
 fn listen_for_changes(app: &AppHandle) {

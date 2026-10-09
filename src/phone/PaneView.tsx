@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
-import { decode, TERMINAL_FONT, TERMINAL_THEME } from "../lib/terminal";
+import { decode, TERMINAL_FONT, terminalTheme } from "../lib/terminal";
+import { currentTheme, type Theme } from "../lib/theme";
 import { follow, phoneApi } from "./client";
 import { stateOf } from "./Overview";
 import { readable, type Row } from "./readable";
@@ -45,11 +46,12 @@ function savedMode(): Mode {
  * be scrolled sideways.
  */
 export function PaneView({
-  id, pane, typing, onBack,
+  id, pane, typing, theme, onBack,
 }: {
   id: string;
   pane: PhonePane | null;
   typing: boolean;
+  theme: Theme;
   onBack: () => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
@@ -75,7 +77,7 @@ export function PaneView({
       fontFamily: TERMINAL_FONT,
       fontSize: 8,
       lineHeight: 1.15,
-      theme: TERMINAL_THEME,
+      ...terminalTheme(currentTheme()),
       disableStdin: true,
       cursorBlink: false,
       scrollback: 3000,
@@ -136,6 +138,9 @@ export function PaneView({
   useEffect(() => {
     if (term.current) term.current.options.fontSize = font;
   }, [font]);
+  useEffect(() => {
+    if (term.current) Object.assign(term.current.options, terminalTheme(theme));
+  }, [theme]);
 
   // Follow the end, unless you have scrolled up to read something.
   const pinned = useRef(true);

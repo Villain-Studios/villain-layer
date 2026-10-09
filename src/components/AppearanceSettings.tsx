@@ -1,8 +1,14 @@
 import { useRef, useState } from "react";
 import { api } from "../lib/api";
 import { useStore } from "../store";
-import type { UiPrefs } from "../lib/types";
+import type { ThemeChoice, UiPrefs } from "../lib/types";
 import { Field, Switch } from "./ui";
+
+const THEMES: [ThemeChoice, string][] = [
+  ["dark", "Dark"],
+  ["light", "Light"],
+  ["system", "Match the Mac"],
+];
 
 /** Settings → Appearance: how the app looks, and how its terminals and agents behave. */
 export function AppearanceSettings() {
@@ -62,6 +68,23 @@ export function AppearanceSettings() {
   if (!settings || !ui) return null;
   return (
     <>
+      <Field
+        label="Theme"
+        hint="Match the Mac follows its appearance as it changes. A paired phone draws in the same theme, or under Match the Mac in its own appearance. In a terminal an agent picks its own colours: if one stays dark, change its theme (Claude Code: /theme)."
+      >
+        <div className="row">
+          {THEMES.map(([v, label]) => (
+            <button
+              key={v}
+              className={`btn btn-sm${ui.theme === v ? " btn-primary" : ""}`}
+              onClick={() => void saveUi({ theme: v })}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </Field>
+
       <Field
         label={`Interface scale — ${Math.round(ui.scale * 100)}%`}
         hint="Scales everything except terminal text, which has its own size below."

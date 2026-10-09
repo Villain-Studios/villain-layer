@@ -6,7 +6,8 @@ import { api } from "../lib/api";
 import { onPtyOutput } from "../lib/ptyOutput";
 import { useStore } from "../store";
 import type { PaneInfo } from "../lib/types";
-import { decode, TERMINAL_FONT, TERMINAL_THEME } from "../lib/terminal";
+import { decode, TERMINAL_FONT, terminalTheme } from "../lib/terminal";
+import { currentTheme, type Theme } from "../lib/theme";
 
 /**
  * How many terminals may hold a WebGL context at once.
@@ -95,7 +96,7 @@ class PaneTerminal {
       fontFamily: TERMINAL_FONT,
       fontSize: fontSize(),
       lineHeight: 1.25,
-      theme: TERMINAL_THEME,
+      ...terminalTheme(currentTheme()),
       cursorBlink: true,
       allowProposedApi: true,
       // Backend scrollback is the source of truth (~256KB). Keeping a huge
@@ -166,6 +167,11 @@ class PaneTerminal {
     if (this.disposed) return;
     this.term.options.fontSize = size;
     if (this.el.offsetParent !== null) this.fitAndTell();
+  }
+
+  setTheme(theme: Theme) {
+    if (this.disposed) return;
+    Object.assign(this.term.options, terminalTheme(theme));
   }
 
   dispose() {
@@ -312,6 +318,11 @@ useStore.subscribe((s, prev) => {
     for (const t of pool.values()) t.setFontSize(size);
   }
 });
+
+/** Every terminal kept, not only the ones on screen, in `theme` (SET-5). */
+export function themeTerminals(theme: Theme) {
+  for (const t of pool.values()) t.setTheme(theme);
+}
 
 // A hot reload brings a fresh pool; the old one's terminals would linger.
 import.meta.hot?.dispose(() => {

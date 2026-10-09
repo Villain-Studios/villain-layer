@@ -981,6 +981,7 @@ Known gaps:
 
 | Setting | Default | What it does |
 |---|---|---|
+| Theme | Dark | Dark, Light, or Match the Mac (SET-5) |
 | Interface scale | 100% | 80–160% |
 | New reviews and tickets | on | banners while the window is away (NOTE-*); the message center keeps them either way (MSG-2) |
 | Agents waiting on you | on | banners and the dock count; the message center keeps them either way (MSG-2) |
@@ -1017,8 +1018,21 @@ Known gaps:
   Jira serves such a request as an anonymous visitor's, so without this
   an empty search, or a 404 for a ticket that exists, looks like an answer.
 
+- **SET-5** The theme MUST reach everything the app draws: every view,
+  the terminals, the window behind the page before it has drawn, and a
+  paired phone's page. Match the Mac MUST follow the Mac's appearance as
+  it changes, without a restart; a phone under Match the Mac follows its
+  own appearance. The app MUST open in the theme it was last in, not
+  flash another first. Dark is the default, so an update does not repaint
+  the app. A colour is a token in `theme.css`, with a value for every
+  theme, never written into a rule: one written there is a colour no
+  theme reaches. What an agent prints in a terminal keeps its own colours;
+  on Light, xterm darkens any too faint to read (4.5:1), and answers an
+  agent that asks the terminal for its background.
+
 Code: `commands/settings.rs`, `config.rs` (`UiPrefs`), `Settings.tsx`,
-`integrations/mod.rs` (`require_https`).
+`AppearanceSettings.tsx`, `integrations/mod.rs` (`require_https`); the
+theme in `theme.css`, `lib/theme.ts`, `lib/terminal.ts` and `theme.rs`.
 
 Known gaps:
 - Changing Slack's channel needs the token pasted again.

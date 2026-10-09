@@ -21,6 +21,7 @@ mod secrets;
 mod shellenv;
 mod spec;
 mod target;
+mod theme;
 
 use commands::AppState;
 use config::ConfigStore;
@@ -106,6 +107,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_notification::init())
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::ThemeChanged(_) = event {
+                theme::repaint(window);
+            }
+        })
         .setup(|app| {
             let handle = app.handle();
             secrets::use_service(&app.config().identifier);
@@ -127,6 +133,8 @@ pub fn run() {
                 loops: Default::default(),
             };
             app.manage(state);
+            // Before the window first draws, or a light theme opens dark.
+            theme::apply(handle, &handle.state::<AppState>().config.read().ui.theme);
             messages::spawn_writer(handle.clone(), dirty)?;
 
             // Agents reach the app's Jira, GitHub and Slack connections through

@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use tauri::{AppHandle, Emitter, Manager, State};
 
+use crate::config::SavedLoop;
 use crate::error::{Error, Result};
 use crate::loops::{Host, LoopView, Target, CHECKS_FILE, DEFAULT_ROUNDS};
 use crate::pty::{PaneInfo, PtyManager};
@@ -27,6 +28,15 @@ impl Host for App {
         super::panes::hand_over(&state, &task, pane, CHECKS_FILE, text)
     }
 
+    fn keep(&self, pane: &str, kept: Option<SavedLoop>) {
+        let state = self.0.state::<AppState>();
+        let _ = state.config.update(|c| {
+            for p in c.saved_panes.iter_mut().filter(|p| p.id == pane) {
+                p.on_loop = kept.clone();
+            }
+        });
+    }
+
     fn changed(&self, pane: &str) {
         let _ = self.0.emit("loop:changed", pane);
         // What the pane reads as goes with it (LOOP-8).
@@ -42,9 +52,21 @@ pub async fn start_loop(app: AppHandle, pane_id: String, rounds: Option<u32>) ->
     let host = Arc::new(App(app.clone()));
     super::blocking(app, move |state| {
         let targets = loop_targets(state, &state.ptys.info(&pane_id)?)?;
-        state.loops.start(host, &pane_id, targets, rounds.unwrap_or(DEFAULT_ROUNDS))
+        state.loops.start(host, &pane_id, targets, rounds.unwrap_or(DEFAULT_ROUNDS), None)
     })
     .await
+}
+
+/// Put a loop kept from the last launch back on its pane, now back with a
+/// new id (LOOP-11). Not when none of its repositories has a check command
+/// any more: then it is only dropped.
+pub(crate) fn resume_loop(app: &AppHandle, state: &AppState, pane: &PaneInfo, kept: &SavedLoop) {
+    let host = Arc::new(App(app.clone()));
+    let started = loop_targets(state, pane)
+        .and_then(|targets| state.loops.start(host, &pane.id, targets, kept.rounds, Some(kept.clone())));
+    if let Err(e) = started {
+        eprintln!("could not put a loop back on its agent: {e}");
+    }
 }
 
 /// Stop an agent's loop, and a check it is running. The agent goes on as

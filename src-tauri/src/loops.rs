@@ -22,6 +22,7 @@ use serde::Serialize;
 use tokio::sync::{Notify, Semaphore};
 
 use crate::error::{Error, Result};
+use crate::config::SavedLoop;
 use crate::pty::PtyManager;
 use message::{count, failures, tail};
 
@@ -34,6 +35,9 @@ const CHECK_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 /// Loops whose checks may run at the same time, in the whole app (LOOP-5).
 /// A check is often a whole build; a dozen at once took a laptop down.
 const AT_ONCE: usize = 2;
+/// How long a loop put back after a restart waits for its agent to say it
+/// is ready before it checks anyway (LOOP-11).
+const READY_WAIT: Duration = Duration::from_secs(60);
 /// Check runs a loop keeps to show.
 const RUNS_KEPT: usize = 25;
 /// Where failures too long to type into a terminal are left (PANE-11).
@@ -116,6 +120,9 @@ pub trait Host: Send + Sync + 'static {
     fn deliver(&self, pane: &str, text: &str) -> Result<()>;
     /// The loop, or what its pane reads as, changed.
     fn changed(&self, pane: &str);
+    /// Keep the loop with the saved pane, or None to drop it (LOOP-11).
+    /// Blocking: it writes the config.
+    fn keep(&self, pane: &str, kept: Option<SavedLoop>);
 }
 
 struct Shared {
@@ -125,6 +132,9 @@ struct Shared {
     wake: Notify,
     /// The process group of the check running now, 0 for none.
     group: AtomicI32,
+    /// Stopped because the app is quitting: kept with its pane, to come
+    /// back at the next launch (LOOP-11), not dropped as ended.
+    quitting: AtomicBool,
 }
 
 impl Shared {
@@ -159,7 +169,15 @@ impl Loops {
 
     /// Put `pane` on a loop over `targets` (LOOP-2). One per pane: a loop
     /// that has ended is replaced.
-    pub fn start<H: Host>(&self, host: Arc<H>, pane: &str, targets: Vec<Target>, rounds: u32) -> Result<LoopView> {
+    /// `from` is a loop kept from the last launch, put back (LOOP-11).
+    pub fn start<H: Host>(
+        &self,
+        host: Arc<H>,
+        pane: &str,
+        targets: Vec<Target>,
+        rounds: u32,
+        from: Option<SavedLoop>,
+    ) -> Result<LoopView> {
         if targets.is_empty() {
             return Err(Error::Other(
                 "None of the repositories this agent works in has a check command. Set one first.".into(),
@@ -181,7 +199,7 @@ impl Loops {
                     pane_id: pane.to_string(),
                     task_id: info.task_id,
                     phase: Phase::Waiting,
-                    round: 0,
+                    round: from.as_ref().map_or(0, |f| f.round),
                     rounds: rounds.clamp(1, MAX_ROUNDS),
                     started_at: Utc::now(),
                     repos: targets.iter().map(|t| t.repo.clone()).collect(),
@@ -192,12 +210,13 @@ impl Loops {
                 stop: AtomicBool::new(false),
                 wake: Notify::new(),
                 group: AtomicI32::new(0),
+                quitting: AtomicBool::new(false),
             });
             map.insert(pane.to_string(), shared.clone());
             shared
         };
         let view = shared.view.lock().clone();
-        tauri::async_runtime::spawn(drive(host, shared, targets, self.permits.clone()));
+        tauri::async_runtime::spawn(drive(host, shared, targets, self.permits.clone(), from));
         Ok(view)
     }
 
@@ -207,6 +226,7 @@ impl Loops {
     /// a build half done would run on after the app had gone.
     pub fn stop_all(&self) {
         for shared in self.map.lock().values() {
+            shared.quitting.store(true, Ordering::Release);
             shared.stop.store(true, Ordering::Release);
             shared.wake.notify_one();
             let group = shared.group.load(Ordering::Acquire);
@@ -250,12 +270,30 @@ impl End {
     }
 }
 
-async fn drive<H: Host>(host: Arc<H>, me: Arc<Shared>, targets: Vec<Target>, permits: Arc<Semaphore>) {
+async fn drive<H: Host>(host: Arc<H>, me: Arc<Shared>, targets: Vec<Target>, permits: Arc<Semaphore>, from: Option<SavedLoop>) {
     let pane = me.view.lock().pane_id.clone();
-    let end = go_round(&host, &me, &pane, &targets, &permits).await;
+    let end = go_round(&host, &me, &pane, &targets, &permits, from).await;
+    // Quitting is not ending: the app is going, and the loop with it, to
+    // come back at the next launch (LOOP-11). Taken for an end, every loop
+    // was dropped by the very quit that was to keep it.
+    if me.quitting.load(Ordering::Acquire) {
+        return;
+    }
     me.set(end.phase, Some(end.note));
     let _ = host.ptys().set_looping(&pane, false, end.said);
     host.changed(&pane);
+    keep(&host, &pane, None).await;
+}
+
+/// Keep where the loop is with its saved pane (LOOP-11), off the runtime.
+async fn keep<H: Host>(host: &Arc<H>, pane: &str, kept: Option<SavedLoop>) {
+    let (h, p) = (host.clone(), pane.to_string());
+    let _ = tauri::async_runtime::spawn_blocking(move || h.keep(&p, kept)).await;
+}
+
+fn kept(me: &Shared, failed_at: &Option<String>, held: bool) -> SavedLoop {
+    let view = me.view.lock();
+    SavedLoop { rounds: view.rounds, round: view.round, failed_at: failed_at.clone(), held }
 }
 
 /// Waiting on a turn's end or a stop, and what the loop is about to do.
@@ -265,7 +303,14 @@ fn show<H: Host>(host: &Arc<H>, me: &Shared, pane: &str, phase: Phase, note: Opt
     host.changed(pane);
 }
 
-async fn go_round<H: Host>(host: &Arc<H>, me: &Arc<Shared>, pane: &str, targets: &[Target], permits: &Arc<Semaphore>) -> End {
+async fn go_round<H: Host>(
+    host: &Arc<H>,
+    me: &Arc<Shared>,
+    pane: &str,
+    targets: &[Target],
+    permits: &Arc<Semaphore>,
+    from: Option<SavedLoop>,
+) -> End {
     let gone = || End::stopped("The agent was closed.", None);
     let exited = || End::stopped("The agent exited.", None);
     let by_you = || End::stopped("Stopped.", None);
@@ -278,8 +323,47 @@ async fn go_round<H: Host>(host: &Arc<H>, me: &Arc<Shared>, pane: &str, targets:
         Ok(turn) => !turn.mid,
         Err(_) => return gone(),
     };
-    if !check_now {
-        show(host, me, pane, Phase::Waiting, None, true, None);
+    match &from {
+        // Put back after a restart (LOOP-11). The agent has only just been
+        // started again, on its conversation: nothing is sent it until it
+        // says it is ready, which is a hook's or the protocol's first word: a
+        // terminal still drawing itself can drop what is typed, which is why
+        // an opening prompt waits too.
+        // Looked for every quarter second, for a minute at most, since an
+        // agent that never says still deserves its checks.
+        Some(kept_from) => {
+            let until = tokio::time::Instant::now() + READY_WAIT;
+            while tokio::time::Instant::now() < until {
+                match host.ptys().turn(pane) {
+                    Ok(turn) if !turn.running => return exited(),
+                    Ok(turn) if turn.said => break,
+                    Ok(_) => {}
+                    Err(_) => return gone(),
+                }
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_millis(250)) => {}
+                    _ = me.wake.notified() => if me.stopped() { return by_you() },
+                }
+            }
+            seen = *turns.borrow_and_update();
+            if kept_from.held {
+                // Still waiting on you, for a turn that changes something.
+                failed_at = kept_from.failed_at.clone();
+                check_now = false;
+                let note = "Put back after a restart, waiting on you as before: the loop goes on after a turn that changes something.";
+                show(host, me, pane, Phase::Held, Some(note.into()), false, None);
+            } else {
+                // The turn it waited for ended with the app.
+                check_now = true;
+            }
+            keep(host, pane, Some(kept(me, &failed_at, kept_from.held))).await;
+        }
+        None => {
+            if !check_now {
+                show(host, me, pane, Phase::Waiting, None, true, None);
+            }
+            keep(host, pane, Some(kept(me, &None, false))).await;
+        }
     }
 
     loop {
@@ -321,6 +405,7 @@ async fn go_round<H: Host>(host: &Arc<H>, me: &Arc<Shared>, pane: &str, targets:
                         The loop goes on after a turn that changes something.";
             let said = "ended a turn without changing anything — its loop waits for you";
             show(host, me, pane, Phase::Held, Some(note.into()), false, Some(said.into()));
+            keep(host, pane, Some(kept(me, &failed_at, true))).await;
             continue;
         }
 
@@ -419,6 +504,7 @@ async fn go_round<H: Host>(host: &Arc<H>, me: &Arc<Shared>, pane: &str, targets:
         // worktree, and taken for the agent's work, the same failures went
         // back to it after a turn that changed nothing.
         failed_at = Some(fingerprint(targets).await);
+        keep(host, pane, Some(kept(me, &failed_at, false))).await;
         // Before it is sent: the end of the turn it starts must be news.
         seen = *turns.borrow_and_update();
         show(host, me, pane, Phase::Waiting, None, true, None);
@@ -482,6 +568,7 @@ done
     struct TestHost {
         ptys: PtyManager,
         sent: Mutex<Vec<String>>,
+        kept: Mutex<Vec<Option<SavedLoop>>>,
     }
 
     impl Host for TestHost {
@@ -493,6 +580,9 @@ done
             self.ptys.submit(pane, text)
         }
         fn changed(&self, _pane: &str) {}
+        fn keep(&self, _pane: &str, kept: Option<SavedLoop>) {
+            self.kept.lock().push(kept);
+        }
     }
 
     /// A repository, an agent working in it that has finished its first
@@ -507,7 +597,7 @@ done
         git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "one"]);
 
         let app = tauri::test::mock_app();
-        let host = Arc::new(TestHost { ptys: PtyManager::default(), sent: Mutex::new(Vec::new()) });
+        let host = Arc::new(TestHost { ptys: PtyManager::default(), sent: Mutex::new(Vec::new()), kept: Mutex::new(Vec::new()) });
         let opts = SpawnOptions {
             task_id: "t".into(),
             checkout_id: None,
@@ -556,7 +646,7 @@ done
         // The agent fixes it when it is told what failed, its second prompt.
         let (_app, host, pane, dir) = world(r#"if [ $n -ge 2 ]; then touch fixed; fi"#);
         let loops = Loops::default();
-        loops.start(host.clone(), &pane, checks(&dir, "test -f fixed || { echo 'fixed is missing'; exit 1; }"), 5).unwrap();
+        loops.start(host.clone(), &pane, checks(&dir, "test -f fixed || { echo 'fixed is missing'; exit 1; }"), 5, None).unwrap();
         let view = until_ended(&loops, &pane);
 
         assert_eq!(view.phase, Phase::Passed, "{view:?}");
@@ -580,7 +670,7 @@ done
         // Busy, never right.
         let (_app, host, pane, dir) = world(r#"echo "try $n" >> attempts"#);
         let loops = Loops::default();
-        loops.start(host.clone(), &pane, checks(&dir, "exit 1"), 2).unwrap();
+        loops.start(host.clone(), &pane, checks(&dir, "exit 1"), 2, None).unwrap();
         let view = until_ended(&loops, &pane);
         assert_eq!(view.phase, Phase::GaveUp, "{view:?}");
         assert_eq!(view.runs.len(), 3);
@@ -594,7 +684,7 @@ done
     fn a_turn_that_changes_nothing_waits_for_you_and_runs_nothing_again() {
         let (_app, host, pane, dir) = world(":");
         let loops = Loops::default();
-        loops.start(host.clone(), &pane, checks(&dir, "exit 1"), 5).unwrap();
+        loops.start(host.clone(), &pane, checks(&dir, "exit 1"), 5, None).unwrap();
         let deadline = Instant::now() + Duration::from_secs(30);
         while loops.view(&pane).unwrap().phase != Phase::Held {
             assert!(Instant::now() < deadline, "never held: {:?}", loops.view(&pane));
@@ -637,7 +727,7 @@ done
         git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "one"]);
 
         let app = tauri::test::mock_app();
-        let host = Arc::new(TestHost { ptys: PtyManager::default(), sent: Mutex::new(Vec::new()) });
+        let host = Arc::new(TestHost { ptys: PtyManager::default(), sent: Mutex::new(Vec::new()), kept: Mutex::new(Vec::new()) });
         let opts = SpawnOptions {
             task_id: "t".into(),
             checkout_id: None,
@@ -686,7 +776,7 @@ done
 
         let loops = Loops::default();
         let check = "test \"$(cat answer.txt 2>/dev/null)\" = 42 || { echo 'answer.txt must hold exactly the number 42, and nothing else.'; exit 1; }";
-        loops.start(host.clone(), &pane, checks(&dir, check), 3).unwrap();
+        loops.start(host.clone(), &pane, checks(&dir, check), 3, None).unwrap();
         wait("the loop", 300, &|| loops.view(&pane).is_some_and(|v| v.phase.ended() || v.phase == Phase::Held));
         let view = loops.view(&pane).unwrap();
         println!("---- transcript\n{}\n---- loop\n{view:#?}", host.ptys.transcript(&pane, 200).unwrap());
@@ -701,7 +791,7 @@ done
         let (_app, host, pane, dir) = world(":");
         let loops = Loops::default();
         // A report of its own, written on every run and never ignored.
-        loops.start(host.clone(), &pane, checks(&dir, "date +%s%N >> report.txt; exit 1"), 5).unwrap();
+        loops.start(host.clone(), &pane, checks(&dir, "date +%s%N >> report.txt; exit 1"), 5, None).unwrap();
         let deadline = Instant::now() + Duration::from_secs(30);
         while loops.view(&pane).unwrap().phase != Phase::Held {
             assert!(Instant::now() < deadline, "never held: {:?}", loops.view(&pane));
@@ -716,16 +806,95 @@ done
     }
 
     #[test]
+    fn a_loop_is_kept_with_its_pane_as_it_goes_and_dropped_when_it_ends() {
+        let (_app, host, pane, dir) = world(r#"if [ $n -ge 2 ]; then touch fixed; fi"#);
+        let loops = Loops::default();
+        loops.start(host.clone(), &pane, checks(&dir, "test -f fixed"), 5, None).unwrap();
+        until_ended(&loops, &pane);
+        // The driver drops it last, a moment after the view says passed.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while host.kept.lock().last().is_some_and(|k| k.is_some()) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let kept = host.kept.lock().clone();
+        assert_eq!(kept.first(), Some(&Some(SavedLoop { rounds: 5, round: 0, failed_at: None, held: false })));
+        assert!(
+            kept.iter().flatten().any(|k| k.round == 1 && k.failed_at.is_some() && !k.held),
+            "a round is kept as it is sent: {kept:?}"
+        );
+        assert_eq!(kept.last(), Some(&None), "passed, it is not put back");
+        host.ptys.close(&pane).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn quitting_keeps_a_loop_for_the_next_launch() {
+        let (_app, host, pane, dir) = world(":");
+        let loops = Loops::default();
+        loops.start(host.clone(), &pane, checks(&dir, "sleep 30"), 5, None).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while loops.view(&pane).unwrap().phase != Phase::Checking {
+            assert!(Instant::now() < deadline, "never checked");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        loops.stop_all();
+        loops.kill_checks();
+        std::thread::sleep(Duration::from_millis(1500));
+        let kept = host.kept.lock().clone();
+        assert!(!kept.is_empty() && kept.iter().all(|k| k.is_some()), "quitting dropped it: {kept:?}");
+        host.ptys.close(&pane).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_loop_put_back_after_a_restart_checks_at_once_and_counts_on_from_its_rounds() {
+        let (_app, host, pane, dir) = world(r#"if [ $n -ge 2 ]; then touch fixed; fi"#);
+        let loops = Loops::default();
+        let from = SavedLoop { rounds: 5, round: 2, failed_at: Some("before the restart".into()), held: false };
+        loops.start(host.clone(), &pane, checks(&dir, "test -f fixed"), 5, Some(from)).unwrap();
+        let view = until_ended(&loops, &pane);
+        assert_eq!(view.phase, Phase::Passed, "{view:?}");
+        assert_eq!(view.round, 3);
+        let sent = host.sent.lock().clone();
+        assert!(sent[0].contains("(round 3 of 5)"), "{}", sent[0]);
+        host.ptys.close(&pane).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_loop_that_waited_on_you_waits_again_after_a_restart() {
+        let (_app, host, pane, dir) = world(":");
+        let loops = Loops::default();
+        let now = crate::git::fingerprint(&dir).unwrap();
+        let from = SavedLoop { rounds: 5, round: 1, failed_at: Some(now), held: true };
+        loops.start(host.clone(), &pane, checks(&dir, "exit 1"), 5, Some(from)).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while loops.view(&pane).unwrap().phase != Phase::Held {
+            assert!(Instant::now() < deadline, "never held: {:?}", loops.view(&pane));
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        std::thread::sleep(Duration::from_millis(500));
+        let view = loops.view(&pane).unwrap();
+        assert_eq!(view.phase, Phase::Held);
+        assert!(view.runs.is_empty(), "nothing is run before a turn that changes something");
+        assert!(host.sent.lock().is_empty());
+        loops.stop(&pane);
+        until_ended(&loops, &pane);
+        host.ptys.close(&pane).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_loop_needs_something_to_check_and_only_one_runs_per_agent() {
         let (_app, host, pane, dir) = world(":");
         let loops = Loops::default();
-        assert!(loops.start(host.clone(), &pane, Vec::new(), 5).is_err());
-        loops.start(host.clone(), &pane, checks(&dir, "sleep 5"), 5).unwrap();
-        assert!(loops.start(host.clone(), &pane, checks(&dir, "true"), 5).is_err());
+        assert!(loops.start(host.clone(), &pane, Vec::new(), 5, None).is_err());
+        loops.start(host.clone(), &pane, checks(&dir, "sleep 5"), 5, None).unwrap();
+        assert!(loops.start(host.clone(), &pane, checks(&dir, "true"), 5, None).is_err());
         loops.stop(&pane);
         assert_eq!(until_ended(&loops, &pane).phase, Phase::Stopped);
         // Ended, it can start again.
-        loops.start(host.clone(), &pane, checks(&dir, "true"), 5).unwrap();
+        loops.start(host.clone(), &pane, checks(&dir, "true"), 5, None).unwrap();
         assert_eq!(until_ended(&loops, &pane).phase, Phase::Passed);
         host.ptys.close(&pane).unwrap();
         let _ = std::fs::remove_dir_all(&dir);

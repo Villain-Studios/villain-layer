@@ -210,6 +210,22 @@ pub struct SavedPane {
     /// restore picks up (ACP-9).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
+    /// The loop it was on, to put back on it (LOOP-11).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_loop: Option<SavedLoop>,
+}
+
+/// A loop as kept with its pane between launches (LOOP-11).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SavedLoop {
+    pub rounds: u32,
+    pub round: u32,
+    /// What the worktrees were when its checks last failed (LOOP-4).
+    #[serde(default)]
+    pub failed_at: Option<String>,
+    /// Waiting on you, after a turn that changed nothing.
+    #[serde(default)]
+    pub held: bool,
 }
 
 /// Presentation preferences. Terminal text scales separately from the chrome,

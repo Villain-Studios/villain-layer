@@ -110,6 +110,8 @@ pub struct PaneInfo {
 pub struct Turn {
     /// Working or asking: a turn has started and not ended.
     pub mid: bool,
+    /// It has said what it is doing at least once: started up and ready.
+    pub said: bool,
     pub notice: Option<String>,
     pub running: bool,
 }
@@ -1044,7 +1046,7 @@ impl PtyManager {
             Some((activity, _)) => matches!(activity, Activity::Working | Activity::Asking),
             None => Utc::now() - meta.last_work < IDLE_AFTER,
         };
-        Ok(Turn { mid, notice: meta.info.notice.clone(), running: meta.info.running })
+        Ok(Turn { mid, said: meta.reported.is_some(), notice: meta.info.notice.clone(), running: meta.info.running })
     }
 
     /// Put a pane on a loop, or hand it back (LOOP-8). Handed back with

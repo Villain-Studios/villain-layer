@@ -35,6 +35,7 @@ pub(crate) fn remember_pane(state: &AppState, pane: &PaneInfo) {
         waiting: false,
         acp: pane.acp,
         session: None,
+        on_loop: None,
     };
     let live: HashSet<String> = state.ptys.list(None).into_iter().map(|p| p.id).collect();
     let _ = state.config.update(|c| {
@@ -45,6 +46,8 @@ pub(crate) fn remember_pane(state: &AppState, pane: &PaneInfo) {
         if saved.acp {
             saved.session = state.ptys.session(&saved.id).ok().flatten();
         }
+        // Recorded again, the pane keeps the loop it is on (LOOP-11).
+        saved.on_loop = c.saved_panes.iter().find(|p| p.id == saved.id).and_then(|p| p.on_loop.clone());
         // Replace rather than append: recording the same pane twice is how a
         // restore that also recorded what it restored doubled this list on
         // every launch.
@@ -197,7 +200,13 @@ pub fn restore_panes(app: &AppHandle) {
         // made every restart double the list. A pane that did not come back
         // keeps its entry, to be tried again at the next few launches.
         match put_back(app, &state, &pane, &mut resumed) {
-            Back::Opened(_) | Back::Gone(_) => forget(&pane.id),
+            Back::Opened(p) => {
+                if let Some(kept) = &pane.on_loop {
+                    super::loops::resume_loop(app, &state, &p, kept);
+                }
+                forget(&pane.id)
+            }
+            Back::Gone(_) => forget(&pane.id),
             Back::Failed(e) => {
                 eprintln!("could not restore a pane: {e}");
                 failed(&pane.id);
@@ -382,7 +391,12 @@ pub(crate) fn reopen_waiting_pane_inner(app: &AppHandle, state: &AppState, id: &
     let mut resumed: HashSet<(String, String)> =
         state.ptys.list(None).into_iter().filter_map(|p| Some((p.agent_id?, p.cwd))).collect();
     let out = match put_back(app, state, &pane, &mut resumed) {
-        Back::Opened(p) => Ok(*p),
+        Back::Opened(p) => {
+            if let Some(kept) = &pane.on_loop {
+                super::loops::resume_loop(app, state, &p, kept);
+            }
+            Ok(*p)
+        }
         Back::Gone(why) => Err(Error::NotFound(format!("It cannot be reopened: {why}."))),
         Back::Failed(e) => {
             // Back on the list, to try again or to forget.
@@ -419,6 +433,7 @@ mod tests {
             waiting: false,
             acp: false,
             session: None,
+            on_loop: None,
         }
     }
 

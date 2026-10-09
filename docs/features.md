@@ -1624,6 +1624,18 @@ agent pane in front; the bar under the pane bar shows how it is going.
   check command, and tell agents to run it before they end a turn, so an
   agent checks its work by the measure the loop will, loop or not. Setting
   a command rewrites the context files of the tasks that repository is in.
+- **LOOP-11** A loop MUST come back with its agent when the app reopens
+  (PANE-7). It is kept with the saved pane, as it goes: its rounds, the
+  rounds used, what the worktrees were when its checks last failed, and
+  whether it waits on you. Once the pane is back, and its agent has said
+  it is ready (or after a minute), the loop starts again on it: one that
+  waited on you waits again; any other checks at once, since the turn it
+  was waiting for ended with the app, and goes on from the rounds it had
+  used. A pane that waits to be reopened brings its loop back when it is.
+  Quitting the app is not the end of a loop. One that passed, gave up, was
+  stopped, or whose agent exited on its own is not kept. Its check runs
+  are not kept: the bar starts again with the next one. Before this, a
+  restart ended every loop, and the agent came back with nothing driving it.
 
 Code: `loops.rs` (the registry and the driver), `loops/check.rs` (running
 a command), `git/snapshot.rs` (what changed), `pty.rs` (`turns`,
@@ -1635,8 +1647,6 @@ Known gaps:
   yet, nor is a spec's check.
 - A loop ends where you take over: it does not open a pull request, and
   does not follow CI or review comments after one (§8).
-- A loop ends with the app. A pane that comes back after a restart
-  (PANE-7) has none.
 - A check is its command's exit code: a flaky test sends the agent after
   a failure that is not there.
 - An agent asks for permissions on a loop as it does off one, and holds

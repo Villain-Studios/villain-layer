@@ -320,6 +320,7 @@ mod tests {
             waiting: false,
             acp: false,
             session: None,
+            on_loop: None,
         }
     }
 

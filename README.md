@@ -5,7 +5,7 @@
 <h1 align="center">Villain Layer</h1>
 
 <p align="center">
-  <strong>A macOS app for coding agents that doesn't hold your credentials</strong><br>
+  <strong>A macOS app for coding agents, where no agent holds your credentials</strong><br>
   By <a href="https://codevillain.eu">Villain Studios</a> · Tools for shipping with AI
 </p>
 
@@ -47,7 +47,7 @@ Everything runs on your machine. The MCP server agents talk to runs on `127.0.0.
 
 4. **Built-in browser**: Agents can navigate a Chrome-based browser through MCP tools. They can start dev servers, test pages on localhost, request access to staging sites, and sign in with saved credentials. You watch what they're doing in real time.
 
-5. **Spec checking**: When the loop finishes, check the agent's work against the approved spec requirements to confirm it actually solves what the ticket asked for.
+5. **Spec checking**: Check the branch against the approved spec, requirement by requirement: met, not met or unclear, with the files and lines that show it.
 
 **No credential sharing**: Agents connect to Jira, GitHub, and Slack through the app's own MCP server. They request actions; the app shows you what they want and executes it only after confirmation. Your tokens never touch the agent's environment.
 
@@ -63,14 +63,14 @@ Full feature list with requirements in [`docs/features.md`](docs/features.md).
 
 ## Stack
 
-- **macOS desktop app**: Tauri 2.0 (Rust 1.85 backend, React 19 frontend)
+- **macOS desktop app**: Tauri 2 (Rust backend, React 19 frontend)
 - **Terminals**: xterm.js with portable-pty
 - **Agent protocol**: ACP (Agent Client Protocol) for compatible agents; terminal passthrough otherwise
 - **MCP server**: Built-in Model Context Protocol server for agent tool calls
 - **Git**: libgit2-free; runs git directly with strict safety flags
 - **Integrations**: Jira Cloud REST API, GitHub REST + GraphQL, Slack Web API
 - **Secrets**: macOS Keychain via the `keyring` crate
-- **Frontend state**: Zustand; no polling, event-driven updates
+- **Frontend state**: Zustand, updated by events from the backend
 - **License**: MIT OR Apache-2.0 (dual-licensed)
 
 See [`docs/architecture.md`](docs/architecture.md) for details.
@@ -81,10 +81,11 @@ See [`docs/architecture.md`](docs/architecture.md) for details.
 
 ```bash
 brew tap villain-studios/tap
+brew trust --cask villain-studios/tap/villain-layer
 brew install --cask villain-layer
 ```
 
-Updates: `brew upgrade --cask villain-layer`. Quit the app first—replacing the bundle while it's running kills it and every agent in it.
+Updates: `brew upgrade --cask villain-layer`. Quit the app first, and run it from a terminal outside the app—replacing the bundle while it's running kills it and every agent in it, so the cask refuses to.
 
 ### Direct download
 
@@ -94,7 +95,7 @@ macOS will block the first launch with "Apple could not verify…" because relea
 
 ### Requirements
 
-- macOS 12.6 or later
+- macOS 26 or later
 - git (from Xcode Command Line Tools: `xcode-select --install`)
 - At least one agent CLI installed and authenticated: `claude`, `copilot`, `gemini`, or `opencode`
 - Optional: Jira Cloud, GitHub, Slack
@@ -197,7 +198,7 @@ Built by [Michael Lazarski](https://codevillain.eu) (Code Villain). Contact: [co
 
 ## License
 
-Copyright © 2024–2025 Code Villain (Michael Lazarski)
+Copyright © 2026 Code Villain
 
 Licensed under either:
 

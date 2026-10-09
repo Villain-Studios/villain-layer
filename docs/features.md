@@ -1428,10 +1428,13 @@ each reviewed before the next is drafted.
     Each requirement is a list item with its id first (`R-1`, `R-2`, …),
     written as WHEN a condition THE SYSTEM SHALL a behaviour, so that
     someone can check it. One without an id is numbered by its place.
+    Each open question is a list item with its id first (`Q-1`, …), the
+    answers it might take as a list under it, and, once answered, an
+    `Answer:` line under it.
   - `bugfix.md`, in place of `requirements.md` for a bug: Current
     behaviour, Expected behaviour, Unchanged behaviour (WHEN … THE SYSTEM
-    SHALL CONTINUE TO …), each item with its id, and Open questions.
-    Feature or bug is chosen when the spec is started.
+    SHALL CONTINUE TO …), each item with its id, and Open questions as in
+    `requirements.md`. Feature or bug is chosen when the spec is started.
   - `design.md`: how this repository will meet them. Approach, what
     changes where, how it meets the other repositories (an endpoint's
     shape, an event's fields), error handling, how it will be tested.
@@ -1459,8 +1462,10 @@ each reviewed before the next is drafted.
     and not instructions) and the task's repositories, which writes every
     repository's requirements, so the split is decided in one place. It
     invents no requirement the ticket does not imply; what the ticket
-    leaves unclear goes under Open questions. A task with no saved ticket
-    is drafted from its name.
+    leaves unclear goes under Open questions, each with the answers it
+    might take. A task with no saved ticket is drafted from its name. A
+    redraft is also given the questions already answered in the editors,
+    as decisions made, so it builds them in instead of asking again.
   - Design: one run per repository, allowed to read its worktree, over its
     approved requirements and the other repositories'.
   - Tasks: one run per repository over its approved requirements and
@@ -1486,6 +1491,36 @@ each reviewed before the next is drafted.
 - **SPEC-9** A task whose worktree already has `specs/<task>/` MUST open
   it: a task cut from a branch that has one, or a second task for the
   same ticket on the same branch.
+
+### Answering open questions
+
+The questions a draft leaves are the user's to decide, and an answer is
+only worth something once a requirement says it: an agent works to the
+requirements, and Check against spec reads nothing else. Answering used to
+mean typing beside a question at the bottom of the editor, rewriting the
+requirements it decided by hand, and finding that Redraft threw both away.
+
+- **SPEC-19** Beside the requirements, the tab MUST list the open
+  questions the editor holds, how many have no answer, and for each the
+  answers drafted for it to pick and a field for one of the user's own.
+  An answer is written into the editor's text as the question's `Answer:`
+  line, so the editor and the list are one record, kept as a draft is
+  (SPEC-6). An `Answer:` line typed into the editor counts the same, and
+  so does a line under the question starting `--`.
+- **SPEC-20** Apply answers MUST be a one-shot run, as a draft is
+  (SPEC-5), over every repository's requirements as the editors hold
+  them, which builds each answer into them: it rewrites the requirements
+  an answer decides, puts in Out of scope what an answer leaves out, and
+  removes each answered question. A requirement no answer touches keeps
+  its text and id, a new one takes the next free id, and a question with
+  no answer stays. The tab then names the requirements changed, added and
+  removed in each repository, and Undo puts back what the editors held. A
+  failed run puts it back by itself.
+- **SPEC-21** Approving requirements whose editor still holds open
+  questions MUST first say how many have no answer (an agent will stop to
+  ask them, SPEC-10) and how many answers are not built in yet (Check
+  against spec reads only the requirements), and approve only if the user
+  goes on.
 
 ### Working to it
 
@@ -1542,10 +1577,12 @@ each reviewed before the next is drafted.
 
 Code: `spec.rs` (the files, and what is read from them),
 `commands/spec.rs` (where a spec lives, approving, ticking),
-`commands/spec_draft.rs` (drafting, checking), `commands/task_context.rs`,
+`commands/spec_draft.rs` (drafting, applying answers, checking),
+`commands/task_context.rs`,
 `git/only.rs` (committing only the spec), `mcp.rs` (`spec_task`),
 `commands/open_prs.rs`, `SpecView.tsx`, `spec/SpecSide.tsx`,
-`lib/specs.ts`, `tickets/StartWorkDialog.tsx`, `ReposView.tsx` (the
+`spec/SpecQuestions.tsx`, `lib/specs.ts`, `lib/questions.ts`,
+`tickets/StartWorkDialog.tsx`, `ReposView.tsx` (the
 per-repository setting).
 
 Known gaps:
@@ -1558,6 +1595,8 @@ Known gaps:
 - A step an agent ticks is an uncommitted change in the worktree until the
   next approval or Open pull requests, and shows in the Diff tab until then.
 - Drafting and checking need Claude Code on the PATH.
+- An answer is recorded in the spec's commit only. The ticket, and
+  whoever asked for the work, are not told what was decided.
 
 ## 20. Agents over ACP
 

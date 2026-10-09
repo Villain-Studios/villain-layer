@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 import { api } from "../lib/api";
+import { approveWarning, questions } from "../lib/questions";
 import { approvedText, editKey, editorText, useSpecs } from "../lib/specs";
 import { useStore } from "../store";
 import type { RepoSpec, SpecKind, SpecPart, TaskView } from "../lib/types";
 import { Confirm, Spinner } from "./ui";
+import { SpecQuestions } from "./spec/SpecQuestions";
 import { SpecSide } from "./spec/SpecSide";
 
 const PARTS: SpecPart[] = ["requirements", "design", "tasks"];
@@ -43,6 +45,8 @@ export function SpecView({ task }: { task: TaskView }) {
   const [agentId, setAgentId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [replacing, setReplacing] = useState(false);
+  /** Requirements about to be approved with questions still in them (SPEC-21). */
+  const [asking, setAsking] = useState<{ parts: SpecPart[]; warning: string } | null>(null);
   /** What was just approved while agents were running, to tell them (SPEC-14). */
   const [tell, setTell] = useState<{ checkoutId: string; parts: SpecPart[] } | null>(null);
 
@@ -136,6 +140,13 @@ export function SpecView({ task }: { task: TaskView }) {
     }
   }
 
+  /** Approve, after saying what questions left in the requirements put at risk (SPEC-21). */
+  function tryApprove(parts: SpecPart[]) {
+    const warning = parts.includes("requirements") && repo ? approveWarning(questions(editorText(state, repo, "requirements"))) : null;
+    if (warning) setAsking({ parts, warning });
+    else void approveParts(parts);
+  }
+
   function redraft() {
     if (!repo) return;
     void draft(task.id, current, current === "requirements" ? null : repo.checkout_id, null).catch(fail);
@@ -223,7 +234,7 @@ export function SpecView({ task }: { task: TaskView }) {
           </button>
         )}
         {allDrafted && (
-          <button className="btn btn-sm" disabled={!!drafting || busy} onClick={() => void approveParts(PARTS)}>
+          <button className="btn btn-sm" disabled={!!drafting || busy} onClick={() => tryApprove(PARTS)}>
             Approve all three
           </button>
         )}
@@ -231,7 +242,7 @@ export function SpecView({ task }: { task: TaskView }) {
           className="btn btn-sm btn-primary"
           disabled={!!drafting || busy || !(dirty || (view.stale && text.trim()))}
           title={repo.in_repo ? `Write it to ${repo.home} and commit it on the task's branch` : "Keep it as the approved spec"}
-          onClick={() => void approveParts([current])}
+          onClick={() => tryApprove([current])}
         >
           Approve {partName(current, repo.kind).toLowerCase()}
         </button>
@@ -245,7 +256,9 @@ export function SpecView({ task }: { task: TaskView }) {
           placeholder={current === "tasks" ? "## Tasks\n\n- [ ] 1. … (R-1)" : "## …"}
           onChange={(e) => edit(task.id, repo.checkout_id, current, e.target.value)}
         />
-        <SpecSide task={task} repo={repo} repos={repos} agentId={agentId} setAgentId={setAgentId} />
+        <SpecSide task={task} repo={repo} repos={repos} agentId={agentId} setAgentId={setAgentId}>
+          {current === "requirements" && <SpecQuestions task={task} repo={repo} repos={repos} />}
+        </SpecSide>
       </div>
       {replacing && (
         <Confirm
@@ -257,6 +270,16 @@ export function SpecView({ task }: { task: TaskView }) {
           danger={false}
           onConfirm={() => { setReplacing(false); redraft(); }}
           onCancel={() => setReplacing(false)}
+        />
+      )}
+      {asking && (
+        <Confirm
+          title="Approve with open questions?"
+          body={asking.warning}
+          confirmLabel="Approve anyway"
+          danger={false}
+          onConfirm={() => { const { parts } = asking; setAsking(null); void approveParts(parts); }}
+          onCancel={() => setAsking(null)}
         />
       )}
     </div>

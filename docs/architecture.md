@@ -124,7 +124,7 @@ for, and the reverse, and that each is in this table.
 | `acp:update` | pane id | an ACP pane's conversation changed while it is on screen (batched, ~40ms; ACP-7) | `lib/acpUpdates.ts`, one listener for all → `AcpPane.tsx` asks `acp_view` for what changed |
 | `pr:draft` | `{ task_id, text }` | a chunk of a drafted PR description | `PrPanel.tsx` |
 | `issue:draft` | `{ request_id, text }` | a chunk of an improved ticket description | `tickets/OptimizeDescription.tsx` |
-| `spec:draft` | `{ request_id, checkout_id, text }` | a repository's spec draft so far (SPEC-5), whole each time | `Watchers.tsx` → `useSpecs.chunk`, into that editor |
+| `spec:draft` | `{ request_id, checkout_id, text }` | a repository's spec draft so far (SPEC-5), or its requirements as Apply answers rewrites them (SPEC-20), whole each time | `Watchers.tsx` → `useSpecs.chunk`, into that editor |
 | `spec:changed` | task id | an agent ticked a step of the task's spec (`spec_task`, SPEC-13) | `Watchers.tsx` → `useSpecs.changed`, which reads it again if it is shown |
 | `system-notify-click` | a `Target` (`target.rs`) | a banner was clicked | `Watchers.tsx` → `goTo`, which opens what it is about (NOTE-4) |
 | `app:notices` | none | a notice was queued after startup (`commands::notify`) | `Watchers.tsx` → `takeNotices`, as toasts |

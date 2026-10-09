@@ -141,6 +141,71 @@ pub fn requirements(spec: &str) -> Vec<Requirement> {
     found
 }
 
+/// The open questions of a requirements file that have an answer, as
+/// (question, answer) (SPEC-1, SPEC-19): a list item under the Open
+/// questions heading, and under it an `Answer:` line, or a line starting
+/// `--`, which is how people answered before the tab had a place for it.
+/// The items under a question are the answers drafted for it, not its
+/// answer. `src/lib/questions.ts` reads the same shape for the tab, which
+/// needs the unanswered ones too; the prompts need only these.
+pub fn answered(spec: &str) -> Vec<(String, String)> {
+    let mut found: Vec<(String, Option<String>)> = Vec::new();
+    let mut inside = false;
+    for (line, trimmed) in outside_fences(spec) {
+        if trimmed.starts_with('#') {
+            inside = trimmed.to_ascii_lowercase().contains("open question");
+            continue;
+        }
+        if !inside || trimmed.is_empty() {
+            continue;
+        }
+        if let Some(answer) = answer_line(trimmed) {
+            if let Some(last) = found.last_mut() {
+                last.1 = Some(answer);
+            }
+            continue;
+        }
+        let indent = line.len() - trimmed.len();
+        match list_item(trimmed) {
+            Some(item) if indent < 2 => found.push((question_text(item).trim().to_string(), None)),
+            Some(_) => {}
+            None => {
+                if let Some(last) = found.last_mut() {
+                    last.0.push(' ');
+                    last.0.push_str(trimmed.trim());
+                }
+            }
+        }
+    }
+    found.into_iter().filter_map(|(q, a)| Some((q, a.filter(|a| !a.is_empty())?))).collect()
+}
+
+/// `Answer: yes` (bullet and bold allowed) or `-- yes` as "yes".
+fn answer_line(trimmed: &str) -> Option<String> {
+    let dashed = trimmed.starts_with("--");
+    let rest = if dashed { trimmed.trim_start_matches('-').trim_start() } else { list_item(trimmed).unwrap_or(trimmed) };
+    let bare = rest.trim_start_matches('*');
+    if bare.get(..6).is_some_and(|w| w.eq_ignore_ascii_case("answer")) {
+        if let Some(answer) = bare[6..].trim_start_matches('*').trim_start().strip_prefix(':') {
+            return Some(answer.trim_start_matches('*').trim().to_string());
+        }
+    }
+    dashed.then(|| rest.trim().to_string())
+}
+
+/// A question's text without its `Q-2:`.
+fn question_text(item: &str) -> &str {
+    let bare = item.trim_start_matches('*');
+    let Some(rest) = bare.strip_prefix("Q-").or_else(|| bare.strip_prefix("q-")) else {
+        return item;
+    };
+    let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+    if digits == 0 {
+        return item;
+    }
+    rest[digits..].trim_start_matches('*').trim_start().trim_start_matches([':', '.', '-', '—', '–']).trim_start()
+}
+
 /// The steps of `tasks.md`: every list item with a checkbox, outside code
 /// blocks. A step's number is the one written after its checkbox, or its
 /// place.
@@ -398,6 +463,29 @@ mod tests {
         assert!(s.iter().any(|x| x.done && x.text.starts_with("Wire up metrics")), "dropped work is put back: {synced}");
         // Synced again, nothing is marked twice.
         assert_eq!(sync_steps(old, &synced, &reqs).matches(ORPHANED).count(), 1);
+    }
+
+    #[test]
+    fn answered_questions_are_read_with_their_answers_and_not_their_suggestions() {
+        let spec = "## Requirements\n- R-1: WHEN x THE SYSTEM SHALL y.\n\n## Open questions\n\
+                    - Q-1: Should staff lift the limit?\n  - Yes, from the admin page\n  - No\n  Answer: No\n\
+                    - Q-2: How long is the window?\n  - An hour\n  - A day\n\
+                    - **Q-3**: Say when to try again?\n-- yes\n\
+                    - Which mail\n  provider?\n  - **Answer:** the current one\n";
+        assert_eq!(
+            answered(spec),
+            vec![
+                ("Should staff lift the limit?".to_string(), "No".to_string()),
+                ("Say when to try again?".to_string(), "yes".to_string()),
+                ("Which mail provider?".to_string(), "the current one".to_string()),
+            ]
+        );
+        // `-- Answer: x` is one answer, not a dash and the word.
+        assert_eq!(answered("## Open questions\n- Q-1: Ship first?\n-- Answer: \"<1 g\"\n")[0].1, "\"<1 g\"");
+        // Nothing answered, nothing asked, or no such heading.
+        assert!(answered("## Open questions\n- Q-1: Ship first?\n  Answer:\n").is_empty());
+        assert!(answered("## Open questions\nNone.\n").is_empty());
+        assert!(answered("## Requirements\n- R-1: x\n  Answer: y\n").is_empty());
     }
 
     #[test]

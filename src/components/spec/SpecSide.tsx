@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { api } from "../../lib/api";
 import { useSpecs } from "../../lib/specs";
 import { useStore } from "../../store";
@@ -8,16 +8,19 @@ import { Spinner } from "../ui";
 const VERDICT_MARK: Record<string, string> = { met: "✓", "not met": "✗", unclear: "?" };
 
 /**
- * Beside the editor, for one repository: its approved requirements with the
- * last check's answers (SPEC-15), how far its tasks are (SPEC-8), and Start
- * agent, which sets an agent to work through them (SPEC-12).
+ * Beside the editor, for one repository: what the file being edited needs
+ * first (`children`: the open questions of requirements), its approved
+ * requirements with the last check's answers (SPEC-15), how far its tasks
+ * are (SPEC-8), and Start agent, which sets an agent to work through them
+ * (SPEC-12).
  */
-export function SpecSide({ task, repo, repos, agentId, setAgentId }: {
+export function SpecSide({ task, repo, repos, agentId, setAgentId, children }: {
   task: TaskView;
   repo: RepoSpec;
   repos: RepoSpec[];
   agentId: string | null;
   setAgentId: (id: string) => void;
+  children?: ReactNode;
 }) {
   const checking = useSpecs((s) => s.byTask[task.id]?.checking.includes(repo.checkout_id) ?? false);
   const check = useSpecs((s) => s.check);
@@ -61,6 +64,7 @@ export function SpecSide({ task, repo, repos, agentId, setAgentId }: {
 
   return (
     <aside className="spec-side">
+      {children}
       <section>
         <h3>{repo.kind === "bugfix" ? "Expected and unchanged" : "Requirements"}</h3>
         {repo.requirements.length === 0 && repo.parts[0].approved ? (

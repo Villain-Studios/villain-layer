@@ -278,6 +278,7 @@ pub fn run() {
             commands::draft_pr_description,
             commands::optimize_issue_description,
             commands::draft_spec,
+            commands::apply_spec_answers,
             commands::read_spec,
             commands::save_spec_draft,
             commands::approve_spec,

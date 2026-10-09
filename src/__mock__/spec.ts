@@ -5,7 +5,8 @@
  * seeded texts need; `spec.rs` is the real thing.
  */
 import { emit } from "@tauri-apps/api/event";
-import type { RepoSpec, SpecKind, SpecPart, SpecVerdict, TaskSpec } from "../lib/types";
+import { questions } from "../lib/questions";
+import type { AppliedAnswers, RepoSpec, SpecKind, SpecPart, SpecVerdict, TaskSpec } from "../lib/types";
 import type { World } from "./world";
 
 const PARTS: SpecPart[] = ["requirements", "design", "tasks"];
@@ -83,7 +84,12 @@ Password resets are rate-limited, so one address cannot be flooded with reset ma
 - Rate-limiting sign-ins.
 
 ## Open questions
-- Should support staff be able to lift the limit for an address?
+- Q-1: Should support staff be able to lift the limit for an address?
+  - Yes, from the admin page
+  - No
+- Q-2: Should the refusal say when to try again?
+  - Yes, the minutes left
+  - No, only that it was refused
 `,
   design: (folder) => `## Approach
 Count reset requests per address in Redis with a one-hour expiry, in \`${folder}\`.
@@ -106,6 +112,47 @@ Six requests for one address (R-1); two addresses (R-2).
 - [ ] 3. Test one address and two (R-1, R-2)
 `,
 };
+
+/** ACME-130's requirements, drafted and half answered (SPEC-19). */
+const AUDIT_DRAFT = `## Goal
+Admins can see who changed what in the workspace, and when.
+
+## Requirements
+- R-1: WHEN an admin opens the audit log THE SYSTEM SHALL list changes newest first, with who, what and when.
+- R-2: WHEN the list is filtered by person THE SYSTEM SHALL show only that person's changes.
+- R-3: WHEN an entry is older than the kept period THE SYSTEM SHALL leave it out.
+
+## Out of scope
+- Exporting the log.
+
+## Open questions
+- Q-1: How long are entries kept?
+  - 90 days
+  - A year
+  - For good
+  Answer: A year
+- Q-2: Can admins see changes made by other admins?
+  - Yes
+  - Only their own
+- Q-3: Should the page load more as it scrolls, or in pages of 50?
+`;
+
+/**
+ * What Apply answers does here (SPEC-20), roughly: each answered question
+ * becomes a requirement and leaves the list. The real run rewrites the ones
+ * it decides instead.
+ */
+function applied(text: string): string {
+  const qs = questions(text);
+  const head = text.split(/^## Open questions/m)[0].trimEnd();
+  const ids = requirements(text).map((r) => Number(r.id.slice(2)));
+  let next = Math.max(0, ...ids);
+  const added = qs.filter((q) => q.answer).map((q) =>
+    `- R-${++next}: WHEN ${q.text.replace(/\?$/, "").replace(/^\w/, (c) => c.toLowerCase())} THE SYSTEM SHALL do as decided: ${q.answer}.`);
+  const withReqs = head.replace(/(^- R-\d+[^\n]*\n)(?![\s\S]*^- R-\d+)/m, (m) => m + added.map((a) => a + "\n").join(""));
+  const left = qs.filter((q) => !q.answer).map((q) => [`- ${q.id}: ${q.text}`, ...q.options.map((o) => `  - ${o}`)].join("\n"));
+  return `${withReqs}\n\n## Open questions\n${left.length > 0 ? left.join("\n") : "None."}\n`;
+}
 
 function requirements(text: string) {
   const at = text.search(/^## (Requirements|Expected behaviour)/m);
@@ -151,6 +198,9 @@ export function specAnswers(world: World): Record<string, (a: Record<string, unk
       drafts: { design: DRAFT.design("web") },
     });
   }
+
+  // ACME-130: requirements drafted, with questions, one of them answered.
+  if (task("t-audit")) get("t-audit", "c-audit-web").drafts.requirements = AUDIT_DRAFT;
 
   const view = (taskId: string): TaskSpec => {
     const t = task(taskId);
@@ -220,6 +270,29 @@ export function specAnswers(world: World): Record<string, (a: Record<string, unk
         k.drafts[part] = sent;
       }
       return null;
+    },
+    apply_spec_answers: async (a) => {
+      const results: AppliedAnswers[] = [];
+      for (const c of task(a.taskId as string)?.checkouts ?? []) {
+        const k = get(a.taskId as string, c.id);
+        const before = k.drafts.requirements ?? k.approved.requirements;
+        if (!before || !questions(before).some((q) => q.answer)) continue;
+        const after = applied(before);
+        let sent = "";
+        for (const piece of after.match(/[^\n]*\n?/g) ?? []) {
+          await new Promise((r) => setTimeout(r, 30));
+          sent += piece;
+          void emit("spec:draft", { request_id: a.requestId, checkout_id: c.id, text: sent });
+        }
+        k.drafts.requirements = after;
+        const old = requirements(before).map((r) => r.id);
+        results.push({
+          checkout_id: c.id, folder: c.project_name, changed: [],
+          added: requirements(after).map((r) => r.id).filter((id) => !old.includes(id)), removed: [],
+        });
+      }
+      if (results.length === 0) throw "no open question has an answer yet";
+      return results;
     },
     check_spec: async (a) => {
       await new Promise((r) => setTimeout(r, 900));

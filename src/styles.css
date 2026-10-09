@@ -798,13 +798,20 @@ textarea { resize: vertical; font-family: var(--mono); }
   flex: none;
 }
 .modal-toolbar .section-tabs { margin-bottom: 0; }
+/* Wraps: a footer wider than the modal (an agent picker beside the buttons,
+   at a large interface scale) ran off its left edge, which the modal clips,
+   and "Start Claude Code" read "de Code". */
 .modal-foot {
   padding: 10px 16px;
   border-top: 1px solid var(--border);
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
   justify-content: flex-end;
 }
+/* A footer's buttons go to the next line together, at its right. */
+.foot-buttons { display: flex; gap: 8px; margin-left: auto; }
 
 .field { margin-bottom: 12px; }
 /* Direct child only: the picker renders its rows as <label>s, and they must

@@ -188,17 +188,19 @@ export function UpdateFromBase({ task, onClose }: { task: TaskView; onClose: () 
     <>
       {conflicted.length > 0 && <AgentTargetFields task={task} at={at} disabled={busy} />}
       <div className="spacer" />
-      <button className="btn" onClick={onClose} disabled={busy}>Close</button>
-      {conflicted.length > 0 && (
-        <button
-          className="btn btn-primary"
-          disabled={busy || at.stuck}
-          title={at.stuck ? "Install an agent CLI first" : undefined}
-          onClick={() => void handOff()}
-        >
-          {running === 0 ? "Start & resolve" : "Resolve with agent"}
-        </button>
-      )}
+      <div className="foot-buttons">
+        <button className="btn" onClick={onClose} disabled={busy}>Close</button>
+        {conflicted.length > 0 && (
+          <button
+            className="btn btn-primary"
+            disabled={busy || at.stuck}
+            title={at.stuck ? "Install an agent CLI first" : undefined}
+            onClick={() => void handOff()}
+          >
+            {running === 0 ? "Start & resolve" : "Resolve with agent"}
+          </button>
+        )}
+      </div>
     </>
   );
 

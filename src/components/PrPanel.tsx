@@ -371,6 +371,9 @@ export function PrPanel({
   // branch has been through is a line in the list below — kept, so that opening
   // a second attempt does not erase the first from the record.
   const live = rows.filter((r) => r.pr && r.pr.state === "open");
+  // What the word beside it is about, merged ones too: a finished task's
+  // header read "Merged · 0 PRs".
+  const counted = rows.filter((r) => r.pr && (r.pr.state === "open" || r.pr.merged)).length;
   const earlier = rows.flatMap((r) => [
     ...(r.pr && r.pr.state !== "open" ? [{ row: r, pr: r.pr }] : []),
     ...r.past.map((pr) => ({ row: r, pr })),
@@ -451,7 +454,7 @@ export function PrPanel({
               <b>{TASK_REVIEW[review].word}</b>
             </span>
             <span className="muted">
-              {live.length} PR{live.length === 1 ? "" : "s"}
+              {counted} PR{counted === 1 ? "" : "s"}
               {/* A task is only as reviewed as its least reviewed repository. */}
               {review === "incomplete" &&
                 `, ${pending.length} repo${pending.length === 1 ? "" : "s"} still without one`}

@@ -458,11 +458,10 @@ pub(crate) async fn task_prs(
                             // repo merged and another in review read "partly up
                             // for review, one repo still without a PR".
                             if let Some(pr) = super::landed(&all) {
-                                if let Ok(true) = super::advance(state, &checkout, &pr.head_sha).await {
-                                    let (dir, base, head) =
-                                        (PathBuf::from(&checkout.path), checkout.base.clone(), pr.head_sha.clone());
+                                if let Ok(Some(point)) = super::advance(state, &checkout, &pr.head_sha).await {
+                                    let (dir, base) = (PathBuf::from(&checkout.path), checkout.base.clone());
                                     if let Ok(n) = off_runtime(move || {
-                                        git::changed_count(&dir, &base, Some(&head), git::Scope::Branch)
+                                        git::changed_count(&dir, &base, Some(&point), git::Scope::Branch)
                                     })
                                     .await
                                     {

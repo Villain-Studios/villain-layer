@@ -158,7 +158,7 @@ pub use pr_task::*;
 pub use reviewer::*;
 pub use open_prs::*;
 pub use outgoing::*;
-pub(crate) use landed::{advance, landed};
+pub(crate) use landed::{advance, branch_landed, landed};
 pub use notes::*;
 pub use spec::*;
 pub use spec_draft::*;

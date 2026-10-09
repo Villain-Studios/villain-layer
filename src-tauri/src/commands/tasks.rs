@@ -845,16 +845,13 @@ pub async fn finish_task(
             let branches = homes
                 .into_iter()
                 .map(|(checkout_id, repo, path, base)| {
-                    let local = format!("refs/heads/{branch}");
                     // Only a branch its merged PR contains, or one with nothing
                     // of its own. "Merged" is said of the task once every PR
                     // has landed, and a commit made after one did — or in a
                     // repo that never had a PR — lives on this branch alone;
                     // deleting it deleted the work.
-                    let covered = landed
-                        .get(&checkout_id)
-                        .is_some_and(|sha| git::is_ancestor(&path, &local, sha))
-                        || git::is_ancestor(&path, &local, &format!("refs/remotes/origin/{base}"));
+                    let covered =
+                        super::branch_landed(&path, &branch, &base, landed.get(&checkout_id).map(String::as_str));
                     let (ok, detail) = if !git::branch_exists(&path, &branch) {
                         (true, "already gone".to_string())
                     } else if !covered {

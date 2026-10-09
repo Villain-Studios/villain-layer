@@ -183,9 +183,11 @@ the repo count, running agents, uncommitted changes and the review verdict.
   just those checkouts, never left as a folder the app cannot see.
 - **TASK-8** Finish task (offered once every PR has merged) MUST go in
   order: stop agents, remove worktrees, delete each local branch **only if**
-  the merged PR's head or `origin/<base>` contains it, then move the ticket
-  to the chosen done-category status. Each step only runs if the one before
-  succeeded. Remote branches are never touched.
+  the merged PR's head or `origin/<base>` contains it, or the head has the
+  change of every commit on it the base lacks (a branch rebased here after
+  it was pushed), then move the ticket to the chosen done-category status.
+  Each step only runs if the one before succeeded. Remote branches are
+  never touched.
 - **TASK-9** The finish dialog MUST offer only transitions into the `done`
   category. It pre-selects the one into the project's after-merge status
   (TKT-8), or else one only when there is exactly one; otherwise it defaults
@@ -541,6 +543,12 @@ each repo its own team's way.
   Measured from where the branch was cut, merged work stayed in the Diff
   view, the panel's counts, a follow-up PR's description and the agent's
   history, and opening PRs opened a second PR for it.
+  A merged head that is not on the branch here (GitHub's "Update branch",
+  a suggestion committed there, or the branch rebased here after it was
+  pushed) is fetched by its id, and the point moves to the newest commit
+  up to which the head has every commit since it, as it is or as the same
+  change. Asked only whether one contained the other, a repo whose every
+  commit had merged said "has work since", and Finish kept its branch.
 - **UPD-7** Each repo MUST start on its own way of updating: what it is set
   to in Repos, or the way it was last updated; else a guess, in the app's
   copy, from the first of these that says anything:
@@ -568,7 +576,7 @@ each repo its own team's way.
   could not be moved off.
 
 Code: `commands/diff.rs` (`update_from_base`), `git.rs`,
-`git/upkeep.rs` (`update_style`), `commands/landed.rs` (UPD-6 after a merge), `UpdateFromBase.tsx`.
+`git/upkeep.rs` (`update_style`), `commands/landed.rs` and `git/landed.rs` (UPD-6 after a merge), `UpdateFromBase.tsx`.
 
 Known gaps:
 - The guess reads only history. The site's own rules for the base branch
@@ -667,7 +675,7 @@ send feedback to an agent, and finish a merged task.
   gate: with anything flagged, the button reads "Open anyway". A push used
   to be the first time anyone saw the branch whole.
 
-Code: `commands/github.rs`, `commands/open_prs.rs`, `commands/outgoing.rs`, `git/outgoing.rs`, `Outgoing.tsx`, `commands/landed.rs`, `integrations/github.rs`, `PrPanel.tsx`,
+Code: `commands/github.rs`, `commands/open_prs.rs`, `commands/outgoing.rs`, `git/outgoing.rs`, `Outgoing.tsx`, `commands/landed.rs`, `git/landed.rs`, `integrations/github.rs`, `PrPanel.tsx`,
 `PrFeedback.tsx`, `Markdown.tsx`, `lib/markdown.ts`.
 
 Known gaps:

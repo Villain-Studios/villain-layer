@@ -39,6 +39,7 @@ import type {
   Settings,
   SlackConfig,
   StartTo,
+  AppliedAnswers,
   SpecCheck,
   SpecKind,
   SpecPart,
@@ -248,6 +249,9 @@ export const api = {
   /** Draft one file, streamed as `spec:draft`: requirements for every repo, the others for `checkoutId`'s or all. */
   draftSpec: (taskId: string, part: SpecPart, checkoutId: string | null, kind: SpecKind | null, requestId: string) =>
     invoke<void>("draft_spec", { taskId, part, checkoutId, kind, requestId }),
+  /** Build the answered open questions into every repository's requirements, streamed as `spec:draft` (SPEC-20). */
+  applySpecAnswers: (taskId: string, requestId: string) =>
+    invoke<AppliedAnswers[]>("apply_spec_answers", { taskId, requestId }),
   checkSpec: (taskId: string, checkoutId: string) => invoke<SpecCheck>("check_spec", { taskId, checkoutId }),
   /** What Start agent adds to the opening prompt: work through the tasks (SPEC-12). */
   specWorkPrompt: (taskId: string, checkoutId: string | null) =>

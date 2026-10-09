@@ -55,6 +55,15 @@ export interface RepoSpec {
   check: SpecCheck | null;
 }
 
+/** What Apply answers did to one repository's requirements, by id (SPEC-20). */
+export interface AppliedAnswers {
+  checkout_id: string;
+  folder: string;
+  changed: string[];
+  added: string[];
+  removed: string[];
+}
+
 export interface TaskSpec {
   repos: RepoSpec[];
   /** A `SPEC.md` from before, to start the requirements from (SPEC-17). */

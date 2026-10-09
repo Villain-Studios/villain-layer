@@ -1879,11 +1879,16 @@ sent anywhere.
   on a loop and the rounds they sent back, and the tokens summed over the
   runs that said, with how many did; and a bar for each of the last 14
   days, as tall as the runs that ended that day, red for those that went
-  wrong. Tokens are only what an agent says: one over ACP that puts
-  `usage` on its answer to each prompt (Claude's adapter does) has its
-  finished turns summed, as input, output, and read from and written to
-  cache. A terminal agent says nothing, and its tokens are left empty,
-  not counted as zero.
+  wrong. Tokens are only what an agent says, as input, output, and read
+  from and written to cache. One over ACP that puts `usage` on its answer
+  to each prompt (Claude's adapter does) has its finished turns summed.
+  Claude Code in a terminal says nothing while it runs, so its run is
+  read from its own transcripts as it ends: each reply once (it writes a
+  reply as several lines, each with the reply's usage), only replies
+  written while the run lasted (a resumed conversation's transcript holds
+  earlier runs'), in every conversation the pane said it was in (`/clear`
+  starts another), and its subagents' beside them. Any other terminal
+  agent's tokens are left empty, not counted as zero.
 - **RUN-5** The log MUST be kept in `runs.json` beside `config.json`: the
   newest 1,000 runs, written whole by a thread of its own a moment after
   it changes, and on quitting. The view says when it is full. A file that
@@ -1893,14 +1898,20 @@ sent anywhere.
   and their work are not touched.
 
 Code: `runs.rs` (the log, and how a run reads), `pty.rs` (`log_run`, at a
-process's exit), `pty/acp.rs`, `acp/conn.rs` (tokens),
+process's exit), `pty/acp.rs`, `acp/conn.rs` and `agents/usage.rs`
+(tokens),
 `commands/runs.rs`, `lib/runs.ts` (what a run came to, the sums, the
 chart), `RunsView.tsx`.
 
 Known gaps:
-- Tokens are only what an agent over ACP says, and only for turns that
-  finished: a turn stopped early says nothing. A terminal agent's are not
-  read, though Claude Code writes them in its transcript.
+- Tokens are only what an agent over ACP says, for turns that finished (a
+  turn stopped early says nothing), and what Claude Code's transcript says
+  in a terminal. Copilot keeps per-call usage in an undocumented log that
+  names no folder, OpenCode in its own storage, and Gemini has not been
+  looked at: none of them is read.
+- Claude Code's transcript is its own format, not a promise. A line the
+  app cannot read is passed over, so a change to it shows as fewer tokens
+  or none.
 - The token sum counts cache reads, which make up most of a long
   conversation's; each run's split is in its detail.
 - A run keeps only its pane's last loop: a pane put on two loops shows

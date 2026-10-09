@@ -45,7 +45,8 @@ function made(): Run[] {
       end,
       code: end === "stopped" ? 1 : end === "exited" ? 0 : 2,
       loop,
-      tokens: acp
+      // Claude Code says, over ACP or in its transcript; the others do not.
+      tokens: agent === "claude"
         ? { input: Math.floor(next() * 4000), output: Math.floor(next() * 60_000), cached_read: Math.floor(next() * 3_000_000), cached_write: Math.floor(next() * 200_000) }
         : null,
     });

@@ -8,9 +8,11 @@ use serde::Serialize;
 use crate::shellenv;
 
 mod sessions;
+mod usage;
 
 pub(crate) use sessions::session_dir;
 pub use sessions::{resumable, Resumable};
+pub(crate) use usage::transcript_tokens;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PromptMode {

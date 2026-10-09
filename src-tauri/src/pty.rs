@@ -169,6 +169,9 @@ struct PaneMeta {
     /// The conversation the agent last said it is in, from its hooks: what
     /// a restart resumes (PANE-14).
     session: Option<String>,
+    /// Every one it has said it was in, for its run's tokens (RUN-4):
+    /// `/clear` starts a new conversation in the same process.
+    conversations: Vec<String>,
     /// On a loop that is running (LOOP-8). Between turns the app is still at
     /// work on it, checking what the turn did, so the end of one is not your
     /// turn: counted as done, every round woke the dock and a banner.
@@ -634,6 +637,7 @@ impl PtyManager {
                 cleared_notice: None,
                 notice_at: now,
                 session: None,
+                conversations: Vec::new(),
                 looping: false,
                 turns: tokio::sync::watch::Sender::new(0),
             }),
@@ -1070,7 +1074,12 @@ impl PtyManager {
 
     /// Which conversation the agent says it is in, from its hooks.
     pub fn note_session(&self, id: &str, session: String) -> Result<()> {
-        self.get(id)?.meta.lock().session = Some(session);
+        let pane = self.get(id)?;
+        let mut meta = pane.meta.lock();
+        if !meta.conversations.contains(&session) {
+            meta.conversations.push(session.clone());
+        }
+        meta.session = Some(session);
         Ok(())
     }
 
@@ -1278,16 +1287,19 @@ impl PtyManager {
 /// pane reads as exited, so quitting, which waits for that, finds the run
 /// in memory to save.
 fn log_run<R: Runtime>(app: &AppHandle<R>, pane: &Pane, code: Option<i32>) {
-    let (info, born, stopping) = {
+    let (info, born, stopping, conversations) = {
         let meta = pane.meta.lock();
-        (meta.info.clone(), meta.born, meta.stopping)
+        (meta.info.clone(), meta.born, meta.stopping, meta.conversations.clone())
     };
     if info.kind != PaneKind::Agent {
         return;
     }
     let tokens = match &pane.io {
         Io::Acp(conn) => conn.tokens(),
-        Io::Pty { .. } => None,
+        // A terminal says nothing of them; Claude Code's transcript does.
+        Io::Pty { .. } => info.agent_id.as_deref().and_then(|agent| {
+            crate::agents::transcript_tokens(agent, &info.cwd, &conversations, born, Utc::now())
+        }),
     };
     crate::runs::record(app, crate::runs::Ended { info, born, stopping, code, tokens });
 }
@@ -1328,6 +1340,7 @@ mod tests {
             cleared_notice: None,
             notice_at: now,
             session: None,
+            conversations: Vec::new(),
             looping: false,
             turns: tokio::sync::watch::Sender::new(0),
         }
@@ -1633,6 +1646,38 @@ mod tests {
             "closing a shell took {:?}",
             started.elapsed()
         );
+    }
+
+    /// `/clear` starts a new conversation in the same process. Its run's
+    /// tokens are in both (RUN-4); a restart resumes the last (PANE-14).
+    #[test]
+    fn a_pane_keeps_every_conversation_it_has_had_and_resumes_the_last() {
+        let app = tauri::test::mock_app();
+        let ptys = PtyManager::default();
+        let opts = SpawnOptions {
+            task_id: "t".into(),
+            checkout_id: None,
+            cwd: std::env::temp_dir().to_string_lossy().to_string(),
+            kind: PaneKind::Agent,
+            title: "Claude Code".into(),
+            program: "/bin/sh".into(),
+            args: vec!["-c".into(), "sleep 5".into()],
+            agent_id: Some("claude".into()),
+            rows: None,
+            cols: None,
+            initial_input: None,
+            prompted: false,
+            env: Vec::new(),
+            title_activity: None,
+            title_topic: None,
+        };
+        let id = ptys.spawn(app.handle(), opts).unwrap().id;
+        for said in ["first", "after-clear", "first"] {
+            ptys.note_session(&id, said.into()).unwrap();
+        }
+        assert_eq!(ptys.session(&id).unwrap().as_deref(), Some("first"));
+        assert_eq!(ptys.get(&id).unwrap().meta.lock().conversations, ["first", "after-clear"]);
+        ptys.kill(&id).unwrap();
     }
 
     /// A 1,090-byte hand-off reached Claude Code as its last 68 bytes: the

@@ -12,7 +12,7 @@
 use serde::Serialize;
 use tauri::State;
 
-use crate::config::{FlowStatus, Task};
+use crate::config::{FlowStatus, StartTo, Task, TicketFlow};
 use crate::error::{Error, Result};
 use crate::integrations::jira::{Jira, ProjectStatus};
 
@@ -98,7 +98,7 @@ pub(crate) async fn follow(state: &AppState, client: &Jira, task: &Task, rows: &
         out.unchosen = true;
         return Some(out);
     };
-    match move_to(client, &key, &target, stage).await {
+    match move_to(client, &key, &target, stage == Stage::Review).await {
         Ok(moved) => out.moved_to = moved,
         // The network: tried again next sweep.
         Err(e @ Error::Http(_)) => {
@@ -119,10 +119,11 @@ pub(crate) async fn follow(state: &AppState, client: &Jira, task: &Task, rows: &
     (out.moved_to.is_some() || out.error.is_some()).then_some(out)
 }
 
-async fn move_to(client: &Jira, key: &str, target: &FlowStatus, stage: Stage) -> Result<Option<String>> {
+/// Move `key` to `target`, unless it is there already, or, with
+/// `not_from_done`, closed: review is never a way back out of done.
+async fn move_to(client: &Jira, key: &str, target: &FlowStatus, not_from_done: bool) -> Result<Option<String>> {
     let issue = client.issue(key).await?;
-    // Already there, or closed by hand: review is never a way back out of done.
-    if issue.status_id == target.id || (issue.status_category == "done" && stage == Stage::Review) {
+    if issue.status_id == target.id || (issue.status_category == "done" && not_from_done) {
         return Ok(None);
     }
     let transitions = client.transitions(key).await?;
@@ -134,6 +135,47 @@ async fn move_to(client: &Jira, key: &str, target: &FlowStatus, stage: Stage) ->
     })?;
     client.transition(key, &way.id).await?;
     Ok(Some(target.name.clone()))
+}
+
+/// Where `flow` sends a ticket when work starts. A project with nothing
+/// chosen goes as the old switch in General said, so a ticket of one whose
+/// user had turned it off still stays put.
+pub(crate) fn start_to(flow: Option<&TicketFlow>, sync_jira_status: bool) -> StartTo {
+    match flow.and_then(|f| f.started.clone()) {
+        Some(to) => to,
+        None if sync_jira_status => StartTo::FirstInProgress,
+        None => StartTo::Leave,
+    }
+}
+
+/// Move a ticket as its project says when work starts on it (TKT-1), and
+/// say where to, when it moved.
+///
+/// Starting work in two places and telling Jira about neither is how a board
+/// ends up disagreeing with the app: the ticket reads Open while a branch,
+/// a worktree and an agent are all running against it. Best effort — a
+/// workflow that will not allow the move, or an account that may not make it,
+/// is not a reason to undo a task that was created successfully.
+pub(crate) async fn started(state: &AppState, key: &str) -> Option<String> {
+    let to = {
+        let cfg = state.config.read();
+        let project = key.split('-').next().unwrap_or_default();
+        start_to(cfg.jira.as_ref().and_then(|j| j.flow.get(project)), cfg.ui.sync_jira_status)
+    };
+    let (client, _) = super::jira_client(state).ok()?;
+    let moved = match to {
+        StartTo::Leave => return None,
+        StartTo::FirstInProgress => client.start_progress(key).await,
+        // Out of done too: work starting on a closed ticket opens it again.
+        StartTo::Status { id, name } => move_to(&client, key, &FlowStatus { id, name }, false).await,
+    };
+    match moved {
+        Ok(moved) => moved,
+        Err(e) => {
+            eprintln!("could not move {key} as work started: {e}");
+            None
+        }
+    }
 }
 
 /// The statuses a Jira project's tickets can be in, to choose from.
@@ -166,10 +208,43 @@ pub fn set_ticket_flow(
     })?
 }
 
+/// Choose where a project's tickets go when work on them starts (TKT-1).
+#[tauri::command]
+pub fn set_ticket_start(state: State<AppState>, project_key: String, to: StartTo) -> Result<()> {
+    state.config.update(|c| {
+        let Some(jira) = c.jira.as_mut() else {
+            return Err(Error::NotConfigured("Jira"));
+        };
+        jira.flow.entry(project_key.clone()).or_default().started = Some(to.clone());
+        Ok(())
+    })?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::integrations::github::PullRequest;
+
+    #[test]
+    fn work_starting_goes_where_the_project_says_and_else_as_the_old_switch_did() {
+        let status = StartTo::Status { id: "3".into(), name: "In Progress".into() };
+        let chosen = TicketFlow { started: Some(status.clone()), ..Default::default() };
+        assert_eq!(start_to(Some(&chosen), false), status);
+        let left = TicketFlow { started: Some(StartTo::Leave), ..Default::default() };
+        assert_eq!(start_to(Some(&left), true), StartTo::Leave);
+        assert_eq!(start_to(Some(&TicketFlow::default()), true), StartTo::FirstInProgress);
+        assert_eq!(start_to(None, false), StartTo::Leave, "switched off in General, before it could be chosen here");
+    }
+
+    #[test]
+    fn a_start_choice_is_kept_as_a_tagged_object_and_an_old_flow_still_reads() {
+        let json = serde_json::to_string(&StartTo::Status { id: "3".into(), name: "In Progress".into() }).unwrap();
+        assert_eq!(json, r#"{"to":"status","id":"3","name":"In Progress"}"#);
+        let back: StartTo = serde_json::from_str(r#"{"to":"first_in_progress"}"#).unwrap();
+        assert_eq!(back, StartTo::FirstInProgress);
+        let old: TicketFlow = serde_json::from_str(r#"{"review":null,"merged":null}"#).unwrap();
+        assert!(old.started.is_none());
+    }
 
     fn row(state: &str, draft: bool, merged: bool, changed: usize) -> CheckoutPr {
         CheckoutPr {

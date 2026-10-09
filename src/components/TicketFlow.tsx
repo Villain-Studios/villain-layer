@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, errMessage } from "../lib/api";
-import type { FlowStatus, JiraTransition, ProjectStatus, Settings, TicketFlow } from "../lib/types";
+import type { FlowStatus, JiraTransition, ProjectStatus, Settings, StartTo, TicketFlow } from "../lib/types";
 import { useStore } from "../store";
 import { Field } from "./ui";
 
@@ -21,9 +21,10 @@ export function mergedTransition(all: JiraTransition[], flow: TicketFlow | undef
 }
 
 /**
- * Where tickets go as the work moves (TKT-8), per Jira project. Chosen here
- * once: Review and In Progress share Jira's "in progress" category, and the
- * app never goes by a status's name.
+ * Where tickets go as the work moves (TKT-1, TKT-8), per Jira project.
+ * Chosen here once: Review and In Progress share Jira's "in progress"
+ * category, and the app never goes by a status's name. Where a ticket goes
+ * when work starts was a switch in General, out of sight of the rest.
  */
 export function TicketFlowSettings() {
   const settings = useStore((s) => s.settings);
@@ -47,6 +48,20 @@ export function TicketFlowSettings() {
     }
   }, [wanted]);
 
+  async function chooseStart(project: string, value: string) {
+    const list = statuses[project];
+    const picked = Array.isArray(list) ? list.find((s) => s.id === value) : undefined;
+    const to: StartTo = picked
+      ? { to: "status", id: picked.id, name: picked.name }
+      : value === "leave" ? { to: "leave" } : { to: "first_in_progress" };
+    try {
+      await api.setTicketStart(project, to);
+      await refreshSettings();
+    } catch (e) {
+      fail(e);
+    }
+  }
+
   async function choose(project: string, stage: "review" | "merged", id: string) {
     const list = statuses[project];
     const picked = Array.isArray(list) ? list.find((s) => s.id === id) : undefined;
@@ -64,7 +79,7 @@ export function TicketFlowSettings() {
     <div style={{ marginTop: 22 }}>
       <Field
         label="Tickets follow the work"
-        hint="Where a ticket goes when a pull request of its task is ready for review (not a draft), and when every one has merged. Each happens once per task: a ticket you move by hand afterwards stays where you put it."
+        hint="Where a ticket goes when work on it starts, when a pull request of its task is ready for review (not a draft), and when every one has merged. Each happens once per task: a ticket you move by hand afterwards stays where you put it."
       >
         {projects.map((p) => {
           const list = statuses[p];
@@ -81,6 +96,21 @@ export function TicketFlowSettings() {
               ))}
             </select>
           );
+          // Until chosen here, as the switch that came before said (TKT-1).
+          const started = flow?.started ?? (settings?.ui.sync_jira_status === false ? { to: "leave" } : { to: "first_in_progress" });
+          const start = (
+            <select
+              value={started.to === "status" ? started.id : started.to === "leave" ? "leave" : ""}
+              style={{ width: "auto" }}
+              onChange={(e) => void chooseStart(p, e.target.value)}
+            >
+              <option value="">first in-progress status</option>
+              {Array.isArray(list) && list.filter((s) => s.category === "indeterminate").map((s) => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+              <option value="leave">leave the ticket</option>
+            </select>
+          );
           return (
             <div key={p} className="row" style={{ gap: 10, flexWrap: "wrap", marginBottom: 8, fontSize: 13 }}>
               <b className="mono" style={{ minWidth: 60 }}>{p}</b>
@@ -90,6 +120,8 @@ export function TicketFlowSettings() {
                 <span className="muted">Reading its statuses…</span>
               ) : (
                 <>
+                  <span className="muted">work starts →</span>
+                  {start}
                   <span className="muted">PR ready for review →</span>
                   {pick("review", flow?.review)}
                   <span className="muted">every PR merged →</span>

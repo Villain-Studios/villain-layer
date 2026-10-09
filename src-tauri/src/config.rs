@@ -18,7 +18,7 @@ use crate::error::{Error, Result};
 mod integrations;
 mod browser;
 mod phone;
-pub use integrations::{FlowStatus, GithubConfig, JiraConfig, SlackConfig};
+pub use integrations::{FlowStatus, GithubConfig, JiraConfig, SlackConfig, StartTo, TicketFlow};
 pub use browser::{BrowserConfig, SavedSignIn, SavedTabs};
 pub use phone::{PhoneConfig, PhoneDevice};
 

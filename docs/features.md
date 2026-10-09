@@ -692,9 +692,16 @@ offers Start work.
   which it was ("preselected from the last task under ACME-100"), so a
   stale guess is visible. It picks
   a base, optionally starts an agent with the ticket as the prompt (or,
-  with "Write a spec first", leaves that to the Spec tab, SPEC-6), and,
-  when "Move the ticket when work starts" is on, moves the ticket to the
-  first in-progress (`indeterminate`) status.
+  with "Write a spec first", leaves that to the Spec tab, SPEC-6), and
+  moves the ticket where its project's "work starts →" says, beside the
+  other stages of Tickets follow the work (TKT-8): to the first
+  in-progress (`indeterminate`) status its workflow allows, unless it is
+  in that category already (the default); to a status chosen there,
+  unless it is there already, out of done too; or nowhere. A project
+  with nothing chosen goes as the switch in General that came before
+  said, on or off. That switch was out of sight of the other stages, and
+  a ticket moved to the first in-progress status of a workflow with
+  several could only be left or taken there.
 - **TKT-2** Nothing MUST depend on a site's names. Epics are types at
   hierarchy level 1 or above. "In progress" and "done" are status
   categories. The Epic Link field is found by its schema. The default type
@@ -974,7 +981,6 @@ Known gaps:
 | Agents waiting on you | on | banners and the dock count; the message center keeps them either way (MSG-2) |
 | Put terminals back when the app reopens | on | PANE-7 |
 | Let agents read terminal output | **off** | MCP `pane_output`, `handoff_prompt` |
-| Move the ticket when work starts | on | TKT-1 |
 | Reviewer | Sonnet | the model Review runs on (DIFF-6) |
 | Keep awake (the cup in the top bar) | off | STATE-7, PHONE-8 |
 | Phone: Tailscale | off | PHONE-1, PHONE-2 |
@@ -982,7 +988,7 @@ Known gaps:
 | Phone: Let phones type into agents | off | PHONE-7 |
 | Browser: sites agents may use | none: this machine's pages only | BRW-3, BRW-11 |
 | Browser: saved sign-ins | none | BRW-18 |
-| Tickets follow the work (Jira) | not chosen | TKT-8, per Jira project |
+| Tickets follow the work (Jira) | work starts: first in-progress status; review, merged: not chosen | TKT-1, TKT-8, per Jira project |
 | Trust the folders this app creates | on | PANE-10 |
 | Terminal text | 13px | 9–24px |
 | Conversation text | 14px | 9–24px, an agent over ACP (ACP-15) |

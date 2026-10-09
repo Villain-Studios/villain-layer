@@ -990,27 +990,6 @@ pub async fn jira_create_issue(state: State<'_, AppState>, req: NewIssue) -> Res
     client.issue(&key).await
 }
 
-/// Move a ticket into progress alongside the worktrees, if that is wanted.
-///
-/// Starting work in two places and telling Jira about neither is how a board
-/// ends up disagreeing with the app: the ticket reads Open while a branch,
-/// a worktree and an agent are all running against it. Best effort — a
-/// workflow that will not allow the move, or an account that may not make it,
-/// is not a reason to undo a task that was created successfully.
-pub(crate) async fn sync_started(state: &AppState, key: &str) -> Option<String> {
-    if !state.config.read().ui.sync_jira_status {
-        return None;
-    }
-    let (client, _) = jira_client(state).ok()?;
-    match client.start_progress(key).await {
-        Ok(moved) => moved,
-        Err(e) => {
-            eprintln!("could not move {key} into progress: {e}");
-            None
-        }
-    }
-}
-
 /// Move a ticket into progress on request, for one that fell out of step.
 ///
 /// Tasks created before this app moved tickets — or while the setting was off,
@@ -1090,7 +1069,7 @@ pub async fn jira_start_work(
         .await?;
     }
 
-    let moved = sync_started(&state, &issue.key).await;
+    let moved = super::ticket_flow::started(&state, &issue.key).await;
     Ok(Started { task, moved })
 }
 

@@ -45,6 +45,7 @@ export function Terminals({ task }: { task: TaskView }) {
   const [promptLoading, setPromptLoading] = useState(false);
   /** Start it as a conversation over ACP (§20); remembered for the next launch. */
   const [asAcp, setAsAcp] = useState(() => read<boolean>("launchAcp", false));
+  const chooseAcp = (v: boolean) => { setAsAcp(v); write("launchAcp", v); };
   /** Panes whose ✕ was pressed, still waiting on their grace period. */
   const [closing, setClosing] = useState<Set<string>>(new Set());
   /**
@@ -202,8 +203,16 @@ export function Terminals({ task }: { task: TaskView }) {
     })),
     ...installed.map((a, i) => ({
       label: a.name,
-      onSelect: () => setLaunching(a.id),
+      onSelect: () => { chooseAcp(false); setLaunching(a.id); },
       separated: i === 0 && offerResume.length > 0,
+    })),
+    // The same agents as a conversation the app draws (§20), as the Chat
+    // view offers them. Behind the launch dialog's switch alone, nobody
+    // looking at this menu found them.
+    ...installed.filter((a) => a.acp).map((a, i) => ({
+      label: `${a.name} · conversation (ACP)`,
+      onSelect: () => { chooseAcp(true); setLaunching(a.id); },
+      separated: i === 0,
     })),
     {
       label: "Shell",
@@ -548,7 +557,7 @@ export function Terminals({ task }: { task: TaskView }) {
               label="As a conversation (ACP)"
               detail="The app draws it instead of a terminal: questions as buttons, prompts of any length."
               checked={asAcp}
-              onChange={(v) => { setAsAcp(v); write("launchAcp", v); }}
+              onChange={chooseAcp}
             />
           )}
           <div className="muted" style={{ fontSize: 11 }}>

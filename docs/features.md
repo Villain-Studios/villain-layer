@@ -253,11 +253,12 @@ Known gaps:
 ## 3. Agents and terminals
 
 A task's Terminals tab holds its panes. "+" starts an agent (with an
-opening prompt made from the ticket, which can be edited), resumes one, or
-opens a shell. When a task has several repos, a pane can be scoped to the
-whole task or to one repo. A pane can be handed off to another agent, or
-closed. The All agents view lists every agent pane in every task, with the
-ones that need you first.
+opening prompt made from the ticket, which can be edited), in a terminal
+or as a conversation (§20), resumes one, or opens a shell. When a task
+has several repos, a pane can be scoped to the whole task or to one
+repo. A pane can be handed off to another agent, or closed. The All
+agents view lists every agent pane in every task, with the ones that
+need you first.
 
 | id | CLI | How it reports its state | How it gets the app's tools | Resume |
 |---|---|---|---|---|
@@ -1553,8 +1554,10 @@ count and banner treats it like any other.
 | `gemini` | `gemini --acp` | load | 0.63.0, `initialize` only: it would not open a conversation for a personal Google account |
 
 - **ACP-1** ACP MUST be offered only for an agent whose catalogue entry
-  has an ACP command, and only when that command is on the PATH. The
-  launch dialog remembers the last choice.
+  has an ACP command, and only when that command is on the PATH. A
+  task's "+" and the Chat view's list each such agent a second time, as
+  "· conversation (ACP)". The launch dialog remembers the last choice,
+  made there or in the menu.
 - **ACP-2** An ACP pane's state MUST come from the protocol, never from
   its output: a `session/prompt` in flight is working, an unanswered
   `session/request_permission` is asking, the prompt's answer is done
@@ -1641,9 +1644,9 @@ Known gaps:
 - Codex (`codex-acp`), Cursor, Goose and the rest of the ACP registry are
   not in the catalogue: each needs checking against a real install first,
   as PANE-1 asks.
-- Only the launch dialog and the Chat view offer ACP. Start work, Start
-  agent on a spec, the Diff tab's "send to an agent" and a handoff start a
-  terminal.
+- Only a task's "+", its launch dialog and the Chat view offer ACP.
+  Resume, Start work, Start agent on a spec, the Diff tab's "send to an
+  agent" and a handoff start a terminal.
 - Drafting PR and ticket descriptions still runs `claude -p` (§3).
 - The slash commands an agent offers are only suggested as `/` is typed.
 

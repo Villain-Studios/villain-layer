@@ -15,7 +15,6 @@ import type {
   ReviewQueue,
   ReviewerRun,
   Settings,
-  Spec,
   Target,
   TaskView,
   TicketMove,
@@ -75,21 +74,6 @@ export interface ReviewerState {
   at: number;
   last: ReviewerRun | null;
   error: string | null;
-}
-
-/**
- * A task's spec as the Spec tab holds it (SPEC-3). Held here rather than in
- * the tab, so an edit or a draft under way survives switching tabs or tasks.
- */
-export interface SpecState {
-  /** Read from the task folder at least once. */
-  loaded: boolean;
-  /** What is saved; null when there is none. */
-  saved: Spec | null;
-  /** The editor's text, when it is not what is saved. */
-  edit: string | null;
-  /** The draft being streamed into the editor, by its request. */
-  drafting: string | null;
 }
 
 interface State {
@@ -197,19 +181,6 @@ interface State {
   /** The reviewer pass, by task id (DIFF-6). */
   reviewer: Record<string, ReviewerState>;
   runReviewer: (taskId: string) => Promise<void>;
-  /** Specs, by task id (§19). */
-  specs: Record<string, SpecState>;
-  loadSpec: (taskId: string) => Promise<void>;
-  editSpec: (taskId: string, text: string) => void;
-  /** Save the editor's text as the spec, and give it to the task's agents. */
-  saveSpec: (taskId: string) => Promise<void>;
-  /** Write a draft into the editor; on failure the editor gets back what it held. */
-  draftSpec: (taskId: string) => Promise<void>;
-  /** A piece of a draft under way (`spec:draft`). */
-  specChunk: (requestId: string, text: string) => void;
-  /** The agent Start work picked, for the Spec tab to start once the spec is agreed (SPEC-6). */
-  pendingSpec: { taskId: string; agentId: string | null } | null;
-  setPendingSpec: (p: { taskId: string; agentId: string | null } | null) => void;
   refreshSettings: () => Promise<void>;
   /** `quiet` is a timer tick: no toast, and no spinner over a list already shown. */
   refreshIssues: (opts?: { quiet?: boolean }) => Promise<void>;
@@ -382,11 +353,6 @@ export const useStore = create<State>((set, get) => {
     watchStreak += 1;
     if (watchStreak >= 2) set({ watchFailing: true });
   };
-  const putSpec = (taskId: string, part: Partial<SpecState>) =>
-    set((s) => {
-      const prev = s.specs[taskId] ?? { loaded: false, saved: null, edit: null, drafting: null };
-      return { specs: { ...s.specs, [taskId]: { ...prev, ...part } } };
-    });
 
   return {
   projects: [],
@@ -621,41 +587,6 @@ export const useStore = create<State>((set, get) => {
     prsFetchedAt.set(taskId, Date.now());
     set((s) => ({ prs: { ...s.prs, [taskId]: rows } }));
   },
-
-  specs: {},
-  loadSpec: async (taskId) => {
-    const saved = await api.readSpec(taskId);
-    putSpec(taskId, { loaded: true, saved });
-  },
-  editSpec: (taskId, text) => {
-    const saved = get().specs[taskId]?.saved?.text ?? "";
-    putSpec(taskId, { edit: text.trim() === saved.trim() ? null : text });
-  },
-  saveSpec: async (taskId) => {
-    const spec = get().specs[taskId];
-    const saved = await api.saveSpec(taskId, spec?.edit ?? spec?.saved?.text ?? "");
-    putSpec(taskId, { loaded: true, saved, edit: null });
-  },
-  draftSpec: async (taskId) => {
-    const before = get().specs[taskId];
-    if (before?.drafting) return;
-    const requestId = `spec-${crypto.randomUUID()}`;
-    putSpec(taskId, { drafting: requestId, edit: "" });
-    try {
-      const text = await api.draftSpec(taskId, requestId);
-      putSpec(taskId, { drafting: null });
-      get().editSpec(taskId, text.trim());
-    } catch (e) {
-      putSpec(taskId, { drafting: null, edit: before?.edit ?? null });
-      get().fail(e);
-    }
-  },
-  specChunk: (requestId, text) => {
-    const entry = Object.entries(get().specs).find(([, s]) => s.drafting === requestId);
-    if (entry) putSpec(entry[0], { edit: (entry[1].edit ?? "") + text });
-  },
-  pendingSpec: null,
-  setPendingSpec: (pendingSpec) => set({ pendingSpec }),
 
   refreshSettings: async () => {
     const before = get().settings;

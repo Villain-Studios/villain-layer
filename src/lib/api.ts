@@ -38,7 +38,10 @@ import type {
   RepoOutgoing,
   Settings,
   SlackConfig,
-  Spec,
+  SpecCheck,
+  SpecKind,
+  SpecPart,
+  TaskSpec,
   Started,
   Synced,
   Task,
@@ -234,10 +237,25 @@ export const api = {
       description: args.description,
       kind: args.kind,
     }),
-  readSpec: (taskId: string) => invoke<Spec | null>("read_spec", { taskId }),
-  saveSpec: (taskId: string, text: string) => invoke<Spec | null>("save_spec", { taskId, text }),
-  draftSpec: (taskId: string, requestId: string) =>
-    invoke<string>("draft_spec", { taskId, requestId }),
+  readSpec: (taskId: string) => invoke<TaskSpec>("read_spec", { taskId }),
+  /** Keep what the editor holds for one file; null lets it go (SPEC-6). */
+  saveSpecDraft: (taskId: string, checkoutId: string, part: SpecPart, text: string | null) =>
+    invoke<void>("save_spec_draft", { taskId, checkoutId, part, text }),
+  /** Approve files of one repository's spec: written, and committed in a repo that keeps specs. */
+  approveSpec: (taskId: string, checkoutId: string, texts: { part: SpecPart; text: string }[], kind: SpecKind | null) =>
+    invoke<TaskSpec>("approve_spec", { taskId, checkoutId, texts, kind }),
+  /** Draft one file, streamed as `spec:draft`: requirements for every repo, the others for `checkoutId`'s or all. */
+  draftSpec: (taskId: string, part: SpecPart, checkoutId: string | null, kind: SpecKind | null, requestId: string) =>
+    invoke<void>("draft_spec", { taskId, part, checkoutId, kind, requestId }),
+  checkSpec: (taskId: string, checkoutId: string) => invoke<SpecCheck>("check_spec", { taskId, checkoutId }),
+  /** What Start agent adds to the opening prompt: work through the tasks (SPEC-12). */
+  specWorkPrompt: (taskId: string, checkoutId: string | null) =>
+    invoke<string>("spec_work_prompt", { taskId, checkoutId }),
+  /** Tell the task's running agents the spec changed (SPEC-14); how many were told. */
+  tellSpecChange: (taskId: string, checkoutId: string, parts: SpecPart[]) =>
+    invoke<number>("tell_spec_change", { taskId, checkoutId, parts }),
+  setProjectSpecs: (projectId: string, inApp: boolean, folder: string) =>
+    invoke<void>("set_project_specs", { projectId, inApp, folder }),
   requestPrDescription: (taskId: string, paneId: string) =>
     invoke<string>("request_pr_description", { taskId, paneId }),
   takePrDescription: (taskId: string) =>

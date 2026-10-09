@@ -19,6 +19,7 @@ mod previous;
 mod pty;
 mod secrets;
 mod shellenv;
+mod spec;
 mod target;
 
 use commands::AppState;
@@ -269,7 +270,12 @@ pub fn run() {
             commands::optimize_issue_description,
             commands::draft_spec,
             commands::read_spec,
-            commands::save_spec,
+            commands::save_spec_draft,
+            commands::approve_spec,
+            commands::check_spec,
+            commands::spec_work_prompt,
+            commands::tell_spec_change,
+            commands::set_project_specs,
             commands::request_pr_description,
             commands::take_pr_description,
             commands::github_connect,

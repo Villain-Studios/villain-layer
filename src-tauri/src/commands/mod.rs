@@ -134,6 +134,7 @@ mod outgoing;
 mod landed;
 mod task_context;
 mod spec;
+mod spec_draft;
 mod notes;
 mod phone;
 mod browser;
@@ -160,6 +161,7 @@ pub use outgoing::*;
 pub(crate) use landed::{advance, landed};
 pub use notes::*;
 pub use spec::*;
+pub use spec_draft::*;
 pub use phone::*;
 pub use browser::*;
 pub use loops::*;
@@ -182,6 +184,8 @@ mod tests {
             store: None,
             update_by: None,
             check: None,
+            spec_folder: None,
+            specs_in_app: false,
         }
     }
 

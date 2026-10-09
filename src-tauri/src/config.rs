@@ -48,6 +48,12 @@ pub struct Project {
     /// worktree by a loop (LOOP-1). Set only by the user.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub check: Option<String>,
+    /// Where specs are committed here (SPEC-1), from its root. None: `specs`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spec_folder: Option<String>,
+    /// Specs are kept by the app instead of committed here (SPEC-3).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub specs_in_app: bool,
 }
 
 impl Project {

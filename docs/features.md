@@ -604,7 +604,8 @@ send feedback to an agent, and finish a merged task.
   one (UPD-4). Never `--force`. Pushes run in every repo at once.
 - **PR-4** The description can be drafted. A one-shot model run gets the
   commits, the stat and the diff (lockfiles left out, 60k characters at
-  most) and streams its answer into the field. Failing that, a running
+  most), and the spec's requirements with their check (SPEC-16), and
+  streams its answer into the field. Failing that, a running
   agent is asked to write `PR_DESCRIPTION.md` in the task folder.
 - **PR-5** Review threads MUST be read in full: every page, resolved and
   outdated flags kept. A verdict is each reviewer's latest decisive review.
@@ -695,7 +696,7 @@ offers Start work.
   which it was ("preselected from the last task under ACME-100"), so a
   stale guess is visible. It picks
   a base, optionally starts an agent with the ticket as the prompt (or,
-  with "Write a spec first", leaves that to the Spec tab, SPEC-6), and,
+  with "Write a spec first", leaves that to the Spec tab, SPEC-18), and,
   when "Move the ticket when work starts" is on, moves the ticket to the
   first in-progress (`indeterminate`) status.
 - **TKT-2** Nothing MUST depend on a site's names. Epics are types at
@@ -926,6 +927,7 @@ credentials themselves.
 | `remember` | keep a lasting fact about a repository, after asking the user (MEM-1) | yes |
 | `check_note` | say a note still holds, as of now | |
 | `forget_note` | remove a note that no longer holds, with a reason for the message center | yes |
+| `spec_task` | tick (or untick) a numbered step of a repository's spec `tasks.md` (SPEC-13) | |
 | `browser_navigate` | open a page in the task's browser tab (BRW-3), and get its outline | |
 | `browser_back` | back one page | |
 | `browser_snapshot` | the page as an outline, each element it can act on numbered | |
@@ -1022,7 +1024,7 @@ Known gaps:
 | `~/Library/Application Support/eu.codevillain.villain-layer/` | `config.json`: repos, tasks, settings, saved panes. `messages.json`: the message center (MSG-4). `notes.json`: repo notes (MEM-7). At agent launch also `.mcp.json` (0600), `claude-hooks.json`, `copilot-plugin/`, `opencode-plugin.js` |
 | Keychain, service `eu.codevillain.villain-layer` | one item holding every token, paired phones' included (PHONE-3), and the passwords of the browser's saved sign-ins (BRW-18) |
 | `~/.villain-worktrees/` (settable) | task folders, `_chat/` rooms, and `.repos/`: the app's own copy of each repo (REPO-4) |
-| a task folder | the worktrees, `AGENTS.md` and `CLAUDE.md` (task context), `TICKET.md` (PANE-13), `SPEC.md` (SPEC-3), `.mcp.json`, and `.gemini/settings.json`, `PR_DESCRIPTION.md`, `PR_FEEDBACK.md`, and hand-offs too long to type (`CONFLICTS.md`, `REVIEW_COMMENTS.md`, `PR_DRAFT_REQUEST.md`, `FIRST_PROMPT.md`, `CHECKS.md` (LOOP-6), PANE-11) as they come up |
+| a task folder | the worktrees, `AGENTS.md` and `CLAUDE.md` (task context), `TICKET.md` (PANE-13), `.spec-drafts/`: spec drafts and checks (SPEC-6, SPEC-15), `.mcp.json`, and `.gemini/settings.json`, `PR_DESCRIPTION.md`, `PR_FEEDBACK.md`, and hand-offs too long to type (`CONFLICTS.md`, `REVIEW_COMMENTS.md`, `PR_DRAFT_REQUEST.md`, `FIRST_PROMPT.md`, `CHECKS.md` (LOOP-6), PANE-11) as they come up |
 | `~/.claude.json` | trust entries for the app's own folders only (PANE-10) |
 | `<config folder>/browser/` | the browser's own Chrome profile (BRW-1): cookies, sign-ins and storage of the pages opened there |
 | `~/Library/Logs/villain-layer/panic.log` | a crash's location and backtrace |
@@ -1031,7 +1033,8 @@ The dev build uses `eu.codevillain.villain-layer.dev` for its config folder
 and keychain item instead.
 
 - **DISK-1** Nothing generated MUST ever be written inside a worktree,
-  where it would end up in a commit.
+  where it would end up in a commit. The one exception is a spec the user
+  approved (SPEC-1), which is meant to be committed.
 - **DISK-2** Deleting a task MUST remove what the app generated in its
   folder, and what others leave there that goes with it (Claude Code's
   `.claude/settings.local.json`, Finder's `.DS_Store`), and then the
@@ -1366,62 +1369,161 @@ Known gaps:
 
 ## 19. Specs
 
-A task can have a spec: what the work is for, what done means, and what it
-leaves alone, agreed before an agent starts. The Spec tab, first of a
-task's tabs, drafts one from the ticket, holds it while you edit it, and
-saves it beside the task, where every agent in the task reads it. Start
-agent there saves it and starts an agent on it. An agent started from the
-raw ticket had nothing that said when it was done, and nor had anyone
-checking its work.
+A task can have a spec: what the work must do, how it will be done, and
+the steps to get there, agreed before an agent starts and checked when it
+is done. Each repository in the task has a spec of its own, a folder of
+three files committed on the task's branch, so it goes through review
+with the code and stays in the repository after the task, the branch and
+the app are gone. The Spec tab, first of a task's tabs, drafts each file,
+holds it while you edit it, and commits it when you approve it.
 
-- **SPEC-1** A spec MUST have its parts under these headings: Goal,
-  Acceptance criteria, Out of scope, Open questions. Each acceptance
-  criterion is a list item under its heading, with its id first (`AC-1`,
-  `AC-2`, …); one without an id is numbered by its place in the list. The
-  tab MUST list the saved spec's criteria, count them on the tab, and warn
-  when it has none, since they are what done means.
-- **SPEC-2** Drafting MUST run a fresh one-shot model (Claude Code, Sonnet,
-  no tools, no MCP, no thinking) over the saved ticket (`TICKET.md`,
-  PANE-13), fenced off as data and not instructions, and the names of the
-  task's repositories. It streams into the editor. It invents no
-  requirement the ticket does not imply: what the ticket leaves unclear
-  goes under Open questions. A task with no saved ticket is drafted from
-  its name. A redraft over text in the editor asks first; a failed draft
-  puts back what the editor held.
-- **SPEC-3** A spec MUST reach agents only once saved: `SPEC.md` in the
-  task folder (never a worktree, DISK-1), written whole, and the context
-  files rewritten with it. A draft or an edit not saved reaches nobody, and
-  the tab says so. Saving an empty spec removes it. What the editor holds
-  is kept per task while the app runs, so switching tabs or tasks loses
-  nothing.
-- **SPEC-4** The context file (PANE-13) MUST carry the saved spec above the
-  ticket, as the user's own: its acceptance criteria are what done means,
-  it wins where it and the ticket disagree, what it puts out of scope is
-  left alone, and its open questions are asked rather than guessed. It is
-  not quoted as the ticket is, since the user wrote or agreed every line.
-  Its headings go a level down, under the app's. Past 8 KB it is cut, and
-  says `SPEC.md` has the rest.
-- **SPEC-5** An opening prompt for a task with a spec (`task_prompt`: the
-  launch dialog, Start agent, handoffs) MUST end by pointing at `SPEC.md`,
-  by its full path, so an agent started inside one repo finds it too.
-- **SPEC-6** Start work, with an agent picked, MUST offer "Write a spec
+A spec kept beside the task (`SPEC.md` in the task folder) was deleted
+with the task, and nothing ever checked the work against it: an agent was
+told what done meant, and nobody asked afterwards whether it got there.
+
+The shape follows Kiro's specs: requirements, then design, then tasks,
+each reviewed before the next is drafted.
+
+### What a spec is
+
+- **SPEC-1** A repository's spec MUST be the folder `specs/<task>/` in its
+  worktree, `<task>` being the task's branch with `/` as `-`
+  (`specs/ACME-123-fix-login-race/`). The `specs/` folder is set per
+  repository in the Repos view. It holds:
+  - `requirements.md`: Goal, Requirements, Out of scope, Open questions.
+    Each requirement is a list item with its id first (`R-1`, `R-2`, …),
+    written as WHEN a condition THE SYSTEM SHALL a behaviour, so that
+    someone can check it. One without an id is numbered by its place.
+  - `bugfix.md`, in place of `requirements.md` for a bug: Current
+    behaviour, Expected behaviour, Unchanged behaviour (WHEN … THE SYSTEM
+    SHALL CONTINUE TO …), each item with its id, and Open questions.
+    Feature or bug is chosen when the spec is started.
+  - `design.md`: how this repository will meet them. Approach, what
+    changes where, how it meets the other repositories (an endpoint's
+    shape, an event's fields), error handling, how it will be tested.
+  - `tasks.md`: numbered steps (`- [ ] 3. Add the limiter (R-1, R-2)`),
+    each naming the requirements it serves, ticked when done.
+- **SPEC-2** A task in several repositories MUST have a spec in each, for
+  that repository's share of the work. A requirement that two
+  repositories meet together is in both, and each design says the side of
+  it that is its own. Another repository's requirement is referred to by
+  its folder name: `web R-2`.
+- **SPEC-3** A repository whose spec setting is off MUST NOT get spec
+  files in its worktree. Its spec is kept in the app's folder instead
+  (`<config folder>/specs/<repository>/<task>/`, same files), so it
+  outlives the task on this machine, though not in git. The tab says
+  which.
+
+### Drafting and approving
+
+- **SPEC-4** The files MUST be drafted in order and each approved before
+  the next is drafted: requirements (or bugfix), then design, then tasks.
+  Quick spec drafts all three at once, and they are approved together.
+- **SPEC-5** Each draft MUST be a fresh one-shot run (Claude Code,
+  Sonnet, no MCP, nothing that writes or runs), streamed into the editor:
+  - Requirements: one run over the ticket (`TICKET.md`, fenced off as data
+    and not instructions) and the task's repositories, which writes every
+    repository's requirements, so the split is decided in one place. It
+    invents no requirement the ticket does not imply; what the ticket
+    leaves unclear goes under Open questions. A task with no saved ticket
+    is drafted from its name.
+  - Design: one run per repository, allowed to read its worktree, over its
+    approved requirements and the other repositories'.
+  - Tasks: one run per repository over its approved requirements and
+    design.
+
+  A redraft over text in the editor asks first; a failed draft puts back
+  what the editor held.
+- **SPEC-6** Approving MUST write the file into the worktree and commit it
+  on the task branch, as the user, with only the spec's own files in the
+  commit: whatever an agent has staged or changed there stays as it was.
+  The message says which file of which task ("Approve the design for
+  ACME-123."). A draft or an edit not approved reaches nobody, and the
+  tab says so. Drafts are kept in the task folder (`.spec-drafts/`) until
+  approved, so neither switching tasks nor quitting the app loses one.
+- **SPEC-7** Changing an approved file MUST mark the files after it out of
+  date. Sync redrafts them from it: tasks already ticked are kept, steps
+  for new requirements are added, and a step whose requirements are all
+  gone is marked for the user to remove, never removed by itself.
+- **SPEC-8** The tab MUST show, per repository, each file's state (not
+  started, draft, approved, out of date), the requirements, and the
+  tasks ticked of the total. A requirements file with no requirements is
+  warned about: they are what done means.
+- **SPEC-9** A task whose worktree already has `specs/<task>/` MUST open
+  it: a task cut from a branch that has one, or a second task for the
+  same ticket on the same branch.
+
+### Working to it
+
+- **SPEC-10** The context file (PANE-13) MUST name each repository's spec
+  folder and carry its requirements above the ticket, as the user's own:
+  they are what done means, they win where they and the ticket disagree,
+  what they put out of scope is left alone, and open questions are asked
+  rather than guessed. Past 8 KB they are cut, and point at the files.
+- **SPEC-11** An opening prompt for a task with a spec (`task_prompt`: the
+  launch dialog, Start agent, handoffs) MUST end by pointing at the spec
+  folders by full path, so an agent started inside one repository finds
+  the others too.
+- **SPEC-12** Start agent on the tab MUST start an agent on the approved
+  tasks: at the task folder for every repository, or in one repository
+  for its own. Its prompt tells it to work through `tasks.md` in order and
+  mark each step done as it finishes it.
+- **SPEC-13** An agent MUST mark a step done with the `spec_task` tool,
+  which ticks it in `tasks.md` and updates the tab. Ticks are committed
+  with the next approval or before Open pull requests (PR-1), with only
+  the spec's files in the commit. A tick an agent makes by editing the
+  file itself counts the same: the file is the record.
+- **SPEC-14** Approving a change while agents in the task are running
+  MUST offer to tell them: each is sent one line naming the files that
+  changed, typed into a terminal or sent as a prompt over ACP. Never on
+  its own, since a line typed into a busy agent interrupts it.
+
+### Checking against it
+
+- **SPEC-15** Check against spec MUST run, per repository, a one-shot run
+  allowed to read the worktree, over its approved requirements and the
+  branch's changes from its branch point (`git::baseline`). It answers
+  per requirement: met, not met or unclear, with the files and lines that
+  show it. The answer is shown beside each requirement, with the commit
+  it was checked at, and marked stale once the branch moves on. It is
+  kept in the task folder, never committed.
+- **SPEC-16** A drafted pull request description (PR-4) MUST, for a
+  repository with a spec, link its spec folder and list its requirements
+  with the latest check's answer, or say none was run.
+
+### From Start work
+
+- **SPEC-18** Start work, with an agent picked, MUST offer "Write a spec
   first", on until turned off, and remembered. With it the task is made
   and the ticket moved as without it, but no agent starts: the task opens
-  on its Spec tab with a draft being written (unless the task already has
-  a spec), and Start agent there starts the agent Start work had picked,
-  at the task folder.
+  on its Spec tab with the requirements being drafted (unless the task
+  already has a spec, SPEC-9), and Start agent there starts the agent
+  Start work had picked (SPEC-12).
 
-Code: `commands/spec.rs`, `commands/task_context.rs`, `oneshot.rs`,
-`SpecView.tsx`, `store.ts` (`specs`, `pendingSpec`),
-`tickets/StartWorkDialog.tsx`.
+### Moving from `SPEC.md`
+
+- **SPEC-17** A task with a `SPEC.md` from before MUST offer it as the
+  requirements draft of each of its repositories, and remove it once
+  those are approved.
+
+Code: `spec.rs` (the files, and what is read from them),
+`commands/spec.rs` (where a spec lives, approving, ticking),
+`commands/spec_draft.rs` (drafting, checking), `commands/task_context.rs`,
+`git/only.rs` (committing only the spec), `mcp.rs` (`spec_task`),
+`commands/open_prs.rs`, `SpecView.tsx`, `spec/SpecSide.tsx`,
+`lib/specs.ts`, `tickets/StartWorkDialog.tsx`, `ReposView.tsx` (the
+per-repository setting).
 
 Known gaps:
 - Drafting runs Claude Code, whichever agent will do the work.
-- The draft is written from the ticket, not from reading the code.
-- Agents already running are not told when the spec changes; one started
-  afterwards reads it.
-- What the editor holds and has not saved is lost when the app quits.
+- A spec is approved by whoever runs the app. There is no second
+  approver, and the commit is the only record of who approved it.
+- Kiro runs independent tasks side by side; here one agent works through
+  them in order.
 - A draft cannot be stopped once started.
+- A step an agent ticks is an uncommitted change in the worktree until the
+  next approval or Open pull requests, and shows in the Diff tab until then.
+- Drafting and checking need Claude Code on the PATH.
 
 ## 20. Agents over ACP
 
@@ -1438,7 +1540,7 @@ count and banner treats it like any other.
 
 | Agent | ACP command | Picks a conversation up by | Checked against |
 |---|---|---|---|
-| `claude` | `claude-agent-acp`, installed separately (`@agentclientprotocol/claude-agent-acp`, formerly `@zed-industries/`) | load, resume, list | adapter 0.22.2 |
+| `claude` | `claude-agent-acp`, installed separately (`@agentclientprotocol/claude-agent-acp`, formerly `@zed-industries/`) | load, resume, list | adapter 0.87.0 (and 0.22.2) |
 | `copilot` | `copilot --acp` | load, list | 1.0.93 |
 | `opencode` | `opencode acp` | load, resume, list | 1.18.35 |
 | `gemini` | `gemini --acp` | load | 0.63.0, `initialize` only: it would not open a conversation for a personal Google account |

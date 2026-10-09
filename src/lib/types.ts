@@ -14,6 +14,10 @@ export interface Project {
   update_by?: UpdateBy | null;
   /** What says the work here is done, run by a loop (LOOP-1). */
   check?: string | null;
+  /** Where specs are committed here (SPEC-1). Absent: `specs`. */
+  spec_folder?: string | null;
+  /** Specs are kept by the app instead of committed here (SPEC-3). */
+  specs_in_app?: boolean;
 }
 
 /** How a registered repository is doing (REPO-5). */
@@ -362,6 +366,7 @@ export interface TicketMove {
 
 // GitHub's pull requests, checks and reviews: their own file, re-exported here.
 export * from "./types-github";
+export * from "./types-spec";
 // The browser panel's (§18), likewise.
 export * from "./types-browser";
 export * from "./types-acp";
@@ -552,12 +557,6 @@ export interface Finding {
 export interface ReviewedHead {
   checkout_id: string;
   head: string;
-}
-
-/** A task's saved spec, and the acceptance criteria read from it (SPEC-1). */
-export interface Spec {
-  text: string;
-  criteria: { id: string; text: string }[];
 }
 
 export interface ReviewerRun {

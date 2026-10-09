@@ -110,6 +110,7 @@ impl<R: Runtime> acp::Pane for Sink<R> {
 
     fn exited(&self, code: Option<i32>) {
         let Some(pane) = self.pane.upgrade() else { return };
+        super::log_run(&self.app, &pane, code);
         pane.meta.lock().exited(code);
         pane.printed.send_modify(|_| {});
         let _ = self.app.emit("pty:exit", ExitEvent { pane_id: &self.id, code });

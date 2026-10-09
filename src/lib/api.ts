@@ -63,6 +63,7 @@ import type {
   SavedSignIn,
   SignInForm,
 } from "./types";
+import type { Run } from "./types-runs";
 
 export const api = {
   // projects
@@ -331,6 +332,10 @@ export const api = {
   /** Every message when `ids` is left out. */
   markMessagesRead: (ids?: number[]) => invoke<void>("mark_messages_read", { ids: ids ?? null }),
   clearMessages: () => invoke<void>("clear_messages"),
+
+  // the run log (§22)
+  listRuns: () => invoke<Run[]>("list_runs"),
+  clearRuns: () => invoke<void>("clear_runs"),
   setWorktreeRoot: (path: string | null) => invoke<void>("set_worktree_root", { path }),
   setUiPrefs: (ui: UiPrefs) => invoke<void>("set_ui_prefs", { ui }),
   disconnect: (which: "jira" | "github" | "slack") => invoke<void>("disconnect", { which }),

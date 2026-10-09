@@ -94,6 +94,11 @@ impl Conn {
         })
     }
 
+    /// What its finished turns used, for the run log (RUN-4).
+    pub fn tokens(&self) -> Option<crate::runs::Tokens> {
+        self.state.lock().tokens
+    }
+
     pub fn view(&self, since: Option<u64>) -> View {
         let st = self.state.lock();
         View {

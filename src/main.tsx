@@ -5,6 +5,7 @@ import "./theme.css";
 import "./styles.css";
 import "./styles-acp.css";
 import "./styles-spec.css";
+import "./styles-runs.css";
 import App from "./App";
 import { paintRemembered } from "./lib/theme";
 

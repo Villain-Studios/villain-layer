@@ -140,6 +140,9 @@ const ANSWER_WINDOW: std::time::Duration = std::time::Duration::from_millis(1500
 
 struct PaneMeta {
     info: PaneInfo,
+    /// When its process started. `info.started_at` is its place in the
+    /// list, which a restarted pane takes over (PANE-14).
+    born: DateTime<Utc>,
     /// Asked to stop — Stop, a handoff, quitting — so its exit is not news.
     stopping: bool,
     /// The agent's own last word on what it is doing, and when it said it.
@@ -620,6 +623,7 @@ impl PtyManager {
         let pane = Arc::new(Pane {
             meta: Mutex::new(PaneMeta {
                 info: info.clone(),
+                born: now,
                 stopping: false,
                 reported: None,
                 last_work: now,
@@ -860,6 +864,7 @@ impl PtyManager {
             let id = id.clone();
             std::thread::spawn(move || {
                 let code = child.wait().ok().map(|s| s.exit_code() as i32);
+                log_run(&app, &pane, code);
                 pane.meta.lock().exited(code);
                 pane.printed.send_modify(|_| {});
                 let _ = app.emit("pty:exit", ExitEvent { pane_id: &id, code });
@@ -1269,6 +1274,24 @@ impl PtyManager {
     }
 }
 
+/// An agent's process ended: its run goes in the log (RUN-1). Before the
+/// pane reads as exited, so quitting, which waits for that, finds the run
+/// in memory to save.
+fn log_run<R: Runtime>(app: &AppHandle<R>, pane: &Pane, code: Option<i32>) {
+    let (info, born, stopping) = {
+        let meta = pane.meta.lock();
+        (meta.info.clone(), meta.born, meta.stopping)
+    };
+    if info.kind != PaneKind::Agent {
+        return;
+    }
+    let tokens = match &pane.io {
+        Io::Acp(conn) => conn.tokens(),
+        Io::Pty { .. } => None,
+    };
+    crate::runs::record(app, crate::runs::Ended { info, born, stopping, code, tokens });
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -1294,6 +1317,7 @@ mod tests {
                 acp: false,
                 loop_said: None,
             },
+            born: now - chrono::TimeDelta::seconds(3600),
             stopping: false,
             reported: None,
             last_work: now - chrono::TimeDelta::seconds(quiet_secs),

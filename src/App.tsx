@@ -15,6 +15,7 @@ import { AgentsView } from "./components/AgentsView";
 import { ChatView } from "./components/ChatView";
 import { ReposView } from "./components/ReposView";
 import { ReviewsView } from "./components/ReviewsView";
+import { RunsView } from "./components/RunsView";
 import { Settings } from "./components/Settings";
 import { UpdateFromBase } from "./components/UpdateFromBase";
 import { CupIcon, GearIcon } from "./components/icons";
@@ -60,6 +61,7 @@ function TopBar() {
     { id: "tickets", label: "Tickets", badge: issueCount || undefined },
     { id: "reviews", label: "Reviews", ...reviews },
     { id: "chat", label: "Chat", badge: chats || undefined },
+    { id: "runs", label: "Runs" },
     { id: "repos", label: "Repos", badge: projectCount || undefined },
   ];
 
@@ -356,6 +358,7 @@ export default function App() {
         {view === "tickets" && <TicketsView />}
         {view === "reviews" && <ReviewsView />}
         {view === "chat" && <ChatView />}
+        {view === "runs" && <RunsView />}
         {view === "repos" && <ReposView />}
       </div>
 

@@ -1,65 +1,83 @@
 <p align="center">
-  <img src="src-tauri/icons/128x128@2x.png" width="128" height="128" alt="Villain Layer's icon: three stacked layers, the top one wearing a villain's mask">
+  <img src="src-tauri/icons/128x128@2x.png" width="128" height="128" alt="Villain Layer icon">
 </p>
 
 <h1 align="center">Villain Layer</h1>
 
-A macOS desktop app for working with coding agents: one place to take a
-ticket, give an agent a fresh worktree of every repository the ticket
-touches, watch which agents need you, and carry the work through review,
-pull requests and back to Jira.
+<p align="center">
+  <strong>A macOS app for coding agents, where no agent holds your credentials</strong><br>
+  By <a href="https://codevillain.eu">Villain Studios</a> · Tools for shipping with AI
+</p>
 
-It runs the agent CLIs you already use (Claude Code, GitHub Copilot CLI,
-OpenCode, Gemini CLI) in real terminals, and connects them to Jira, GitHub
-and Slack through the app, so no agent holds your credentials.
+<p align="center">
+  <a href="https://github.com/Villain-Studios/villain-layer/releases/latest">Download</a> ·
+  <a href="https://github.com/Villain-Studios/villain-layer/blob/main/docs/features.md">Features</a> ·
+  <a href="https://github.com/Villain-Studios/villain-layer/blob/main/AGENTS.md">Contributing</a>
+</p>
 
-**Status: beta.** macOS only. By [Code Villain](https://codevillain.eu/).
+---
+
+## Problem
+
+Coding agents need context: tickets, repositories, credentials for Jira and GitHub. They need isolation: branches that don't collide, worktrees that don't touch your working copy. And you need visibility: which agents are working, which are waiting on you, what they've changed.
+
+Most solutions either give agents full access to your credentials, or make you manage branches, worktrees, and context files manually.
+
+## Local-first
+
+Everything runs on your machine. The MCP server agents talk to runs on `127.0.0.1` and never leaves the machine—even when phone access is enabled. Agents never hold your credentials: they request actions through the MCP server, you see what they want, and the app executes it only after confirmation. No logs or telemetry are sent to external servers.
+
+## Demo
+
+[![Download for macOS](https://img.shields.io/badge/Download-macOS-blue)](https://github.com/Villain-Studios/villain-layer/releases/latest)
+
+*Video demo and animated walkthrough: coming soon*
 
 ## What it does
 
-- **Tasks, not branches.** A task is one ticket across one or more repos:
-  one branch name, one folder, a git worktree per repo. Several tasks,
-  and several agents per task, run side by side without touching each
-  other or your own clones.
-- **Start from the ticket.** Pick a Jira ticket and the app suggests the
-  repos, creates the worktrees, moves the ticket to in progress, and starts
-  an agent with the ticket as its prompt.
-- **Know who needs you.** Every agent reports what it is doing: working,
-  asking for permission, or done. The window, the dock count and
-  notifications say which ones are waiting on you.
-- **Review before it leaves.** A diff across all the task's repos, with
-  notes on lines you can send straight to the agent. Commit, update from
-  the base branch (merge or rebase), push.
-- **Pull requests.** Open one PR per repo, see checks and reviews, and hand
-  review threads and failing CI logs to the agent in one go. When they
-  merge, one step puts the task away: worktrees, branches and the ticket.
-- **Tools for the agents.** The app runs an MCP server that its agents use
-  to search Jira, file tickets, open PRs, post to Slack and start other
-  tasks, with a confirmation for anything irreversible.
-- **Chat.** Agents that belong to no task, for questions about your tickets
-  and repos.
+**Task isolation**: One ticket becomes one task across multiple repositories. Each task gets its own branch name, its own folder, and a git worktree per repo. Multiple tasks and multiple agents run side by side without touching each other or your clones.
 
-The full list, with the rules each feature follows, is in
-[`docs/features.md`](docs/features.md).
+**Verification workflow**—how you verify AI output:
 
-## Requirements
+1. **Spec-Builds**: A task can start with spec generation—requirements, design, implementation tasks—drafted from the ticket before any agent writes code. Each spec file is approved individually and committed to the branch. Agents work from the spec.
 
-To run it:
+2. **Agent flexibility**: Run agents as terminal sessions (Claude Code, Copilot CLI, Gemini CLI, OpenCode) or over ACP (Zed Agent Client Protocol) for conversation-style interaction with visible tool calls and permission prompts.
 
-- macOS 26 or later
-- git, from the Xcode Command Line Tools (`xcode-select --install`)
-- at least one agent CLI on your `PATH`: `claude`, `copilot`, `opencode`
-  or `gemini`, already signed in
-- optional: a Jira Cloud site, GitHub (or GitHub Enterprise), Slack
+3. **Automated verification loop**: Set a check command per repository (`bun run check`, `cargo test`, `npm run lint`). Hit the loop button, and the agent iterates: work → run checks → if they fail, the agent gets the output and fixes it → repeat until tests pass or max rounds reached (default 5, configurable up to 20). No manual copy-paste of test failures.
 
-To build it, also:
+4. **Built-in browser**: Agents can navigate a Chrome-based browser through MCP tools. They can start dev servers, test pages on localhost, request access to staging sites, and sign in with saved credentials. You watch what they're doing in real time.
 
-- [Rust](https://rustup.rs) (stable)
-- [Bun](https://bun.sh)
+5. **Spec checking**: Check the branch against the approved spec, requirement by requirement: met, not met or unclear, with the files and lines that show it.
+
+**No credential sharing**: Agents connect to Jira, GitHub, and Slack through the app's own MCP server. They request actions; the app shows you what they want and executes it only after confirmation. Your tokens never touch the agent's environment.
+
+**Review workflow**: A unified diff across all of a task's repositories, with line-level notes you can send directly to an agent. Commit from the app. Update branches by merge or rebase. Push with proper force-with-lease.
+
+**Pull request management**: Open one PR per repo from the app. See check status and review comments. Hand failing CI logs and review threads to an agent in one action. When PRs merge, one command cleans up: worktrees, branches, and the ticket.
+
+**Attention tracking**: Dock badge counts agents waiting on you. Banner notifications for new review requests and tickets. Each agent's status dot updates in real time as it reports working, asking, or done.
+
+**Themes**: Dark, Light, Tokyo Night, Cursor Dark/Light, Ayu Dark/Light, or match system appearance. Applies to the app and any paired phone immediately.
+
+Full feature list with requirements in [`docs/features.md`](docs/features.md).
+
+## Stack
+
+- **macOS desktop app**: Tauri 2 (Rust backend, React 19 frontend)
+- **Terminals**: xterm.js with portable-pty
+- **Agent protocol**: ACP (Agent Client Protocol) for compatible agents; terminal passthrough otherwise
+- **MCP server**: Built-in Model Context Protocol server for agent tool calls
+- **Git**: libgit2-free; runs git directly with strict safety flags
+- **Integrations**: Jira Cloud REST API, GitHub REST + GraphQL, Slack Web API
+- **Secrets**: macOS Keychain via the `keyring` crate
+- **Frontend state**: Zustand, updated by events from the backend
+- **License**: MIT OR Apache-2.0 (dual-licensed)
+
+See [`docs/architecture.md`](docs/architecture.md) for details.
 
 ## Install
 
-With [Homebrew](https://brew.sh):
+### Homebrew (recommended)
 
 ```bash
 brew tap villain-studios/tap
@@ -67,20 +85,22 @@ brew trust --cask villain-studios/tap/villain-layer
 brew install --cask villain-layer
 ```
 
-`brew upgrade` updates it. Quit Villain Layer first, and run it from a
-terminal outside the app: replacing the app while it runs kills it, and
-every agent running in it, so the cask refuses to.
+Updates: `brew upgrade --cask villain-layer`. Quit the app first, and run it from a terminal outside the app—replacing the bundle while it's running kills it and every agent in it, so the cask refuses to.
 
-Or download the `.dmg` from the
-[latest release](https://github.com/Villain-Studios/villain-layer/releases/latest),
-open it, and drag Villain Layer to Applications. It runs on Apple silicon
-and Intel Macs. To update, quit Villain Layer first, for the same reason.
+### Direct download
 
-Releases are not notarised by Apple, so macOS stops the app the first
-time with "Apple could not verify…": choose Done, then System Settings →
-Privacy & Security → *Open Anyway*. Once is enough.
+Download the `.dmg` from the [latest release](https://github.com/Villain-Studios/villain-layer/releases/latest). Runs on Apple Silicon and Intel.
 
-### Build it yourself
+macOS will block the first launch with "Apple could not verify…" because releases aren't notarized. Open System Settings → Privacy & Security → **Open Anyway**. Once is enough.
+
+### Requirements
+
+- macOS 26 or later
+- git (from Xcode Command Line Tools: `xcode-select --install`)
+- At least one agent CLI installed and authenticated: `claude`, `copilot`, `gemini`, or `opencode`
+- Optional: Jira Cloud, GitHub, Slack
+
+### Build from source
 
 ```bash
 git clone https://github.com/Villain-Studios/villain-layer.git
@@ -89,89 +109,112 @@ bun install
 bun run release:mac
 ```
 
-That builds the app and installs it as `/Applications/Villain Layer.app`.
-It refuses to run while the app is open, for the same reason. A copy you
-built yourself opens without a warning.
+Installs to `/Applications/Villain Layer.app`. A self-built copy opens without the security warning.
+
+**Development requirements**: Rust (stable) and [Bun](https://bun.sh).
+
+## Screenshots
+
+<!-- TODO: Add screenshots showing:
+  - Task list with agent status indicators
+  - Spec tab with requirements and approval workflow
+  - Terminal view of an agent at work
+  - ACP conversation view
+  - Diff view with inline notes
+  - PR tab with review comments and CI status
+  - Settings showing credential configuration
+-->
+
+*Screenshots will be added in a future update. See [releases](https://github.com/Villain-Studios/villain-layer/releases) for the current state.*
 
 ## Getting started
 
-1. **Add your repositories.** Repos → *Add repositories* → *Scan a
-   folder…* (for example `~/code`), and tick the ones you work in. Group
-   them if you like.
-2. **Connect what you use** (the gear icon, top right):
-   - **Jira**: your site URL, your email, and an API token from
-     id.atlassian.com → Security → API tokens.
-   - **GitHub**: a token with the `repo` scope. For Enterprise, the API URL
-     is `https://<host>/api/v3`. To see your team's review queue, set the
-     team as `org/slug`, or as `@slug` with the `read:org` scope.
-   - **Slack** (optional): Settings → Slack shows an app manifest. Create a
-     Slack app from it, install it, and paste its bot token (`xoxb-…`) and
-     a channel. An incoming-webhook URL works too.
-3. **Start work.** Tickets → click a ticket → Start work. Check the repos
-   and the base branch, pick an agent, Start.
-4. **Work with the agent** in the task's Agents tab. A dot's colour and
-   the "N need you" badge say when it is waiting on you.
-5. **Review** in the Diff tab: click a line number to leave a note, then
-   *Send to agent*. Commit when it is right.
-6. **Pull requests** tab: *Open pull request*. When reviews come in,
-   *Feedback → agent* hands over the threads and failing checks.
-7. **When the PRs have merged**, right-click the task → *Finish task*.
+1. **Add repositories**: Repos → *Add repositories* → *Scan a folder* (e.g., `~/code`). Select the repos you work in. Optionally group them.
+
+2. **Set check commands** (optional but recommended): In the Repos view, set a check command for each repo (e.g., `bun run check`, `cargo test`, `npm run lint`). These let you use the automated verification loop.
+
+3. **Configure integrations** (gear icon, top right):
+   - **Jira**: Site URL, email, API token (from [id.atlassian.com](https://id.atlassian.com) → Security → API tokens)
+   - **GitHub**: Personal access token with `repo` scope. For Enterprise, set the API URL to `https://<host>/api/v3`
+   - **Slack** (optional): Create an app from the manifest shown in Settings, install it, paste the bot token (`xoxb-…`)
+   - **Browser** (optional): Add sites agents can access beyond localhost (e.g., staging environments). Save sign-in credentials for sites that need authentication.
+
+4. **Start a task**: Tickets → pick a ticket → *Start work*. Choose repositories, base branch, and agent. Optionally choose *Write a spec first* to draft a specification before coding begins.
+
+5. **Work with the agent**: In the task's Agents tab, the status dot and badge tell you when the agent needs you. For terminal agents, you interact through the terminal. For ACP agents, you see a conversation view with tool calls and permission prompts.
+
+6. **Use the verification loop** (optional): Once the agent has made progress, click the loop button in the pane bar. Set max rounds (default 5). The agent will iterate automatically: run checks → if they fail, read failures → fix → repeat until passing or rounds exhausted.
+
+7. **Test in the browser** (optional): If the agent started a dev server, open the task's Browser tab. The agent can navigate to `localhost`, interact with pages, and you can watch what it's doing. Grant additional sites as needed.
+
+8. **Review and commit**: Diff tab shows changes across all repos. Click a line number to leave a note, then *Send to agent*. Commit when ready.
+
+9. **Open PRs**: Pull requests tab → *Open pull request*. When reviews arrive, *Feedback → agent* hands over threads and failing checks.
+
+10. **Finish**: When PRs merge, right-click the task → *Finish task* to clean up worktrees, branches, and update the ticket.
 
 ## What it changes on your machine
 
-- **Task folders** go in `~/.villain-worktrees/` (settable). Each holds a
-  worktree per repo, plus the app's context files for the agents.
-- **The app's own copy of each repo** goes in `~/.villain-worktrees/.repos/`.
-  Task worktrees come from it, never from your clone, so you can re-clone,
-  move or delete your clones without breaking a task. The copy hard-links
-  git's objects, so it takes little extra disk. Task branches show up in
-  your own clone once they are pushed and you fetch.
-- **`~/.claude.json`**: with *Trust the folders this app creates* on (the
-  default), the app marks its own task folders as trusted, so Claude Code
-  does not stop to ask. It touches nothing else in that file, and never a
-  folder outside the task folder location.
-- **Tokens** are kept in the macOS keychain (item
-  `eu.codevillain.villain-layer`). They are never written to a file. A
-  build without a Developer ID signature (one you built, or a release that
-  is not notarised) asks for keychain access again after every update:
-  *Always Allow* is tied to the exact binary.
-- **Settings and tasks** are in
-  `~/Library/Application Support/eu.codevillain.villain-layer/config.json`.
+- **Task folders**: `~/.villain-worktrees/<task-id>/` (configurable). Each holds one worktree per repo plus context files for agents.
+- **Repository copies**: `~/.villain-worktrees/.repos/`. Worktrees come from these, not your clones, so you can move or delete your clones without breaking tasks. Hard-links git objects to save disk space.
+- **Specs**: Either `specs/<task-id>/` in the worktree (committed to the branch), or `~/Library/Application Support/eu.codevillain.villain-layer/specs/<repo>/<task-id>/` when in-tree specs are disabled.
+- **Browser profile**: `~/Library/Application Support/eu.codevillain.villain-layer/browser/`. Chrome/Chromium profile for the built-in browser. Keeps cookies, saved sign-ins, and page storage separate from your personal browser.
+- **Settings**: `~/Library/Application Support/eu.codevillain.villain-layer/config.json`
+- **Secrets**: macOS Keychain (item: `eu.codevillain.villain-layer`). Includes integration tokens and browser sign-in passwords.
+- **Claude Code trust**: `~/.claude.json` (only when *Trust the folders this app creates* is on). Marks task folders as trusted so Claude doesn't prompt. Never touches other folders or settings.
 
-The complete list is in [`docs/features.md`](docs/features.md#14-what-the-app-writes-on-your-machine).
+Complete list in [`docs/features.md`](docs/features.md#14-what-the-app-writes-on-your-machine).
 
-## When something goes wrong
+## Roadmap
 
-- **The app quit unexpectedly**: the reason is in
-  `~/Library/Logs/villain-layer/panic.log`. Please attach it to the report.
-- **"MCP server unavailable"** at startup: agents will work, but without
-  the app's Jira, GitHub and Slack tools until the next launch.
-- **An agent's dot never changes**: that CLI's status reports are not
-  arriving. Say which CLI and version.
-- **Start over**: quit the app and move `config.json` (above) aside. Your
-  repositories and worktrees on disk are not touched.
+Possible future directions:
 
-## Working on it
+- AI review step (second agent reviews work against the spec)
+- Local dashboard for reviewing runs (agent, duration, result, loop rounds, error rate, tokens)
+- Demo mode with mock data
+- Architecture diagram
 
-Start with [`AGENTS.md`](AGENTS.md). It is the rulebook for people and for
-coding agents alike, and every agent CLI reads it on its own. Then:
+Not promises—just ideas under consideration.
 
-- [`CONTRIBUTING.md`](CONTRIBUTING.md): setup, workflow, pull requests
-- [`docs/features.md`](docs/features.md): what the app does, as requirements
-- [`docs/architecture.md`](docs/architecture.md): how it works, and why
-- [`docs/recipes.md`](docs/recipes.md): how to make the common changes
-- [`docs/testing.md`](docs/testing.md): how to verify a change, including
-  the UI in a browser
-- [`docs/releasing.md`](docs/releasing.md): cutting a release, and signing
-  it
+## Documentation
+
+- **[`AGENTS.md`](AGENTS.md)**: Start here. Rules for contributors and coding agents.
+- **[`docs/features.md`](docs/features.md)**: Complete feature list as requirements (TASK-3, PANE-7, SPEC-1, etc.)
+- **[`docs/architecture.md`](docs/architecture.md)**: How it works and why design choices were made
+- **[`docs/recipes.md`](docs/recipes.md)**: Step-by-step guides for common changes
+- **[`docs/testing.md`](docs/testing.md)**: How to verify changes (including UI testing in a browser)
+- **[`CONTRIBUTING.md`](CONTRIBUTING.md)**: Workflow, pull requests, and how to run locally
+
+## Troubleshooting
+
+- **App quit unexpectedly**: Check `~/Library/Logs/villain-layer/panic.log` and include it in your report
+- **"MCP server unavailable" at startup**: Agents will work but won't have Jira/GitHub/Slack tools until next launch
+- **Agent status dot never changes**: The CLI's status reports aren't arriving. Report which CLI and version.
+- **Start over**: Quit the app and rename `config.json` (see path above). Your repos and worktrees on disk aren't touched.
+
+## Author
+
+Built by [Michael Lazarski](https://codevillain.eu) (Code Villain). Contact: [codevillain@proton.me](mailto:codevillain@proton.me)
 
 ## License
 
-Villain Layer is made by [Code Villain](https://codevillain.eu/). You may
-use it under either of these licenses, whichever you prefer:
+Copyright © 2026 Code Villain
 
-- the Apache License, Version 2.0 ([`LICENSE-APACHE`](LICENSE-APACHE))
-- the MIT license ([`LICENSE-MIT`](LICENSE-MIT))
+Licensed under either:
 
-Unless you say otherwise, a contribution you submit for inclusion is
-licensed the same way, with no additional terms or conditions.
+- Apache License, Version 2.0 ([`LICENSE-APACHE`](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
+- MIT License ([`LICENSE-MIT`](LICENSE-MIT) or http://opensource.org/licenses/MIT)
+
+at your option.
+
+### Contribution
+
+Unless you explicitly state otherwise, any contribution you intentionally submit for inclusion in the work shall be dual-licensed as above, without any additional terms or conditions.
+
+---
+
+<p align="center">
+  <a href="https://github.com/Villain-Studios/villain-layer">GitHub</a> ·
+  <a href="https://github.com/Villain-Studios/villain-layer/releases">Releases</a> ·
+  <a href="https://github.com/Villain-Studios/villain-layer/issues">Issues</a>
+</p>

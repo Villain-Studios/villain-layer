@@ -27,7 +27,7 @@
  */
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
-import type { BrowserView, Catchup, Cleaned, FlowStatus, Message, PaneInfo, PhoneStatus, Project, RepoUpdate, Synced, TaskView } from "../lib/types";
+import type { BrowserView, Catchup, Cleaned, FlowStatus, Message, PaneInfo, PhoneStatus, Project, RepoUpdate, StartTo, Synced, TaskView } from "../lib/types";
 import { ago, SCENARIOS } from "./world";
 import { acpAnswers, seedAcp } from "./acp";
 import { loopAnswers, seedLoop } from "./loop";
@@ -381,6 +381,12 @@ const answer: Record<string, Answer> = {
     if (!jira) throw "Jira is not configured";
     const flow = (jira.flow[a.projectKey as string] ??= { review: null, merged: null });
     flow[a.stage as "review" | "merged"] = (a.status as FlowStatus | null) ?? null;
+    return null;
+  },
+  set_ticket_start: (a) => {
+    const jira = world.settings.jira;
+    if (!jira) throw "Jira is not configured";
+    (jira.flow[a.projectKey as string] ??= { review: null, merged: null }).started = a.to as StartTo;
     return null;
   },
   delete_task: (a) => {

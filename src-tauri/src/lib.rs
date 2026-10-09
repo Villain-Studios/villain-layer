@@ -261,6 +261,7 @@ pub fn run() {
             commands::jira_transition,
             commands::jira_project_statuses,
             commands::set_ticket_flow,
+            commands::set_ticket_start,
             commands::jira_create_fields,
             commands::jira_create_issue,
             commands::jira_start_work,

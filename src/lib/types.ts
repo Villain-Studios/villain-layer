@@ -348,8 +348,13 @@ export interface FlowStatus {
   name: string;
 }
 
-/** Where a Jira project's tickets go as the work moves (TKT-8). */
+/** Where a ticket goes when work on it starts (TKT-1). */
+export type StartTo = { to: "first_in_progress" } | { to: "leave" } | { to: "status"; id: string; name: string };
+
+/** Where a Jira project's tickets go as the work moves (TKT-1, TKT-8). */
 export interface TicketFlow {
+  /** Absent until chosen: then as the old switch, `sync_jira_status`, says. */
+  started?: StartTo | null;
   review: FlowStatus | null;
   merged: FlowStatus | null;
 }

@@ -38,6 +38,7 @@ import type {
   RepoOutgoing,
   Settings,
   SlackConfig,
+  StartTo,
   SpecCheck,
   SpecKind,
   SpecPart,
@@ -265,6 +266,7 @@ export const api = {
     invoke<ProjectStatus[]>("jira_project_statuses", { projectKey }),
   setTicketFlow: (projectKey: string, stage: "review" | "merged", status: FlowStatus | null) =>
     invoke<void>("set_ticket_flow", { projectKey, stage, status }),
+  setTicketStart: (projectKey: string, to: StartTo) => invoke<void>("set_ticket_start", { projectKey, to }),
   jiraBrowse: (text: string, whose: string, includeDone: boolean, types: string[]) =>
     invoke<JiraPage>("jira_browse", { text: text || null, whose, includeDone, types }),
   jiraCreateFields: (projectKey: string, issueTypeId: string) =>

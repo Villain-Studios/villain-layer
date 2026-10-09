@@ -29,6 +29,11 @@ pub struct JiraConfig {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TicketFlow {
+    /// Where a ticket goes when work on it starts (TKT-1). None until chosen,
+    /// and then as `UiPrefs::sync_jira_status` says: the switch that was all
+    /// there was before, in General, out of sight of the rest of this.
+    #[serde(default)]
+    pub started: Option<StartTo>,
     /// Where a ticket goes when its task's pull request is ready for review.
     #[serde(default)]
     pub review: Option<FlowStatus>,
@@ -41,6 +46,19 @@ pub struct TicketFlow {
 pub struct FlowStatus {
     pub id: String,
     pub name: String,
+}
+
+/// Where a ticket goes when work on it starts (TKT-1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "to", rename_all = "snake_case")]
+pub enum StartTo {
+    /// The first status in Jira's "in progress" category its workflow
+    /// allows from where it is, unless it is in that category already.
+    FirstInProgress,
+    /// Nowhere: the ticket stays where it is.
+    Leave,
+    /// This status, unless the ticket is there already.
+    Status { id: String, name: String },
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

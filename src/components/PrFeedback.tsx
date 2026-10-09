@@ -289,19 +289,21 @@ export function PrFeedback({ task, first, onClose }: { task: TaskView; first?: s
     <>
       {built.some((b) => b.list.length > 0) && <AgentTargetFields task={task} at={at} disabled={busy} />}
       <div className="spacer" />
-      <button className="btn" onClick={onClose} disabled={busy}>Cancel</button>
-      <button
-        className="btn btn-primary"
-        disabled={busy || chosen.length === 0 || at.stuck}
-        title={at.stuck ? "Install an agent CLI first" : undefined}
-        onClick={() => void send()}
-      >
-        {busy
-          ? "Sending…"
-          : `${noAgent ? "Start & send" : "Send"} ${chosen.length || ""}${
-              prsPicked > 1 ? ` from ${prsPicked} PRs` : ""
-            }`.trim()}
-      </button>
+      <div className="foot-buttons">
+        <button className="btn" onClick={onClose} disabled={busy}>Cancel</button>
+        <button
+          className="btn btn-primary"
+          disabled={busy || chosen.length === 0 || at.stuck}
+          title={at.stuck ? "Install an agent CLI first" : undefined}
+          onClick={() => void send()}
+        >
+          {busy
+            ? "Sending…"
+            : `${noAgent ? "Start & send" : "Send"} ${chosen.length || ""}${
+                prsPicked > 1 ? ` from ${prsPicked} PRs` : ""
+              }`.trim()}
+        </button>
+      </div>
     </>
   );
 

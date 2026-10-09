@@ -512,6 +512,9 @@ const CEILINGS: Record<string, number> = {
   "src-tauri/src/commands/github.rs": 1100,
   "src-tauri/src/integrations/github.rs": 1050,
   "src-tauri/src/commands/tasks.rs": 1050,
+  // Every setting kept in config.json is a field here, each with the bug
+  // that made it; a repository's spec settings (SPEC-1, SPEC-3) took it past 600.
+  "src-tauri/src/config.rs": 640,
   // Every MCP tool is defined and dispatched here, and docs-sync reads the
   // definitions from this file; the repo-notes tools took it past 1000.
   "src-tauri/src/mcp.rs": 1100,
@@ -523,6 +526,10 @@ const CEILINGS: Record<string, number> = {
   "src-tauri/src/agents.rs": 850,
   "src-tauri/src/git.rs": 1150,
   "src-tauri/src/commands/diff.rs": 700,
+  // Every field of config.json is declared here, each with its reason and
+  // its serde default; a repository's check command (LOOP-1) took it past
+  // 600, and a field split from its struct is harder to find than a long file.
+  "src-tauri/src/config.rs": 650,
 };
 
 for (const f of files) {

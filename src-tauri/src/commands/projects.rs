@@ -216,6 +216,9 @@ fn describe_project(path: &str, group: Option<&str>) -> Result<Project> {
         group: group.map(|g| g.trim().to_string()).filter(|g| !g.is_empty()),
         store: None,
         update_by: None,
+        check: None,
+        spec_folder: None,
+        specs_in_app: false,
     })
 }
 

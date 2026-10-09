@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../../lib/api";
 import { useStore } from "../../store";
+import { useSpecs } from "../../lib/specs";
 import type { AgentStatus, JiraIssue, Project } from "../../lib/types";
 import { Combo, Field, Modal } from "../ui";
 import { RepoPicker } from "../RepoPicker";
@@ -26,7 +27,7 @@ export function StartWorkDialog({
   const refreshPanes = useStore((s) => s.refreshPanes);
   const select = useStore((s) => s.select);
   const setTab = useStore((s) => s.setTab);
-  const setPendingSpec = useStore((s) => s.setPendingSpec);
+  const setPendingSpec = useSpecs((s) => s.setPending);
   const toast = useStore((s) => s.toast);
   const fail = useStore((s) => s.fail);
 
@@ -40,7 +41,7 @@ export function StartWorkDialog({
   /** The base this dialog last filled in itself, as opposed to one typed. */
   const autoBase = useRef("");
   const [starting, setStarting] = useState(false);
-  /** SPEC-6: start the agent from the Spec tab, once its spec is agreed. */
+  /** SPEC-18: start the agent from the Spec tab, once its spec is agreed. */
   const [specFirst, setSpecFirst] = useState(() => read("specFirst", true));
 
   const installed = agents.filter((a) => a.installed);

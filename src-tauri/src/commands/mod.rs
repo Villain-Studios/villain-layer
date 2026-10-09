@@ -31,6 +31,8 @@ pub struct AppState {
     pub notes: crate::notes::Notes,
     /// The browser agents use, a tab per task (§18).
     pub browser: crate::browser::Browser,
+    /// Agents on a loop (§21).
+    pub loops: crate::loops::Loops,
 }
 
 /// Snapshot of one checkout's status, reused until it goes hot or ages out.
@@ -132,9 +134,11 @@ mod outgoing;
 mod landed;
 mod task_context;
 mod spec;
+mod spec_draft;
 mod notes;
 mod phone;
 mod browser;
+mod loops;
 
 pub use projects::*;
 pub use repos::*;
@@ -157,8 +161,10 @@ pub use outgoing::*;
 pub(crate) use landed::{advance, landed};
 pub use notes::*;
 pub use spec::*;
+pub use spec_draft::*;
 pub use phone::*;
 pub use browser::*;
+pub use loops::*;
 
 #[cfg(test)]
 mod tests {
@@ -177,6 +183,9 @@ mod tests {
             group: group.map(str::to_string),
             store: None,
             update_by: None,
+            check: None,
+            spec_folder: None,
+            specs_in_app: false,
         }
     }
 
@@ -315,6 +324,7 @@ mod tests {
             waiting: false,
             acp: false,
             session: None,
+            on_loop: None,
         }
     }
 
@@ -524,6 +534,7 @@ mod tests {
             messages: crate::messages::Messages::for_tests(std::env::temp_dir().join("vl-test-messages.json")),
             notes: crate::notes::Notes::load(&root),
             browser: Default::default(),
+            loops: Default::default(),
         };
 
         assert_eq!(super::adopt_worktrees(&state), (1, Vec::new()));

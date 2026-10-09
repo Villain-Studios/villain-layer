@@ -13,6 +13,7 @@
  *   &view=work|tickets|reviews|chat|repos
  *   &task=t-login          the selected task (none: the All agents overview)
  *   &tab=terminals|diff|pr
+ *   &loop=checking|held|passed|gave_up   the task's agents on a loop (§21)
  *
  * From the console, or a browser tool's JavaScript:
  *
@@ -26,9 +27,11 @@
  */
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
-import type { BrowserView, Catchup, Cleaned, FlowStatus, Message, PaneInfo, PhoneStatus, Project, RepoUpdate, Spec, StartTo, Synced, TaskView } from "../lib/types";
+import type { BrowserView, Catchup, Cleaned, FlowStatus, Message, PaneInfo, PhoneStatus, Project, RepoUpdate, StartTo, Synced, TaskView } from "../lib/types";
 import { ago, SCENARIOS } from "./world";
 import { acpAnswers, seedAcp } from "./acp";
+import { loopAnswers, seedLoop } from "./loop";
+import { specAnswers } from "./spec";
 
 type Args = Record<string, unknown>;
 type Answer = (args: Args) => unknown;
@@ -40,6 +43,10 @@ const scenarios = new Map(Object.entries(SCENARIOS));
 const world = (scenarios.get(params.get("scenario") ?? "busy") ?? SCENARIOS.busy)();
 const calls: { cmd: string; args: Args }[] = [];
 for (const p of world.panes) if (p.acp) seedAcp(p.id);
+for (const p of world.panes) {
+  const phase = params.get("loop");
+  if (phase && p.task_id === params.get("task") && p.kind === "agent" && p.running) seedLoop(p.id, p.task_id, phase);
+}
 const overrides = new Map<string, Answer>();
 
 /** Base64 of the UTF-8 bytes, as the backend sends it, and how many bytes that was. */
@@ -180,31 +187,6 @@ function phoneAddresses(): PhoneStatus["addresses"] {
   ];
 }
 
-/** What a draft streams in: a spec for whichever ticket asked. */
-const DRAFT = `## Goal
-Password resets are rate-limited, so one address cannot be flooded with reset mails.
-
-## Acceptance criteria
-- [ ] AC-1: A sixth reset request for one address within an hour is refused with a clear message.
-- [ ] AC-2: Requests for different addresses are counted separately.
-- [ ] AC-3: The limit resets an hour after the first request.
-
-## Out of scope
-- Rate-limiting sign-ins.
-
-## Open questions
-- Should support staff be able to lift the limit for an address?
-`;
-
-/** The criteria of a spec, roughly as `spec::criteria` reads them. */
-function mockCriteria(text: string): Spec["criteria"] {
-  const part = text.split(/^#+ /m).find((p) => p.toLowerCase().startsWith("acceptance criteria")) ?? "";
-  return [...part.matchAll(/^[-*] (?:\[[ xX]\] )?(?:(AC-\d+)[:.]? )?(.+)$/gm)].map((m, i) => ({
-    id: m[1] ?? `AC-${i + 1}`,
-    text: m[2].trim(),
-  }));
-}
-
 const answer: Record<string, Answer> = {
   // What the app asks for on every launch.
   // A copy, as the real IPC's JSON always is: handing back the object a
@@ -237,7 +219,7 @@ const answer: Record<string, Answer> = {
     return null;
   },
   cursor_ide_installed: () => false,
-  list_projects: () => world.projects,
+  list_projects: () => structuredClone(world.projects),
   // A copy, as IPC would hand over: the same objects edited in place look
   // unchanged to `sameTasks`, and the UI never sees the edit.
   list_tasks: () => structuredClone(world.tasks),
@@ -254,33 +236,11 @@ const answer: Record<string, Answer> = {
   pty_resize: () => null,
   pty_detach: () => null,
   ...acpAnswers,
+  ...loopAnswers(world.projects),
   resumable_agents: () => [],
-  task_prompt: (a) =>
-    "Work on ACME-123: Fix login race.\n\nThe ticket says…" +
-    (world.specs[a.taskId as string]
-      ? "\n\nThe user's spec for this work is /Users/you/.villain-worktrees/ACME-123/SPEC.md. Its acceptance criteria are what done means; read it before you start."
-      : ""),
-
+  task_prompt: () => "Work on ACME-123: Fix login race.\n\nThe ticket says…",
   // Specs (§19). A draft arrives in pieces, as the real one does.
-  read_spec: (a) => structuredClone(world.specs[a.taskId as string] ?? null),
-  save_spec: (a) => {
-    const text = (a.text as string).trim();
-    if (!text) {
-      delete world.specs[a.taskId as string];
-      return null;
-    }
-    world.specs[a.taskId as string] = { text, criteria: mockCriteria(text) };
-    return structuredClone(world.specs[a.taskId as string]);
-  },
-  draft_spec: async (a) => {
-    let sent = "";
-    for (const piece of DRAFT.match(/[^\n]*\n?/g) ?? []) {
-      await new Promise((r) => setTimeout(r, 60));
-      sent += piece;
-      void emit("spec:draft", { request_id: a.requestId, text: piece });
-    }
-    return sent;
-  },
+  ...specAnswers(world),
   spawn_agent: (a) => {
     const p = newPane(a, "agent", a.taskId as string);
     // An ACP agent is sent its opening prompt once its conversation opens.

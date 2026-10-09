@@ -51,6 +51,7 @@ the app's own copy of each repository, not to the user's clone:
 | per pane | a reader, a writer and a waiter thread, plus flush timers | owned by `pty.rs` |
 | browser | a reader and a writer thread on Chrome's pipe | owned by `browser/cdp.rs`; events are handled on the reader, which never waits on Chrome |
 | background | `attention` (5s), `news` (3 min while away), restore and login-shell warm-up at startup | started in `lib.rs` |
+| a loop | one async task per agent on a loop (`loops.rs`), waiting on its pane's turns; the loop's git, its checks and what it types go to the blocking pool | at most two loops' checks at once (`AT_ONCE`) |
 
 `commands::blocking` exists because `delete_task` once froze the whole app
 for fifteen seconds, stopping three agents on the main thread. The guard's
@@ -123,13 +124,15 @@ for, and the reverse, and that each is in this table.
 | `acp:update` | pane id | an ACP pane's conversation changed while it is on screen (batched, ~40ms; ACP-7) | `lib/acpUpdates.ts`, one listener for all → `AcpPane.tsx` asks `acp_view` for what changed |
 | `pr:draft` | `{ task_id, text }` | a chunk of a drafted PR description | `PrPanel.tsx` |
 | `issue:draft` | `{ request_id, text }` | a chunk of an improved ticket description | `tickets/OptimizeDescription.tsx` |
-| `spec:draft` | `{ request_id, text }` | a chunk of a task's drafted spec (SPEC-2) | `Watchers.tsx` → `specChunk`, into that task's editor |
+| `spec:draft` | `{ request_id, checkout_id, text }` | a repository's spec draft so far (SPEC-5), whole each time | `Watchers.tsx` → `useSpecs.chunk`, into that editor |
+| `spec:changed` | task id | an agent ticked a step of the task's spec (`spec_task`, SPEC-13) | `Watchers.tsx` → `useSpecs.changed`, which reads it again if it is shown |
 | `system-notify-click` | a `Target` (`target.rs`) | a banner was clicked | `Watchers.tsx` → `goTo`, which opens what it is about (NOTE-4) |
 | `app:notices` | none | a notice was queued after startup (`commands::notify`) | `Watchers.tsx` → `takeNotices`, as toasts |
 | `panes:waiting` | none | the panes a launch did not put back changed: marked at launch, reopened, forgotten (PANE-7) | `Watchers.tsx` → `refreshWaiting` |
 | `messages:changed` | none | the message center's log changed: recorded, read or cleared (`messages.rs`) | `Watchers.tsx` → `refreshMessages` |
 | `notes:changed` | none | an agent remembered, checked or forgot a repo note (`notes.rs`, MEM-5) | `ReposView.tsx`, while open → `listRepoNotes` |
 | `browser:changed` | task id, or `""` for every task | a task's tab changed: made, navigated, retitled, loading, an agent acted, closed; or the browser went away (`browser/`) | `BrowserPanel.tsx` (`useBrowserView`) → `browser_view` |
+| `loop:changed` | pane id | a pane's loop changed: started, waiting, checking, a check run, ended (`loops.rs`, LOOP-9) | `LoopBar.tsx` (`useLoop`) → `loop_view` |
 | `phone:changed` | none | phone access changed: a way in switched, a phone paired, forgotten, connected or gone (`phone/`) | `PhoneSettings.tsx` → `phoneStatus`, for Settings and the top bar's phone |
 
 What still polls, and why, is marked at each `setInterval` with

@@ -94,6 +94,24 @@ export function ReposView() {
     }
   }
 
+  async function setCheck(p: Project, command: string) {
+    try {
+      await api.setProjectCheck(p.id, command || null);
+      await refreshRepos();
+    } catch (e) {
+      fail(e);
+    }
+  }
+
+  async function setSpecs(p: Project, inApp: boolean, folder: string) {
+    try {
+      await api.setProjectSpecs(p.id, inApp, folder);
+      await refreshRepos();
+    } catch (e) {
+      fail(e);
+    }
+  }
+
   async function sync(ids: string[]) {
     setSyncing((s) => new Set([...s, ...ids]));
     try {
@@ -263,6 +281,7 @@ export function ReposView() {
                   <CopyState h={h} now={now} />
                   <div className="spacer" />
                   <UpdateByPicker p={p} h={h} onChange={(by) => void setUpdateBy(p, by)} />
+                  <SpecsPicker p={p} onChange={(inApp, folder) => void setSpecs(p, inApp, folder)} />
                   <Combo
                     value={p.group ?? ""}
                     options={groupNames}
@@ -297,6 +316,8 @@ export function ReposView() {
                       view moves the leading slash to the end. */}
                   <span className="rpath" title={p.path}><bdi>{p.path}</bdi></span>
                   {h?.origin && <span className="rorigin" title={`Fetches from ${h.origin}`}>{h.origin}</span>}
+                  <div className="spacer" />
+                  <CheckCommand p={p} onSave={(command) => void setCheck(p, command)} />
                 </div>
                 {problem && (
                   <div className="repo-problem">
@@ -389,6 +410,47 @@ function UpdateByPicker({ p, h, onChange }: {
       <option value="">{h?.update_guess ? `${guess.by}s (guessed)` : "merges (default)"}</option>
       <option value="merge">merges</option>
       <option value="rebase">rebases</option>
+    </select>
+  );
+}
+
+/** What a loop runs here (LOOP-1), saved on Enter or leaving the field. */
+function CheckCommand({ p, onSave }: { p: Project; onSave: (command: string) => void }) {
+  const [value, setValue] = useState(p.check ?? "");
+  useEffect(() => setValue(p.check ?? ""), [p.check]);
+  return (
+    <input
+      className="repo-check mono"
+      value={value}
+      placeholder="check command, for loops"
+      title="What says the work here is done (bun run check, cargo test). A loop runs it after each of an agent's turns."
+      spellCheck={false}
+      onChange={(e) => setValue(e.target.value)}
+      onBlur={() => { if (value.trim() !== (p.check ?? "")) onSave(value.trim()); }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") e.currentTarget.blur();
+        if (e.key === "Escape") setValue(p.check ?? "");
+      }}
+    />
+  );
+}
+
+/**
+ * Where specs are kept for this repository (SPEC-1, SPEC-3): committed in it,
+ * under a folder, or by the app for a repository whose team keeps none.
+ */
+function SpecsPicker({ p, onChange }: { p: Project; onChange: (inApp: boolean, folder: string) => void }) {
+  const folder = p.spec_folder ?? "specs";
+  const folders = [...new Set(["specs", "docs/specs", folder])];
+  return (
+    <select
+      className="update-by"
+      value={p.specs_in_app ? "" : folder}
+      title="Where a task's spec is kept: committed on its branch in this folder, or by the app, outside git"
+      onChange={(e) => onChange(!e.target.value, e.target.value || folder)}
+    >
+      {folders.map((f) => <option key={f} value={f}>specs in {f}/</option>)}
+      <option value="">specs kept by the app</option>
     </select>
   );
 }

@@ -33,7 +33,8 @@ by picking folders, or by scanning a folder (three levels deep) and ticking
 what was found. A repo has at most one group; groups are renamed in place.
 Each repo says how it is doing, and the view keeps them in shape: **Sync**
 brings them up to date, **Locate** follows a clone that moved, and **Clean
-up** removes what tasks left behind.
+up** removes what tasks left behind. A repo can have a check command, which
+a loop runs (LOOP-1).
 
 - **REPO-1** A repo MUST be a git work tree root. It is registered by path,
   and its default branch is detected (origin/HEAD, then `main`, then
@@ -400,7 +401,9 @@ shows as a banner above the terminals.
 - **STATE-2** Esc or Ctrl-C at a question or during a turn MUST make the
   pane idle, since no Stop hook runs for an interrupted turn. Answering a
   question makes it working.
-- **STATE-3** Done becomes idle once the pane has been on screen.
+- **STATE-3** Done becomes idle once the pane has been on screen. A pane
+  on a loop reads as working between its turns while the loop runs, and as
+  done again when the loop hands back (LOOP-8).
 - **STATE-4** Every view MUST agree: the sidebar, the task's pane bar, All
   agents, Chat and the "N need you" count use `paneState` / `needsYou` in
   `lib/derive.ts`, and the dock count uses the same rule in `attention.rs`.
@@ -601,7 +604,8 @@ send feedback to an agent, and finish a merged task.
   one (UPD-4). Never `--force`. Pushes run in every repo at once.
 - **PR-4** The description can be drafted. A one-shot model run gets the
   commits, the stat and the diff (lockfiles left out, 60k characters at
-  most) and streams its answer into the field. Failing that, a running
+  most), and the spec's requirements with their check (SPEC-16), and
+  streams its answer into the field. Failing that, a running
   agent is asked to write `PR_DESCRIPTION.md` in the task folder.
 - **PR-5** Review threads MUST be read in full: every page, resolved and
   outdated flags kept. A verdict is each reviewer's latest decisive review.
@@ -692,7 +696,7 @@ offers Start work.
   which it was ("preselected from the last task under ACME-100"), so a
   stale guess is visible. It picks
   a base, optionally starts an agent with the ticket as the prompt (or,
-  with "Write a spec first", leaves that to the Spec tab, SPEC-6), and
+  with "Write a spec first", leaves that to the Spec tab, SPEC-18), and
   moves the ticket where its project's "work starts →" says, beside the
   other stages of Tickets follow the work (TKT-8): to the first
   in-progress (`indeterminate`) status its workflow allows, unless it is
@@ -930,6 +934,7 @@ credentials themselves.
 | `remember` | keep a lasting fact about a repository, after asking the user (MEM-1) | yes |
 | `check_note` | say a note still holds, as of now | |
 | `forget_note` | remove a note that no longer holds, with a reason for the message center | yes |
+| `spec_task` | tick (or untick) a numbered step of a repository's spec `tasks.md` (SPEC-13) | |
 | `browser_navigate` | open a page in the task's browser tab (BRW-3), and get its outline | |
 | `browser_back` | back one page | |
 | `browser_snapshot` | the page as an outline, each element it can act on numbered | |
@@ -1025,7 +1030,7 @@ Known gaps:
 | `~/Library/Application Support/eu.codevillain.villain-layer/` | `config.json`: repos, tasks, settings, saved panes. `messages.json`: the message center (MSG-4). `notes.json`: repo notes (MEM-7). At agent launch also `.mcp.json` (0600), `claude-hooks.json`, `copilot-plugin/`, `opencode-plugin.js` |
 | Keychain, service `eu.codevillain.villain-layer` | one item holding every token, paired phones' included (PHONE-3), and the passwords of the browser's saved sign-ins (BRW-18) |
 | `~/.villain-worktrees/` (settable) | task folders, `_chat/` rooms, and `.repos/`: the app's own copy of each repo (REPO-4) |
-| a task folder | the worktrees, `AGENTS.md` and `CLAUDE.md` (task context), `TICKET.md` (PANE-13), `SPEC.md` (SPEC-3), `.mcp.json`, and `.gemini/settings.json`, `PR_DESCRIPTION.md`, `PR_FEEDBACK.md`, and hand-offs too long to type (`CONFLICTS.md`, `REVIEW_COMMENTS.md`, `PR_DRAFT_REQUEST.md`, `FIRST_PROMPT.md`, PANE-11) as they come up |
+| a task folder | the worktrees, `AGENTS.md` and `CLAUDE.md` (task context), `TICKET.md` (PANE-13), `.spec-drafts/`: spec drafts and checks (SPEC-6, SPEC-15), `.mcp.json`, and `.gemini/settings.json`, `PR_DESCRIPTION.md`, `PR_FEEDBACK.md`, and hand-offs too long to type (`CONFLICTS.md`, `REVIEW_COMMENTS.md`, `PR_DRAFT_REQUEST.md`, `FIRST_PROMPT.md`, `CHECKS.md` (LOOP-6), PANE-11) as they come up |
 | `~/.claude.json` | trust entries for the app's own folders only (PANE-10) |
 | `<config folder>/browser/` | the browser's own Chrome profile (BRW-1): cookies, sign-ins and storage of the pages opened there |
 | `~/Library/Logs/villain-layer/panic.log` | a crash's location and backtrace |
@@ -1034,7 +1039,8 @@ The dev build uses `eu.codevillain.villain-layer.dev` for its config folder
 and keychain item instead.
 
 - **DISK-1** Nothing generated MUST ever be written inside a worktree,
-  where it would end up in a commit.
+  where it would end up in a commit. The one exception is a spec the user
+  approved (SPEC-1), which is meant to be committed.
 - **DISK-2** Deleting a task MUST remove what the app generated in its
   folder, and what others leave there that goes with it (Claude Code's
   `.claude/settings.local.json`, Finder's `.DS_Store`), and then the
@@ -1369,62 +1375,161 @@ Known gaps:
 
 ## 19. Specs
 
-A task can have a spec: what the work is for, what done means, and what it
-leaves alone, agreed before an agent starts. The Spec tab, first of a
-task's tabs, drafts one from the ticket, holds it while you edit it, and
-saves it beside the task, where every agent in the task reads it. Start
-agent there saves it and starts an agent on it. An agent started from the
-raw ticket had nothing that said when it was done, and nor had anyone
-checking its work.
+A task can have a spec: what the work must do, how it will be done, and
+the steps to get there, agreed before an agent starts and checked when it
+is done. Each repository in the task has a spec of its own, a folder of
+three files committed on the task's branch, so it goes through review
+with the code and stays in the repository after the task, the branch and
+the app are gone. The Spec tab, first of a task's tabs, drafts each file,
+holds it while you edit it, and commits it when you approve it.
 
-- **SPEC-1** A spec MUST have its parts under these headings: Goal,
-  Acceptance criteria, Out of scope, Open questions. Each acceptance
-  criterion is a list item under its heading, with its id first (`AC-1`,
-  `AC-2`, …); one without an id is numbered by its place in the list. The
-  tab MUST list the saved spec's criteria, count them on the tab, and warn
-  when it has none, since they are what done means.
-- **SPEC-2** Drafting MUST run a fresh one-shot model (Claude Code, Sonnet,
-  no tools, no MCP, no thinking) over the saved ticket (`TICKET.md`,
-  PANE-13), fenced off as data and not instructions, and the names of the
-  task's repositories. It streams into the editor. It invents no
-  requirement the ticket does not imply: what the ticket leaves unclear
-  goes under Open questions. A task with no saved ticket is drafted from
-  its name. A redraft over text in the editor asks first; a failed draft
-  puts back what the editor held.
-- **SPEC-3** A spec MUST reach agents only once saved: `SPEC.md` in the
-  task folder (never a worktree, DISK-1), written whole, and the context
-  files rewritten with it. A draft or an edit not saved reaches nobody, and
-  the tab says so. Saving an empty spec removes it. What the editor holds
-  is kept per task while the app runs, so switching tabs or tasks loses
-  nothing.
-- **SPEC-4** The context file (PANE-13) MUST carry the saved spec above the
-  ticket, as the user's own: its acceptance criteria are what done means,
-  it wins where it and the ticket disagree, what it puts out of scope is
-  left alone, and its open questions are asked rather than guessed. It is
-  not quoted as the ticket is, since the user wrote or agreed every line.
-  Its headings go a level down, under the app's. Past 8 KB it is cut, and
-  says `SPEC.md` has the rest.
-- **SPEC-5** An opening prompt for a task with a spec (`task_prompt`: the
-  launch dialog, Start agent, handoffs) MUST end by pointing at `SPEC.md`,
-  by its full path, so an agent started inside one repo finds it too.
-- **SPEC-6** Start work, with an agent picked, MUST offer "Write a spec
+A spec kept beside the task (`SPEC.md` in the task folder) was deleted
+with the task, and nothing ever checked the work against it: an agent was
+told what done meant, and nobody asked afterwards whether it got there.
+
+The shape follows Kiro's specs: requirements, then design, then tasks,
+each reviewed before the next is drafted.
+
+### What a spec is
+
+- **SPEC-1** A repository's spec MUST be the folder `specs/<task>/` in its
+  worktree, `<task>` being the task's branch with `/` as `-`
+  (`specs/ACME-123-fix-login-race/`). The `specs/` folder is set per
+  repository in the Repos view. It holds:
+  - `requirements.md`: Goal, Requirements, Out of scope, Open questions.
+    Each requirement is a list item with its id first (`R-1`, `R-2`, …),
+    written as WHEN a condition THE SYSTEM SHALL a behaviour, so that
+    someone can check it. One without an id is numbered by its place.
+  - `bugfix.md`, in place of `requirements.md` for a bug: Current
+    behaviour, Expected behaviour, Unchanged behaviour (WHEN … THE SYSTEM
+    SHALL CONTINUE TO …), each item with its id, and Open questions.
+    Feature or bug is chosen when the spec is started.
+  - `design.md`: how this repository will meet them. Approach, what
+    changes where, how it meets the other repositories (an endpoint's
+    shape, an event's fields), error handling, how it will be tested.
+  - `tasks.md`: numbered steps (`- [ ] 3. Add the limiter (R-1, R-2)`),
+    each naming the requirements it serves, ticked when done.
+- **SPEC-2** A task in several repositories MUST have a spec in each, for
+  that repository's share of the work. A requirement that two
+  repositories meet together is in both, and each design says the side of
+  it that is its own. Another repository's requirement is referred to by
+  its folder name: `web R-2`.
+- **SPEC-3** A repository whose spec setting is off MUST NOT get spec
+  files in its worktree. Its spec is kept in the app's folder instead
+  (`<config folder>/specs/<repository>/<task>/`, same files), so it
+  outlives the task on this machine, though not in git. The tab says
+  which.
+
+### Drafting and approving
+
+- **SPEC-4** The files MUST be drafted in order and each approved before
+  the next is drafted: requirements (or bugfix), then design, then tasks.
+  Quick spec drafts all three at once, and they are approved together.
+- **SPEC-5** Each draft MUST be a fresh one-shot run (Claude Code,
+  Sonnet, no MCP, nothing that writes or runs), streamed into the editor:
+  - Requirements: one run over the ticket (`TICKET.md`, fenced off as data
+    and not instructions) and the task's repositories, which writes every
+    repository's requirements, so the split is decided in one place. It
+    invents no requirement the ticket does not imply; what the ticket
+    leaves unclear goes under Open questions. A task with no saved ticket
+    is drafted from its name.
+  - Design: one run per repository, allowed to read its worktree, over its
+    approved requirements and the other repositories'.
+  - Tasks: one run per repository over its approved requirements and
+    design.
+
+  A redraft over text in the editor asks first; a failed draft puts back
+  what the editor held.
+- **SPEC-6** Approving MUST write the file into the worktree and commit it
+  on the task branch, as the user, with only the spec's own files in the
+  commit: whatever an agent has staged or changed there stays as it was.
+  The message says which file of which task ("Approve the design for
+  ACME-123."). A draft or an edit not approved reaches nobody, and the
+  tab says so. Drafts are kept in the task folder (`.spec-drafts/`) until
+  approved, so neither switching tasks nor quitting the app loses one.
+- **SPEC-7** Changing an approved file MUST mark the files after it out of
+  date. Sync redrafts them from it: tasks already ticked are kept, steps
+  for new requirements are added, and a step whose requirements are all
+  gone is marked for the user to remove, never removed by itself.
+- **SPEC-8** The tab MUST show, per repository, each file's state (not
+  started, draft, approved, out of date), the requirements, and the
+  tasks ticked of the total. A requirements file with no requirements is
+  warned about: they are what done means.
+- **SPEC-9** A task whose worktree already has `specs/<task>/` MUST open
+  it: a task cut from a branch that has one, or a second task for the
+  same ticket on the same branch.
+
+### Working to it
+
+- **SPEC-10** The context file (PANE-13) MUST name each repository's spec
+  folder and carry its requirements above the ticket, as the user's own:
+  they are what done means, they win where they and the ticket disagree,
+  what they put out of scope is left alone, and open questions are asked
+  rather than guessed. Past 8 KB they are cut, and point at the files.
+- **SPEC-11** An opening prompt for a task with a spec (`task_prompt`: the
+  launch dialog, Start agent, handoffs) MUST end by pointing at the spec
+  folders by full path, so an agent started inside one repository finds
+  the others too.
+- **SPEC-12** Start agent on the tab MUST start an agent on the approved
+  tasks: at the task folder for every repository, or in one repository
+  for its own. Its prompt tells it to work through `tasks.md` in order and
+  mark each step done as it finishes it.
+- **SPEC-13** An agent MUST mark a step done with the `spec_task` tool,
+  which ticks it in `tasks.md` and updates the tab. Ticks are committed
+  with the next approval or before Open pull requests (PR-1), with only
+  the spec's files in the commit. A tick an agent makes by editing the
+  file itself counts the same: the file is the record.
+- **SPEC-14** Approving a change while agents in the task are running
+  MUST offer to tell them: each is sent one line naming the files that
+  changed, typed into a terminal or sent as a prompt over ACP. Never on
+  its own, since a line typed into a busy agent interrupts it.
+
+### Checking against it
+
+- **SPEC-15** Check against spec MUST run, per repository, a one-shot run
+  allowed to read the worktree, over its approved requirements and the
+  branch's changes from its branch point (`git::baseline`). It answers
+  per requirement: met, not met or unclear, with the files and lines that
+  show it. The answer is shown beside each requirement, with the commit
+  it was checked at, and marked stale once the branch moves on. It is
+  kept in the task folder, never committed.
+- **SPEC-16** A drafted pull request description (PR-4) MUST, for a
+  repository with a spec, link its spec folder and list its requirements
+  with the latest check's answer, or say none was run.
+
+### From Start work
+
+- **SPEC-18** Start work, with an agent picked, MUST offer "Write a spec
   first", on until turned off, and remembered. With it the task is made
   and the ticket moved as without it, but no agent starts: the task opens
-  on its Spec tab with a draft being written (unless the task already has
-  a spec), and Start agent there starts the agent Start work had picked,
-  at the task folder.
+  on its Spec tab with the requirements being drafted (unless the task
+  already has a spec, SPEC-9), and Start agent there starts the agent
+  Start work had picked (SPEC-12).
 
-Code: `commands/spec.rs`, `commands/task_context.rs`, `oneshot.rs`,
-`SpecView.tsx`, `store.ts` (`specs`, `pendingSpec`),
-`tickets/StartWorkDialog.tsx`.
+### Moving from `SPEC.md`
+
+- **SPEC-17** A task with a `SPEC.md` from before MUST offer it as the
+  requirements draft of each of its repositories, and remove it once
+  those are approved.
+
+Code: `spec.rs` (the files, and what is read from them),
+`commands/spec.rs` (where a spec lives, approving, ticking),
+`commands/spec_draft.rs` (drafting, checking), `commands/task_context.rs`,
+`git/only.rs` (committing only the spec), `mcp.rs` (`spec_task`),
+`commands/open_prs.rs`, `SpecView.tsx`, `spec/SpecSide.tsx`,
+`lib/specs.ts`, `tickets/StartWorkDialog.tsx`, `ReposView.tsx` (the
+per-repository setting).
 
 Known gaps:
 - Drafting runs Claude Code, whichever agent will do the work.
-- The draft is written from the ticket, not from reading the code.
-- Agents already running are not told when the spec changes; one started
-  afterwards reads it.
-- What the editor holds and has not saved is lost when the app quits.
+- A spec is approved by whoever runs the app. There is no second
+  approver, and the commit is the only record of who approved it.
+- Kiro runs independent tasks side by side; here one agent works through
+  them in order.
 - A draft cannot be stopped once started.
+- A step an agent ticks is an uncommitted change in the worktree until the
+  next approval or Open pull requests, and shows in the Diff tab until then.
+- Drafting and checking need Claude Code on the PATH.
 
 ## 20. Agents over ACP
 
@@ -1441,7 +1546,7 @@ count and banner treats it like any other.
 
 | Agent | ACP command | Picks a conversation up by | Checked against |
 |---|---|---|---|
-| `claude` | `claude-agent-acp`, installed separately (`@agentclientprotocol/claude-agent-acp`, formerly `@zed-industries/`) | load, resume, list | adapter 0.22.2 |
+| `claude` | `claude-agent-acp`, installed separately (`@agentclientprotocol/claude-agent-acp`, formerly `@zed-industries/`) | load, resume, list | adapter 0.87.0 (and 0.22.2) |
 | `copilot` | `copilot --acp` | load, list | 1.0.93 |
 | `opencode` | `opencode acp` | load, resume, list | 1.18.35 |
 | `gemini` | `gemini --acp` | load | 0.63.0, `initialize` only: it would not open a conversation for a personal Google account |
@@ -1540,6 +1645,126 @@ Known gaps:
   terminal.
 - Drafting PR and ticket descriptions still runs `claude -p` (§3).
 - The slash commands an agent offers are only suggested as `/` is typed.
+
+## 21. Loops
+
+An agent can be put on a loop: each time it ends a turn, the app runs the
+checks of the repositories it works in (each repository's own command:
+`bun run check`, `cargo test`), and when they fail, sends it what failed
+and lets it go on. It goes round until they pass, or until it has used its
+rounds, and then stops and tells you. Without one, you are the loop: you
+read that the agent is done, run the tests, paste the failures back, and
+again.
+
+A repository's check command is set in the Repos view, or in the dialog
+that starts a loop. The loop button in a task's pane bar starts one on the
+agent pane in front; the bar under the pane bar shows how it is going.
+
+- **LOOP-1** A repository MAY have a check command: what says the work in
+  it is done. It runs in a checkout's worktree through `/bin/sh -c`, in the
+  login shell's environment (PANE-4) with `NO_COLOR` set, standard error
+  folded into standard output and nothing on standard input, and passes
+  when it exits 0. It is set only by the user: never from a ticket, a spec
+  or an agent, since it is run as the user, unattended.
+- **LOOP-2** A loop MUST be started by the user on one running agent pane,
+  with the most rounds it may take (5 unless changed, at most 20). It
+  checks the repositories the pane works in: its own, for a pane started in
+  one, else every repository of the task. Those without a check command
+  are skipped, and with none at all it does not start. One loop per pane.
+  An agent not in a turn when its loop starts is checked at once;
+  otherwise at the end of the turn. For an agent over ACP the dialog
+  offers its mode (ACP-12) as it stands, changed only if the user changes
+  it: one that asks before every command holds its loop at each, as
+  Claude Code in its default mode did at an `ls`.
+- **LOOP-3** A loop MUST act when its agent ends a turn, as the CLI
+  reports it (a Claude Code Stop hook, an ACP prompt answered: STATE-1),
+  never on a timer or on output going quiet. A turn interrupted (STATE-2)
+  is not an end: someone is at the keys.
+- **LOOP-4** At a turn's end the loop MUST first see whether anything
+  changed in the worktrees it checks (the commit, the diff, the untracked
+  files) since its last failed check ended: measured from what the check
+  left, so a check that writes files of its own (a coverage report, a new
+  snapshot) is not taken for the agent's work. When nothing did, the agent most
+  likely stopped to ask something, or gave up: the loop runs nothing,
+  sends nothing, and waits on you, saying so. It goes on at the next turn
+  that changes something. A turn that ends on a usage limit (STATE-6)
+  waits the same way. Run again on nothing new, the same failures went
+  back to an agent that had already said what it needed.
+- **LOOP-5** Checks MUST run one repository after another, at most two
+  loops' at a time in the app (the others queue, and say so), each command
+  for at most 20 minutes. A command still running then is stopped as an
+  agent is (PANE-5: SIGTERM to its process group, then SIGKILL), and the
+  loop stops, saying why. So does a command that exits 127, the shell's
+  code for one it cannot find, which is seldom the agent's to fix.
+  Stopping a loop stops its check, and quitting the app stops every
+  check as it stops the agents: in a process group of its own, a build
+  would otherwise run on after the app had gone. Nothing
+  that waits runs on the main thread or the async runtime. Every check is
+  a real process, often a whole build: the cap keeps a dozen loops from
+  building at once on one laptop.
+- **LOOP-6** Checks that fail, with rounds left, MUST go back to the
+  agent: for each repository that failed, its command, its exit code and
+  the end of its output (150 lines, 12 KB, without colour codes), with
+  the round it is and how many there are, and to end the turn once they
+  pass. To a terminal as a file in the task folder (`CHECKS.md`) with a
+  pointer typed (PANE-11), to an agent over ACP whole (ACP-4). Only
+  between turns: when someone started a turn while the checks ran, their
+  answer is thrown away and the loop checks again at that turn's end.
+- **LOOP-7** A loop MUST end when its checks pass (passed), when they
+  still fail after its last round (gave up), when the user stops it, when
+  its agent exits or is closed, or when a check cannot run (LOOP-5).
+  Ending stops nothing else: the agent stays as it is.
+- **LOOP-8** While a loop runs, a finished turn MUST NOT read as your
+  turn: the pane reads as working wherever its state shows (its dot, the
+  "needs you" count, the dock, banners, Keep awake: STATE-4, STATE-7),
+  since the app is still at work on it. Waiting on you (LOOP-4) or ended,
+  it reads as done again, as of that moment, so the dock and a banner say
+  so even if you looked at the pane during the checks. The banner and the
+  message center say how the loop ended ("passed its checks", "still
+  fails its checks after 5 rounds", why it stopped) in place of "has
+  finished".
+- **LOOP-9** The pane MUST show its loop under the pane bar: the round,
+  what it is doing (waiting for the agent, queued, checking which
+  repository), how it ended, and each check run, newest first, with every
+  repository's result and output. Stop while it runs; Start again once it
+  has ended. The window is told of a change (`loop:changed`), never polls.
+- **LOOP-10** A task's context file (PANE-13) MUST name each repository's
+  check command, and tell agents to run it before they end a turn, so an
+  agent checks its work by the measure the loop will, loop or not. Setting
+  a command rewrites the context files of the tasks that repository is in.
+- **LOOP-11** A loop MUST come back with its agent when the app reopens
+  (PANE-7). It is kept with the saved pane, as it goes: its rounds, the
+  rounds used, what the worktrees were when its checks last failed, and
+  whether it waits on you. Once the pane is back, and its agent has said
+  it is ready (or after a minute), the loop starts again on it: one that
+  waited on you waits again; any other checks at once, since the turn it
+  was waiting for ended with the app, and goes on from the rounds it had
+  used. A pane that waits to be reopened brings its loop back when it is.
+  Quitting the app is not the end of a loop. One that passed, gave up, was
+  stopped, or whose agent exited on its own is not kept. Its check runs
+  are not kept: the bar starts again with the next one. Before this, a
+  restart ended every loop, and the agent came back with nothing driving it.
+
+Code: `loops.rs` (the registry and the driver), `loops/check.rs` (running
+a command), `git/snapshot.rs` (what changed), `pty.rs` (`turns`,
+`set_looping`), `attention.rs`, `commands/loops.rs`,
+`commands/task_context.rs`, `LoopBar.tsx`, `ReposView.tsx`.
+
+Known gaps:
+- Only the checks decide: the reviewer (DIFF-6) is not part of a loop
+  yet, nor is a spec's check.
+- A loop ends where you take over: it does not open a pull request, and
+  does not follow CI or review comments after one (§8).
+- A check is its command's exit code: a flaky test sends the agent after
+  a failure that is not there.
+- An agent asks for permissions on a loop as it does off one, and holds
+  the loop until you answer: whether it asks is its own setting (ACP-12).
+  Claude Code over ACP in its `auto` mode runs the commands a fix needs
+  without asking; in `acceptEdits` it still asks before running one.
+- Checked against Claude Code over ACP (`claude-agent-acp` 0.87.0, `auto`
+  mode) and a fake ACP agent. Claude Code, Copilot, OpenCode and Gemini in
+  a terminal report their turns' ends the same way (STATE-1), but have not
+  been run on a loop.
 
 ---
 

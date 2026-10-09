@@ -9,8 +9,8 @@
 //! the app had already fetched.
 //!
 //! It also carries what earlier tasks learned about each repository here
-//! (MEM-4), with how likely each note is to be out of date, and the spec
-//! the user agreed for the work (SPEC-4).
+//! (MEM-4), with how likely each note is to be out of date, and the
+//! requirements of the spec the user agreed for the work (SPEC-10).
 
 use std::path::Path;
 
@@ -35,8 +35,17 @@ pub(crate) const TICKET_FILE: &str = "TICKET.md";
 /// read into every turn of every agent in the task.
 const MAX_DESCRIPTION: usize = 8_000;
 
-/// The same for the spec (SPEC-4). Past it, `SPEC.md` has the rest.
+/// The same for the spec's requirements, all repositories' together
+/// (SPEC-10). Past it, the files have the rest.
 const MAX_SPEC: usize = 8_000;
+
+/// One repository's approved requirements: its folder in the task, where its
+/// spec is, and the text.
+pub(crate) struct SpecRequirements {
+    pub folder: String,
+    pub dir: String,
+    pub text: String,
+}
 
 /// Bytes of notes per repository in the context file (MEM-4). The rest are
 /// counted, and `repo_notes` has them.
@@ -62,8 +71,12 @@ pub(crate) fn write_task_context(state: &AppState, task: &Task) -> Result<()> {
         return Ok(());
     };
     let ticket = std::fs::read_to_string(dir.join(TICKET_FILE)).ok();
-    let spec = super::spec::saved_spec(state, task);
-    let mut md = task_context(task, &task_repos(state, task), ticket.as_deref(), spec.as_deref());
+    let specs: Vec<SpecRequirements> = super::spec::approved_requirements(state, task)
+        .into_iter()
+        .map(|(folder, dir, text)| SpecRequirements { folder, dir, text })
+        .collect();
+    let mut md = task_context(task, &task_repos(state, task), ticket.as_deref(), &specs);
+    md.push_str(&checks_section(&task_checks(state, task)));
     md.push_str(&notes_section(&task_notes(state, task), chrono::Utc::now().timestamp_millis()));
 
     std::fs::write(dir.join("CLAUDE.md"), &md)?;
@@ -99,6 +112,44 @@ fn task_notes(state: &AppState, task: &Task) -> Vec<FolderNotes> {
             Some(FolderNotes { folder, notes: notes_of(state, &project) })
         })
         .collect()
+}
+
+/// Each repository's check command, by the folder it is checked out as.
+fn task_checks(state: &AppState, task: &Task) -> Vec<(String, String)> {
+    state
+        .config
+        .checkouts_of(&task.id)
+        .iter()
+        .filter_map(|c| {
+            let command = state.config.project(&c.project_id).ok()?.check?;
+            let folder = Path::new(&c.path).file_name()?.to_string_lossy().to_string();
+            Some((folder, command))
+        })
+        .collect()
+}
+
+/// The check commands (LOOP-10), so an agent checks its work by the
+/// measure a loop will, loop or not. Nothing when no repository has one.
+fn checks_section(checks: &[(String, String)]) -> String {
+    if checks.is_empty() {
+        return String::new();
+    }
+    let mut md = String::from(concat!(
+        "\n## Checks\n\n",
+        "What says the work in a repository is done. Run it from inside the ",
+        "repository's folder before you end a turn, and fix what it reports:\n\n",
+    ));
+    for (folder, command) in checks {
+        // On one line, and in code even when it holds a backtick.
+        let command = command.split_whitespace().collect::<Vec<_>>().join(" ");
+        let code = if command.contains('`') { format!("`` {command} ``") } else { format!("`{command}`") };
+        md.push_str(&format!("- `{folder}/`: {code}\n"));
+    }
+    md.push_str(concat!(
+        "\nWhen the user puts you on a loop, Villain Layer runs these each time you ",
+        "end a turn and sends you what failed.\n",
+    ));
+    md
 }
 
 /// What earlier tasks learned, and how to add to it (MEM-4). Said even
@@ -162,13 +213,13 @@ fn note_line(n: &RepoNote, now: i64) -> String {
 }
 
 /// The context file's text. `repos` are (folder, clone it came from) pairs,
-/// `ticket` is the saved `TICKET.md` and `spec` the saved `SPEC.md`, if
-/// there are.
+/// `ticket` is the saved `TICKET.md`, if there is one, and `specs` each
+/// repository's approved requirements.
 fn task_context(
     task: &Task,
     repos: &[(String, String)],
     ticket: Option<&str>,
-    spec: Option<&str>,
+    specs: &[SpecRequirements],
 ) -> String {
     let mut md = format!(
         "# {}\n\nWritten by Villain Layer. You are in the task folder, not inside a \
@@ -194,8 +245,8 @@ This task reviews pull request {}#{}{}, at commit `{}`: {}.              `{}` is
             task.branch,
         ));
     }
-    if let Some(spec) = spec.filter(|s| !s.trim().is_empty()) {
-        md.push_str(&spec_section(spec));
+    if !specs.is_empty() {
+        md.push_str(&spec_section(&task.id, specs));
     }
     match ticket.filter(|t| !t.trim().is_empty()) {
         Some(ticket) => {
@@ -245,34 +296,44 @@ This task reviews pull request {}#{}{}, at commit `{}`: {}.              `{}` is
     md
 }
 
-/// The spec, as the context file shows it (SPEC-4). Unlike the ticket it is
-/// not quoted: the user wrote or agreed every line, so it is theirs to
-/// instruct with. Its headings go down a level, under this one.
-fn spec_section(spec: &str) -> String {
-    let mut md = String::from(concat!(
-        "## The spec\n\n",
-        "The user's spec for this work, which they wrote or agreed. Its acceptance ",
-        "criteria are what done means: meet each one, and say which you could not. ",
-        "Where it and the ticket disagree, the spec wins. Leave alone what it puts out ",
-        "of scope, and ask the user its open questions rather than guessing. It is ",
-        "`SPEC.md` in this folder.\n\n",
-    ));
-    let (shown, cut) = cut_at(spec.trim(), MAX_SPEC);
-    let mut fence = false;
-    for line in shown.lines() {
-        if line.trim_start().starts_with("```") {
-            fence = !fence;
+/// The spec's requirements, as the context file shows them (SPEC-10).
+/// Unlike the ticket they are not quoted: the user wrote or agreed every
+/// line, so they are theirs to instruct with. Their headings go down two
+/// levels, under this one and the repository's.
+fn spec_section(task_id: &str, specs: &[SpecRequirements]) -> String {
+    let mut md = format!(
+        concat!(
+            "## The spec\n\n",
+            "The user's spec for this work, which they wrote or agreed: requirements, ",
+            "design and tasks for each repository, in its spec folder. The requirements ",
+            "are what done means: meet each one, and say which you could not. Where they ",
+            "and the ticket disagree, the spec wins. Leave alone what they put out of ",
+            "scope, and ask the user their open questions rather than guessing. Work ",
+            "through the tasks in order, and mark each done with `spec_task` on the ",
+            "`villain-layer` MCP server; this task's id is `{}`.\n\n",
+        ),
+        task_id
+    );
+    let each = MAX_SPEC / specs.len().max(1);
+    for spec in specs {
+        md.push_str(&format!("### `{}/`: its spec is in `{}`\n\n", spec.folder, spec.dir));
+        let (shown, cut) = cut_at(spec.text.trim(), each);
+        let mut fence = false;
+        for line in shown.lines() {
+            if line.trim_start().starts_with("```") {
+                fence = !fence;
+            }
+            if !fence && line.starts_with('#') {
+                md.push_str("##");
+            }
+            md.push_str(line);
+            md.push('\n');
         }
-        if !fence && line.starts_with('#') {
-            md.push('#');
+        if cut {
+            md.push_str("\n(Cut short here. The requirements file in that folder has the rest.)\n");
         }
-        md.push_str(line);
         md.push('\n');
     }
-    if cut {
-        md.push_str("\n(Cut short here. `SPEC.md` has the rest.)\n");
-    }
-    md.push('\n');
     md
 }
 
@@ -389,7 +450,7 @@ mod tests {
     fn the_context_file_carries_the_saved_ticket_rather_than_only_its_link() {
         let repos = vec![("api".to_string(), "/repos/api".to_string())];
         let ticket = ticket_markdown(&issue());
-        let md = task_context(&task(), &repos, Some(&ticket), None);
+        let md = task_context(&task(), &repos, Some(&ticket), &[]);
 
         assert!(md.contains("## The ticket: ACME-12 Refunds fail for split payments"));
         assert!(md.contains("Bug · priority High · labels payments"));
@@ -412,40 +473,47 @@ mod tests {
             }),
             ..task()
         };
-        let md = task_context(&review, &[], None, None);
+        let md = task_context(&review, &[], None, &[]);
         assert!(md.contains("reviews pull request acme/api#61 by ana, at commit `abc123`"));
         assert!(md.contains("Do not push"));
-        assert!(!task_context(&task(), &[], None, None).contains("This is a review"));
+        assert!(!task_context(&task(), &[], None, &[]).contains("This is a review"));
     }
 
     #[test]
     fn a_task_whose_ticket_was_never_saved_still_gets_the_link() {
-        let md = task_context(&task(), &[], None, None);
+        let md = task_context(&task(), &[], None, &[]);
         assert!(md.contains("Ticket: https://acme.atlassian.net/browse/ACME-12"));
         assert!(md.contains("None yet."));
+    }
+
+    fn reqs(folder: &str, text: &str) -> SpecRequirements {
+        SpecRequirements { folder: folder.into(), dir: format!("/work/acme-12/{folder}/specs/ACME-12"), text: text.into() }
     }
 
     #[test]
     fn the_spec_comes_before_the_ticket_as_the_users_own_words() {
         let ticket = ticket_markdown(&issue());
-        let spec = "## Goal\nRefunds work.\n\n## Acceptance criteria\n- [ ] AC-1: Two cards are refunded.\n";
-        let md = task_context(&task(), &[], Some(&ticket), Some(spec));
+        let spec = "## Goal\nRefunds work.\n\n## Requirements\n- R-1: WHEN two cards paid THE SYSTEM SHALL refund both.\n";
+        let md = task_context(&task(), &[], Some(&ticket), &[reqs("api", spec), reqs("web", "## Goal\nShow it.\n")]);
 
         let at_spec = md.find("## The spec").unwrap();
         let at_ticket = md.find("## The ticket: ACME-12").unwrap();
         assert!(at_spec < at_ticket);
         assert!(md.contains("the spec wins"));
-        assert!(md.contains("\n### Acceptance criteria\n- [ ] AC-1: Two cards are refunded.\n"));
-        assert!(!md.contains("> - [ ] AC-1"));
+        assert!(md.contains("this task's id is `t1`"), "{md}");
+        assert!(md.contains("### `api/`: its spec is in `/work/acme-12/api/specs/ACME-12`"));
+        assert!(md.contains("\n#### Requirements\n- R-1: WHEN two cards paid THE SYSTEM SHALL refund both.\n"));
+        assert!(md.contains("### `web/`"));
+        assert!(!md.contains("> - R-1"));
     }
 
     #[test]
-    fn a_long_spec_is_cut_and_points_at_its_file() {
+    fn long_requirements_are_cut_and_point_at_their_file() {
         let long = format!("## Goal\n{}", "word ".repeat(MAX_SPEC));
-        let md = spec_section(&long);
-        assert!(md.contains("(Cut short here. `SPEC.md` has the rest.)"));
-        assert!(md.len() < MAX_SPEC + 1_000);
-        assert!(!spec_section("## Goal\nShort.").contains("Cut short"));
+        let md = spec_section("t1", &[reqs("api", &long)]);
+        assert!(md.contains("(Cut short here. The requirements file in that folder has the rest.)"));
+        assert!(md.len() < MAX_SPEC + 1_500);
+        assert!(!spec_section("t1", &[reqs("api", "## Goal\nShort.")]).contains("Cut short"));
     }
 
     #[test]
@@ -516,6 +584,18 @@ mod tests {
         assert!(md.contains("Nothing yet."));
         assert!(md.contains("call `remember` with `confirm: true` only if they agree"));
         assert!(!md.contains("###"));
+    }
+
+    #[test]
+    fn the_check_commands_are_named_one_to_a_line_and_only_when_there_are_some() {
+        assert_eq!(checks_section(&[]), "");
+        let md = checks_section(&[
+            ("web".into(), "bun run check".into()),
+            ("api".into(), "cargo test &&\n  echo `date`".into()),
+        ]);
+        assert!(md.contains("\n## Checks\n"));
+        assert!(md.contains("- `web/`: `bun run check`\n"));
+        assert!(md.contains("- `api/`: `` cargo test && echo `date` ``\n"));
     }
 
     #[test]

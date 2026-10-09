@@ -1062,6 +1062,9 @@ mod tests {
             group: None,
             store: None,
             update_by: None,
+            check: None,
+            spec_folder: None,
+            specs_in_app: false,
         }
     }
 
@@ -1082,6 +1085,7 @@ mod tests {
             messages: crate::messages::Messages::for_tests(root.join("messages.json")),
             notes: crate::notes::Notes::load(root),
             browser: Default::default(),
+            loops: Default::default(),
         }
     }
 

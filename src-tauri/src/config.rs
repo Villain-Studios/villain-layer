@@ -44,6 +44,16 @@ pub struct Project {
     /// its history (UPD-7).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub update_by: Option<crate::git::UpdateBy>,
+    /// What says the work here is done (`bun run check`), run in a
+    /// worktree by a loop (LOOP-1). Set only by the user.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check: Option<String>,
+    /// Where specs are committed here (SPEC-1), from its root. None: `specs`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spec_folder: Option<String>,
+    /// Specs are kept by the app instead of committed here (SPEC-3).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub specs_in_app: bool,
 }
 
 impl Project {
@@ -206,6 +216,22 @@ pub struct SavedPane {
     /// restore picks up (ACP-9).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
+    /// The loop it was on, to put back on it (LOOP-11).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_loop: Option<SavedLoop>,
+}
+
+/// A loop as kept with its pane between launches (LOOP-11).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SavedLoop {
+    pub rounds: u32,
+    pub round: u32,
+    /// What the worktrees were when its checks last failed (LOOP-4).
+    #[serde(default)]
+    pub failed_at: Option<String>,
+    /// Waiting on you, after a turn that changed nothing.
+    #[serde(default)]
+    pub held: bool,
 }
 
 /// Presentation preferences. Terminal text scales separately from the chrome,

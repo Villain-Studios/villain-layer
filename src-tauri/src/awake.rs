@@ -92,6 +92,7 @@ mod tests {
             activity_since: now,
             topic: None,
             acp: false,
+            loop_said: None,
         };
         (info, false)
     }

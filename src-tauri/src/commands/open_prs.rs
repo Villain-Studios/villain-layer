@@ -20,6 +20,7 @@ use super::{off_runtime, AppState};
 /// `skip` names checkouts the user left out: not pushed, not opened.
 #[tauri::command]
 pub async fn github_open_prs(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     task_id: String,
     title: String,
@@ -44,6 +45,15 @@ pub async fn github_open_prs(
         let dir = PathBuf::from(&checkout.path);
         let project = state.config.project(&checkout.project_id)?;
         let repo = project.name.clone();
+        // Steps agents ticked since the spec was approved go to review with
+        // the code (SPEC-13).
+        if let Err(e) = {
+            let (task, id) = (task.clone(), checkout.id.clone());
+            super::blocking(app.clone(), move |state| super::spec::commit_ticks(state, &task, &id)).await
+        } {
+            results.push(RepoResult { checkout_id: checkout.id, repo, ok: false, detail: format!("the spec's ticked steps could not be committed: {e}") });
+            continue;
+        }
 
         let measure = |point: Option<String>| {
             let (dir, base) = (dir.clone(), checkout.base.clone());

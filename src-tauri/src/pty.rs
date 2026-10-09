@@ -91,6 +91,11 @@ pub struct PaneInfo {
     /// An agent over ACP (§20), drawn as a conversation rather than a
     /// terminal.
     pub acp: bool,
+    /// What a loop said as it handed the pane back (LOOP-8): how it ended,
+    /// or why it waits. Said in place of "has finished", and gone once the
+    /// agent works again.
+    #[serde(skip)]
+    pub loop_said: Option<String>,
 }
 
 /// What an agent is doing, as best the app can tell.
@@ -100,6 +105,17 @@ pub struct PaneInfo {
 /// from its output, which is a guess: Claude Code repaints its prompt every
 /// few seconds while doing nothing at all, so "printed recently" had an agent
 /// two days idle marked as working.
+/// Where an agent is by its own account (`PtyManager::turn`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Turn {
+    /// Working or asking: a turn has started and not ended.
+    pub mid: bool,
+    /// It has said what it is doing at least once: started up and ready.
+    pub said: bool,
+    pub notice: Option<String>,
+    pub running: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Activity {
@@ -150,6 +166,13 @@ struct PaneMeta {
     /// The conversation the agent last said it is in, from its hooks: what
     /// a restart resumes (PANE-14).
     session: Option<String>,
+    /// On a loop that is running (LOOP-8). Between turns the app is still at
+    /// work on it, checking what the turn did, so the end of one is not your
+    /// turn: counted as done, every round woke the dock and a banner.
+    looping: bool,
+    /// The count of turns the agent has ended, rung at each and at its exit:
+    /// what a loop waits on (LOOP-3).
+    turns: tokio::sync::watch::Sender<u64>,
 }
 
 impl PaneMeta {
@@ -174,10 +197,13 @@ impl PaneMeta {
         }
         let (state, since) = match self.reported {
             Some(reported) => reported,
-            None if now - self.last_work < IDLE_AFTER => return (Activity::Working, self.last_work),
-            None if !self.prompted => return (Activity::Idle, self.last_work),
+            None if now - self.last_work < IDLE_AFTER => (Activity::Working, self.last_work),
+            None if !self.prompted => (Activity::Idle, self.last_work),
             None => (Activity::Done, self.last_work + IDLE_AFTER),
         };
+        if self.looping && state != Activity::Asking {
+            return (Activity::Working, since);
+        }
         // Finished while on screen, or looked at since: nothing new.
         if state == Activity::Done && (watched || since <= self.seen_at) {
             return (Activity::Idle, since);
@@ -205,7 +231,13 @@ impl PaneMeta {
         } else {
             activity
         };
+        // A turn ends once: Claude Code's idle notice after its Stop hook,
+        // or a title repainted, says done again about the same one.
+        let ended = activity == Activity::Done && !matches!(self.reported, Some((Activity::Done, _)));
         self.reported = Some((activity, Utc::now()));
+        if activity == Activity::Working {
+            self.info.loop_said = None;
+        }
         let over = match self.info.notice.as_deref() {
             Some("usage_limit") => activity == Activity::Working,
             Some("trust_prompt") => activity != Activity::Idle,
@@ -214,6 +246,16 @@ impl PaneMeta {
         if over {
             self.cleared_notice = self.info.notice.take();
         }
+        if ended {
+            self.turns.send_modify(|n| *n += 1);
+        }
+    }
+
+    /// The process ended: a loop waiting on a turn has none coming.
+    fn exited(&mut self, code: Option<i32>) {
+        self.info.running = false;
+        self.info.exit_code = code;
+        self.turns.send_modify(|_| {});
     }
 
     /// Keys from the person at the terminal, which say something the agent's
@@ -573,6 +615,7 @@ impl PtyManager {
             activity_since: now,
             topic: None,
             acp: matches!(io, Io::Acp(_)),
+            loop_said: None,
         };
         let pane = Arc::new(Pane {
             meta: Mutex::new(PaneMeta {
@@ -587,6 +630,8 @@ impl PtyManager {
                 cleared_notice: None,
                 notice_at: now,
                 session: None,
+                looping: false,
+                turns: tokio::sync::watch::Sender::new(0),
             }),
             pid,
             io,
@@ -815,11 +860,7 @@ impl PtyManager {
             let id = id.clone();
             std::thread::spawn(move || {
                 let code = child.wait().ok().map(|s| s.exit_code() as i32);
-                {
-                    let mut meta = pane.meta.lock();
-                    meta.info.running = false;
-                    meta.info.exit_code = code;
-                }
+                pane.meta.lock().exited(code);
                 pane.printed.send_modify(|_| {});
                 let _ = app.emit("pty:exit", ExitEvent { pane_id: &id, code });
             });
@@ -988,6 +1029,38 @@ impl PtyManager {
         let before = (meta.activity(watched, Utc::now()), meta.info.notice.clone());
         meta.take_report(activity);
         Ok((meta.activity(watched, Utc::now()), meta.info.notice.clone()) != before)
+    }
+
+    /// Rung each time the agent ends a turn, with how many it has, and at
+    /// its exit: what a loop waits on (LOOP-3). Closed once the pane is gone.
+    pub fn turns(&self, id: &str) -> Result<tokio::sync::watch::Receiver<u64>> {
+        Ok(self.get(id)?.meta.lock().turns.subscribe())
+    }
+
+    /// Where the agent is by its own account, whatever a loop makes it read
+    /// as: in a turn or not, stopped on a notice, still running.
+    pub fn turn(&self, id: &str) -> Result<Turn> {
+        let pane = self.get(id)?;
+        let meta = pane.meta.lock();
+        let mid = match meta.reported {
+            Some((activity, _)) => matches!(activity, Activity::Working | Activity::Asking),
+            None => Utc::now() - meta.last_work < IDLE_AFTER,
+        };
+        Ok(Turn { mid, said: meta.reported.is_some(), notice: meta.info.notice.clone(), running: meta.info.running })
+    }
+
+    /// Put a pane on a loop, or hand it back (LOOP-8). Handed back with
+    /// something to say, a finished turn is done as of now: news even to
+    /// someone who looked at the pane while the checks ran.
+    pub fn set_looping(&self, id: &str, looping: bool, said: Option<String>) -> Result<()> {
+        let pane = self.get(id)?;
+        let mut meta = pane.meta.lock();
+        meta.looping = looping;
+        if said.is_some() && matches!(meta.reported, Some((Activity::Done, _))) {
+            meta.reported = Some((Activity::Done, Utc::now()));
+        }
+        meta.info.loop_said = said;
+        Ok(())
     }
 
     /// Which conversation the agent says it is in, from its hooks.
@@ -1219,6 +1292,7 @@ mod tests {
                 activity_since: now,
                 topic: None,
                 acp: false,
+                loop_said: None,
             },
             stopping: false,
             reported: None,
@@ -1230,7 +1304,52 @@ mod tests {
             cleared_notice: None,
             notice_at: now,
             session: None,
+            looping: false,
+            turns: tokio::sync::watch::Sender::new(0),
         }
+    }
+
+    #[test]
+    fn each_turn_ends_once_and_an_interrupt_ends_none() {
+        let mut m = meta(true, 0);
+        let turns = m.turns.subscribe();
+        m.take_report(Activity::Working);
+        m.take_report(Activity::Done);
+        // Claude Code's idle notice, after the Stop hook, about the same turn.
+        m.take_report(Activity::Done);
+        assert_eq!(*turns.borrow(), 1);
+        m.take_report(Activity::Working);
+        m.typed("\u{1b}");
+        assert_eq!(m.reported.map(|r| r.0), Some(Activity::Idle));
+        assert_eq!(*turns.borrow(), 1, "someone is at the keys: not a turn's end");
+        m.take_report(Activity::Working);
+        m.take_report(Activity::Done);
+        assert_eq!(*turns.borrow(), 2);
+    }
+
+    #[test]
+    fn a_turn_ended_on_a_loop_reads_as_working_until_the_loop_hands_it_back() {
+        let now = Utc::now();
+        let mut m = meta(true, 0);
+        m.take_report(Activity::Done);
+        m.looping = true;
+        assert_eq!(m.activity(false, now), Activity::Working);
+        assert_eq!(m.activity(true, now), Activity::Working, "nor is it idle on screen");
+        m.take_report(Activity::Asking);
+        assert_eq!(m.activity(false, now), Activity::Asking, "a question is still yours");
+        m.take_report(Activity::Done);
+        m.looping = false;
+        assert_eq!(m.activity(false, now), Activity::Done);
+    }
+
+    #[test]
+    fn what_a_loop_said_goes_once_the_agent_works_again() {
+        let mut m = meta(true, 0);
+        m.info.loop_said = Some("passed its checks".into());
+        m.take_report(Activity::Done);
+        assert!(m.info.loop_said.is_some());
+        m.take_report(Activity::Working);
+        assert!(m.info.loop_said.is_none());
     }
 
     #[test]

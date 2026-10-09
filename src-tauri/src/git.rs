@@ -8,12 +8,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 
+mod only;
 mod outgoing;
 mod remote;
+mod snapshot;
 mod store;
 mod upkeep;
+pub use only::{commit_only, head_commit};
 pub use outgoing::{outgoing_commits, outgoing_from, outgoing_patch};
 pub use remote::origin_slug;
+pub use snapshot::fingerprint;
 pub use store::{
     adopt_worktree, belongs_to, changed_between, copy_local_config, create_store, default_tip,
     follow_clone_origin, is_own_clone, is_store_of, owner, reclaim_clone, relink_worktree, take_branch_from_clone, take_branch_from_origin,

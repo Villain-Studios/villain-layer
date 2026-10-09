@@ -8,6 +8,7 @@ mod config;
 mod error;
 mod git;
 mod integrations;
+mod loops;
 mod mcp;
 mod messages;
 mod notes;
@@ -18,6 +19,7 @@ mod previous;
 mod pty;
 mod secrets;
 mod shellenv;
+mod spec;
 mod target;
 
 use commands::AppState;
@@ -122,6 +124,7 @@ pub fn run() {
                 messages: log,
                 notes,
                 browser: Default::default(),
+                loops: Default::default(),
             };
             app.manage(state);
             messages::spawn_writer(handle.clone(), dirty)?;
@@ -205,6 +208,10 @@ pub fn run() {
             commands::repo_health,
             commands::locate_project,
             commands::set_project_update_by,
+            commands::set_project_check,
+            commands::start_loop,
+            commands::stop_loop,
+            commands::loop_view,
             commands::sync_repos,
             commands::cleanup_plan,
             commands::cleanup_apply,
@@ -264,7 +271,12 @@ pub fn run() {
             commands::optimize_issue_description,
             commands::draft_spec,
             commands::read_spec,
-            commands::save_spec,
+            commands::save_spec_draft,
+            commands::approve_spec,
+            commands::check_spec,
+            commands::spec_work_prompt,
+            commands::tell_spec_change,
+            commands::set_project_specs,
             commands::request_pr_description,
             commands::take_pr_description,
             commands::github_connect,
@@ -340,7 +352,9 @@ pub fn run() {
                 let closing = std::thread::spawn(move || {
                     browser.state::<AppState>().browser.shutdown(std::time::Duration::from_secs(3));
                 });
+                state.loops.stop_all();
                 state.ptys.shutdown(std::time::Duration::from_secs(5));
+                state.loops.kill_checks();
                 let _ = closing.join();
             }
         });

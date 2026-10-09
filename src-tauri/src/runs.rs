@@ -65,8 +65,9 @@ pub struct LoopRun {
     pub end: LoopEnd,
 }
 
-/// Tokens the agent said its finished turns used (RUN-4). Only an agent over
-/// ACP that puts them on its answer to each prompt says; Claude's does.
+/// Tokens the agent said its finished turns used (RUN-4): an agent over ACP
+/// that puts them on its answer to each prompt (Claude's does), or Claude
+/// Code's transcript for one in a terminal (`agents::transcript_tokens`).
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Tokens {
     #[serde(default)]

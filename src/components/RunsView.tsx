@@ -123,7 +123,7 @@ export function RunsView() {
             <Stat
               label="Tokens"
               value={stats.tokens ? formatTokens(totalTokens(stats.tokens)) : "—"}
-              note={stats.tokens ? `said by ${stats.withTokens} of ${stats.runs}` : "only agents over ACP say"}
+              note={stats.tokens ? `said by ${stats.withTokens} of ${stats.runs}` : "only Claude Code and agents over ACP say"}
             />
           </div>
 
@@ -229,7 +229,7 @@ function RunRow({ run, agentName, open, onToggle, now }: {
               ? `${formatTokens(run.tokens.input)} in · ${formatTokens(run.tokens.output)} out · ${formatTokens(run.tokens.cached_read)} read from cache · ${formatTokens(run.tokens.cached_write)} written to cache`
               : run.acp
                 ? "not said: this agent puts no usage on its answers"
-                : "not said: an agent in a terminal does not"}
+                : "not said: of the agents in a terminal, only Claude Code does"}
           </dd>
         </dl>
       )}

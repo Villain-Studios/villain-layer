@@ -1837,6 +1837,53 @@ Known gaps:
 
 ---
 
+## 22. Run Dashboard
+
+The Runs view shows a history of every agent run: which agent, how long it
+took, whether it succeeded, errors it hit, and tokens used when available.
+Runs can be filtered by agent or repository, showing aggregate statistics
+(success rate, average duration, error rate, total tokens). All data is
+stored locally in `runs.json` and can be cleared by the user. No telemetry
+is sent; no data leaves the machine.
+
+- **RUN-1** Agent runs MUST be recorded locally when an agent pane exits,
+  tracking: agent id, task name, repository (when scoped), branch, start
+  and end time, duration, exit code, result (success/failure/stopped/error),
+  loop rounds completed when on a loop, error count, and token usage when
+  available. The most recent 1000 runs are kept.
+- **RUN-2** A run is recorded only for agent panes (not shells), and only
+  when the pane exits. The result is determined by exit code: 0 is success,
+  non-zero is failure, and no exit code (killed) is stopped. Loop rounds
+  are included when the loop ended before the pane did.
+- **RUN-3** The Runs view MUST show all runs newest first, with filters for
+  agent and repository. Each row shows the result (icon), agent, task name,
+  repository, branch, when it ended, duration, error count when non-zero,
+  and loop rounds when on a loop. Clicking a row expands it to show start
+  time, end time, exit code, result, and token breakdown when available.
+- **RUN-4** Aggregate statistics MUST be shown at the top when runs exist:
+  total count, success/failure/stopped/error counts, success rate, average
+  duration, average errors per run, total tokens used, and count of runs
+  with loops. Statistics reflect the current filter.
+- **RUN-5** Clearing runs MUST ask for confirmation, then delete all runs
+  permanently. The action cannot be undone. Runs are stored in
+  `runs.json` alongside the config and loaded at startup.
+- **RUN-6** Token usage is not currently tracked by the app, so the tokens
+  field is always null. Future work could instrument agent CLIs to report
+  token counts via hooks or the protocol.
+
+Code: `runs.rs` (storage), `commands/runs.rs` (commands), `pty.rs`
+(`record_run` when a pane exits), `RunsView.tsx`.
+
+Known gaps:
+- Token usage is not tracked. It would require agent-specific
+  instrumentation to read token counts from each CLI's output or API.
+- Error tracking during a run is not yet wired: `error_count` is always 0.
+  Future work could track errors from tool failures or agent reports.
+- Loop rounds are recorded only when the loop ends before the pane does.
+  A loop stopped or abandoned mid-run shows no rounds.
+
+---
+
 ## Template for a new area or feature
 
 ```markdown

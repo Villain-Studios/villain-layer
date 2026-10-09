@@ -858,11 +858,18 @@ impl PtyManager {
             let app = app.clone();
             let pane = pane.clone();
             let id = id.clone();
+            let info_for_run = info.clone();
             std::thread::spawn(move || {
+                use tauri::Manager;
                 let code = child.wait().ok().map(|s| s.exit_code() as i32);
                 pane.meta.lock().exited(code);
                 pane.printed.send_modify(|_| {});
                 let _ = app.emit("pty:exit", ExitEvent { pane_id: &id, code });
+                
+                // Record the run for agent panes only.
+                if info_for_run.kind == PaneKind::Agent {
+                    record_run(&app, &info_for_run, code);
+                }
             });
         }
 
@@ -1267,6 +1274,73 @@ impl PtyManager {
         }
         panes.iter().map(|p| p.meta.lock().info.id.clone()).collect()
     }
+}
+
+/// Record an agent run when it exits (RUN-2).
+pub(crate) fn record_run<R: tauri::Runtime>(app: &tauri::AppHandle<R>, info: &PaneInfo, exit_code: Option<i32>) {
+    use tauri::Manager;
+    let state = app.state::<crate::commands::AppState>();
+    
+    // Get task and project info from config.
+    let config = state.config.read();
+    let task = config.tasks.iter().find(|t| t.id == info.task_id);
+    let task_name = task.map(|t| t.name.clone()).unwrap_or_else(|| info.task_id.clone());
+    let branch = task.map(|t| t.branch.clone());
+    
+    let (project_id, project_name) = if let Some(checkout_id) = &info.checkout_id {
+        config.checkouts.iter()
+            .find(|c| c.id == checkout_id)
+            .and_then(|c| {
+                config.projects.iter()
+                    .find(|p| p.id == c.project_id)
+                    .map(|p| (Some(c.project_id.clone()), Some(p.name.clone())))
+            })
+            .unwrap_or((None, None))
+    } else {
+        (None, None)
+    };
+    
+    // Determine result based on exit code.
+    let result = match exit_code {
+        Some(0) => crate::runs::RunResult::Success,
+        Some(_) => crate::runs::RunResult::Failure,
+        None => crate::runs::RunResult::Stopped,
+    };
+    
+    // Get error count from tracker.
+    let error_count = state.run_tracker.lock().take_errors(&info.id);
+    
+    // Get loop info if on a loop.
+    let loop_rounds = state.loops.view(&info.id).and_then(|v| {
+        if v.phase.ended() {
+            Some(v.round)
+        } else {
+            None
+        }
+    });
+    
+    let duration = chrono::Utc::now().signed_duration_since(info.started_at);
+    let duration_secs = duration.num_milliseconds() as f64 / 1000.0;
+    
+    let run = crate::runs::AgentRun {
+        id: info.id.clone(),
+        agent_id: info.agent_id.clone().unwrap_or_else(|| "unknown".into()),
+        task_id: info.task_id.clone(),
+        task_name,
+        project_id,
+        project_name,
+        branch,
+        started_at: info.started_at,
+        ended_at: chrono::Utc::now(),
+        duration_secs,
+        exit_code,
+        result,
+        loop_rounds,
+        error_count,
+        tokens: None,
+    };
+    
+    state.runs.record(run);
 }
 
 #[cfg(test)]

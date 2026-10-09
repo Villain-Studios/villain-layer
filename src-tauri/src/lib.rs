@@ -17,6 +17,7 @@ mod news;
 mod phone;
 mod previous;
 mod pty;
+mod runs;
 mod secrets;
 mod shellenv;
 mod spec;
@@ -119,6 +120,7 @@ pub fn run() {
             let config = ConfigStore::load(handle)?;
             let (log, dirty) = messages::Messages::load(config.folder());
             let notes = notes::Notes::load(config.folder());
+            let runs = runs::RunStore::new(config.folder());
             let state = AppState {
                 config,
                 ptys: PtyManager::default(),
@@ -131,6 +133,8 @@ pub fn run() {
                 notes,
                 browser: Default::default(),
                 loops: Default::default(),
+                runs,
+                run_tracker: Default::default(),
             };
             app.manage(state);
             // Before the window first draws, or a light theme opens dark.
@@ -343,6 +347,9 @@ pub fn run() {
             commands::browser_sign_in_form,
             commands::browser_save_sign_in,
             commands::set_browser_sites,
+            commands::list_runs,
+            commands::run_stats,
+            commands::clear_runs,
         ])
         .build(tauri::generate_context!())
         // guard: allow panic — startup, before any agent exists; without a window there is nothing to run.

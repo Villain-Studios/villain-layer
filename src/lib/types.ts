@@ -195,6 +195,44 @@ export interface Catchup {
   reset: boolean;
 }
 
+export type RunResult = "success" | "failure" | "stopped" | "error";
+
+export interface TokenUsage {
+  input: number;
+  output: number;
+  total: number;
+}
+
+export interface AgentRun {
+  id: string;
+  agent_id: string;
+  task_id: string;
+  task_name: string;
+  project_id: string | null;
+  project_name: string | null;
+  branch: string | null;
+  started_at: string;
+  ended_at: string;
+  duration_secs: number;
+  exit_code: number | null;
+  result: RunResult;
+  loop_rounds: number | null;
+  error_count: number;
+  tokens: TokenUsage | null;
+}
+
+export interface RunStats {
+  total: number;
+  success: number;
+  failure: number;
+  stopped: number;
+  error: number;
+  avg_duration: number;
+  error_rate: number;
+  total_tokens: TokenUsage | null;
+  runs_with_loop: number;
+}
+
 export interface AgentStatus {
   id: string;
   name: string;

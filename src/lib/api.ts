@@ -2,6 +2,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
   AcpView,
   AddedRepo,
+  AgentRun,
   AgentStatus,
   Catchup,
   ChangedFile,
@@ -31,6 +32,7 @@ import type {
   RepoSuggestion,
   RepoUpdate,
   Resumable,
+  RunStats,
   WaitingPane,
   ReviewComment,
   ReviewQueue,
@@ -377,6 +379,13 @@ export const api = {
     invoke<void>("browser_dialog", { taskId, accept, text: text ?? null }),
   /** Returns the list as kept: each site as its host, what is not one dropped. */
   setBrowserSites: (sites: string[]) => invoke<string[]>("set_browser_sites", { sites }),
+
+  // runs (RUN-*)
+  listRuns: (agentId?: string | null, projectId?: string | null) =>
+    invoke<AgentRun[]>("list_runs", { agentId: agentId ?? null, projectId: projectId ?? null }),
+  runStats: (agentId?: string | null, projectId?: string | null) =>
+    invoke<RunStats>("run_stats", { agentId: agentId ?? null, projectId: projectId ?? null }),
+  clearRuns: () => invoke<void>("clear_runs"),
 };
 
 export function errMessage(e: unknown): string {

@@ -33,6 +33,10 @@ pub struct AppState {
     pub browser: crate::browser::Browser,
     /// Agents on a loop (§21).
     pub loops: crate::loops::Loops,
+    /// Agent run history, stored locally (RUN-1).
+    pub runs: std::sync::Arc<crate::runs::RunStore>,
+    /// Track errors during runs.
+    pub run_tracker: parking_lot::Mutex<crate::runs::RunTracker>,
 }
 
 /// Snapshot of one checkout's status, reused until it goes hot or ages out.
@@ -139,6 +143,7 @@ mod notes;
 mod phone;
 mod browser;
 mod loops;
+mod runs;
 
 pub use projects::*;
 pub use repos::*;
@@ -165,6 +170,7 @@ pub use spec_draft::*;
 pub use phone::*;
 pub use browser::*;
 pub use loops::*;
+pub use runs::*;
 
 #[cfg(test)]
 mod tests {

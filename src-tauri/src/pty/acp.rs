@@ -113,6 +113,12 @@ impl<R: Runtime> acp::Pane for Sink<R> {
         pane.meta.lock().exited(code);
         pane.printed.send_modify(|_| {});
         let _ = self.app.emit("pty:exit", ExitEvent { pane_id: &self.id, code });
+        
+        // Record the run for agent panes.
+        let info = pane.meta.lock().info.clone();
+        if info.kind == super::PaneKind::Agent {
+            super::record_run(&self.app, &info, code);
+        }
     }
 }
 

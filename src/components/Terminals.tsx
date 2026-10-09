@@ -2,11 +2,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api, errMessage } from "../lib/api";
 import { useFocusedPane } from "../lib/goto";
 import { read, write } from "../lib/persist";
-import { markStopping, useStore } from "../store";
+import { useStore } from "../store";
 import { canRestart, paneScope, paneState } from "../lib/derive";
 import type { PaneInfo, Resumable, TaskView } from "../lib/types";
 import { BrowserPanel, useBrowserView } from "./BrowserPanel";
 import { ChatLink } from "./ChatLink";
+import { useHandoff } from "./Handoff";
 import { LoopBar, LoopButton } from "./LoopBar";
 import { PaneNotice } from "./PaneNotice";
 import { PaneExited, RestartButton, useRestart } from "./Restart";
@@ -38,16 +39,12 @@ export function Terminals({ task }: { task: TaskView }) {
 
   const [active, setActive] = useState<string | null>(null);
   const { restarting, restart } = useRestart(setActive);
+  const { startHandoff, dialog: handoffDialog } = useHandoff(task, setActive);
   const [launching, setLaunching] = useState<string | null>(null);
   const [prompt, setPrompt] = useState("");
   const [promptLoading, setPromptLoading] = useState(false);
   /** Start it as a conversation over ACP (§20); remembered for the next launch. */
   const [asAcp, setAsAcp] = useState(() => read<boolean>("launchAcp", false));
-  const [handoff, setHandoff] = useState<{ from: PaneInfo; agentId: string } | null>(null);
-  const [handoffPrompt, setHandoffPrompt] = useState("");
-  const [handoffLoading, setHandoffLoading] = useState(false);
-  const [handoffBusy, setHandoffBusy] = useState(false);
-  const [stopOld, setStopOld] = useState(true);
   /** Panes whose ✕ was pressed, still waiting on their grace period. */
   const [closing, setClosing] = useState<Set<string>>(new Set());
   /**
@@ -75,8 +72,6 @@ export function Terminals({ task }: { task: TaskView }) {
   const [scope, setScope] = useState<string | null>(null);
   /** Last auto-fetched briefing; if the textarea still matches, scope changes replace it. */
   const fetchedPrompt = useRef("");
-  /** Which handoff briefing request is the current one. */
-  const handoffAsk = useRef(0);
   const cursorIde = useStore((s) => s.cursorIde);
 
   const multi = task.checkouts.length > 1;
@@ -249,58 +244,6 @@ export function Terminals({ task }: { task: TaskView }) {
       fail(e);
     }
   });
-
-  /// No CLI can resume another's session, so what moves is the work: the
-  /// ticket, the diff, and the outgoing agent's terminal tail.
-  function startHandoff(from: PaneInfo) {
-    const target = installed.find((a) => a.id !== from.agent_id) ?? installed[0];
-    if (!target) {
-      fail("No other agent CLI is installed to hand off to.");
-      return;
-    }
-    setHandoff({ from, agentId: target.id });
-    setHandoffPrompt("");
-    setHandoffLoading(true);
-    const asked = ++handoffAsk.current;
-    // Only the latest ask lands: a slow briefing for one pane arriving after
-    // the dialog was reopened for another replaced what was on screen.
-    api.handoffPrompt(from.id)
-      .then((p) => { if (asked === handoffAsk.current) setHandoffPrompt(p); })
-      .catch((e) => { if (asked === handoffAsk.current) fail(e); })
-      .finally(() => { if (asked === handoffAsk.current) setHandoffLoading(false); });
-  }
-
-  /// Spawns the new agent, then spends the grace period stopping the old one.
-  /// The modal stays up for both, or the press looks like it did nothing while
-  /// the outgoing agent saves.
-  async function runHandoff() {
-    if (!handoff) return;
-    setHandoffBusy(true);
-    try {
-      const pane = await api.spawnAgent(
-        task.id,
-        handoff.agentId,
-        handoff.from.checkout_id,
-        handoffPrompt.trim() || null,
-      );
-      if (stopOld) {
-        markStopping(handoff.from.id);
-        await api.killPane(handoff.from.id).catch(() => {});
-      }
-      setHandoff(null);
-      setHandoffPrompt("");
-      await refreshPanes();
-      setActive(pane.id);
-    } catch (e) {
-      fail(e);
-    } finally {
-      // Cleared here, where it was set. It lived in launchAgent's finally,
-      // so after one handoff the dialog opened already busy, and after a
-      // failed one it could not be closed at all — Cancel disabled, and
-      // Escape, ✕ and the backdrop all ignored while busy.
-      setHandoffBusy(false);
-    }
-  }
 
   /// Closing signals the agent and gives it five seconds to save, so the tab
   /// stays put for what feels like a hung click. Marking it spends that time
@@ -542,82 +485,7 @@ export function Terminals({ task }: { task: TaskView }) {
       )}
       </div>
 
-      {handoff && (
-        <Modal
-          title={`Hand off from ${handoff.from.title}`}
-          wide
-          onClose={() => {
-            if (handoffBusy) return;
-            setHandoff(null);
-            setHandoffPrompt("");
-          }}
-          footer={
-            <>
-              <button
-                className="btn"
-                disabled={handoffBusy}
-                onClick={() => { setHandoff(null); setHandoffPrompt(""); }}
-              >
-                Cancel
-              </button>
-              <button
-                className="btn btn-primary"
-                disabled={handoffBusy || handoffLoading || !handoffPrompt.trim()}
-                onClick={() => void runHandoff()}
-              >
-                {handoffBusy ? (
-                  <span className="btn-busy">
-                    <Spinner />
-                    {stopOld ? "Starting and stopping…" : "Starting…"}
-                  </span>
-                ) : (
-                  `Start ${agents.find((a) => a.id === handoff.agentId)?.name ?? "agent"}`
-                )}
-              </button>
-            </>
-          }
-        >
-          <div className="muted" style={{ marginBottom: 12, lineHeight: 1.6 }}>
-            No agent CLI can resume another's session, so this carries the work rather
-            than the conversation: the ticket, what has changed, and the tail of{" "}
-            {handoff.from.title}'s terminal.
-          </div>
-
-          <Field label="Continue with">
-            <select
-              value={handoff.agentId}
-              onChange={(e) => setHandoff({ ...handoff, agentId: e.target.value })}
-            >
-              {installed.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name}{a.id === handoff.from.agent_id ? " (same agent)" : ""}
-                </option>
-              ))}
-            </select>
-          </Field>
-
-          <Field
-            label="Handoff briefing"
-            hint={handoffLoading ? "Gathering the diff and terminal…" : "Edit freely before sending."}
-          >
-            <textarea
-              rows={14}
-              value={handoffPrompt}
-              onChange={(e) => setHandoffPrompt(e.target.value)}
-            />
-          </Field>
-
-          <label className="row" style={{ gap: 7, cursor: "pointer" }}>
-            <input
-              type="checkbox"
-              style={{ width: "auto" }}
-              checked={stopOld}
-              onChange={(e) => setStopOld(e.target.checked)}
-            />
-            Stop {handoff.from.title} once the new agent starts
-          </label>
-        </Modal>
-      )}
+      {handoffDialog}
 
       {launching && (
         <Modal

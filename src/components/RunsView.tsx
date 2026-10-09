@@ -2,34 +2,29 @@ import { useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "../lib/api";
 import {
-  durationMs,
+  byAgent,
   filterRuns,
   formatDuration,
   formatTokens,
-  resultOf,
   runChoices,
   runDays,
   runStats,
+  topSpend,
   totalTokens,
-  type RunResult,
 } from "../lib/runs";
-import { ago } from "../lib/time";
 import type { Run } from "../lib/types-runs";
 import { useNow, useStore } from "../store";
+import { RunBreakdown } from "./runs/RunBreakdown";
+import { RunChart } from "./runs/RunChart";
+import { RunRow } from "./runs/RunRow";
 import { Confirm, SidebarToggle, Spinner } from "./ui";
 
 /** What `runs.rs` keeps; said once the log is that full (RUN-5). */
 const CAP = 1000;
 /** Days the chart covers (RUN-4). */
 const DAYS = 14;
-
-const RESULT: Record<RunResult, { mark: string; label: string }> = {
-  passed: { mark: "✓", label: "Its loop passed" },
-  gave_up: { mark: "✗", label: "Its loop gave up" },
-  failed: { mark: "✗", label: "Failed" },
-  stopped: { mark: "■", label: "Stopped" },
-  exited: { mark: "●", label: "Exited on its own" },
-};
+/** Tasks and repositories listed under where the time went (RUN-8). */
+const TOP = 5;
 
 /** Every agent's run, newest first, with what they add up to (§22). */
 export function RunsView() {
@@ -63,7 +58,9 @@ export function RunsView() {
   const shown = useMemo(() => filterRuns(all, { agent, repo }), [all, agent, repo]);
   const stats = useMemo(() => runStats(shown), [shown]);
   const days = useMemo(() => runDays(shown, DAYS, now), [shown, now]);
-  const peak = Math.max(1, ...days.map((d) => d.runs));
+  const perAgent = useMemo(() => byAgent(shown), [shown]);
+  const tasks = useMemo(() => topSpend(shown, "task", TOP), [shown]);
+  const repos = useMemo(() => topSpend(shown, "repo", TOP), [shown]);
   const agentName = (id: string) => agents.find((a) => a.id === id)?.name ?? (id || "an agent");
 
   return (
@@ -98,8 +95,8 @@ export function RunsView() {
         <div className="empty">
           <h2>No runs yet</h2>
           <p>
-            Each agent is recorded here when it ends: how long it ran, how it ended, the loop it was on, and the
-            tokens it used where it says. Nothing leaves this Mac.
+            Each agent is recorded here when it ends: how long it ran, how it ended, how often it needed you, its
+            tool calls, and the tokens it used where it says. Nothing leaves this Mac.
           </p>
         </div>
       ) : shown.length === 0 ? (
@@ -114,33 +111,46 @@ export function RunsView() {
               note={`${stats.wrong} of ${stats.runs}: failed, or a loop gave up`}
               bad={stats.wrong > 0}
             />
-            <Stat label="Average run" value={formatDuration(stats.avgMs)} />
             <Stat
-              label="On a loop"
-              value={String(stats.looped)}
-              note={stats.looped ? `${stats.rounds} ${stats.rounds === 1 ? "round" : "rounds"} sent back` : undefined}
+              label="Typical run"
+              value={formatDuration(stats.medianMs)}
+              note={`the slowest tenth over ${formatDuration(stats.p90Ms)}`}
+            />
+            <Stat
+              label="Waited on you"
+              value={formatDuration(stats.waitedSecs * 1000)}
+              note={
+                `asked ${stats.asks} ${stats.asks === 1 ? "time" : "times"}` +
+                (stats.limited ? ` · ${stats.limited} hit a usage limit` : "")
+              }
             />
             <Stat
               label="Tokens"
               value={stats.tokens ? formatTokens(totalTokens(stats.tokens)) : "—"}
-              note={stats.tokens ? `said by ${stats.withTokens} of ${stats.runs}` : "only Claude Code and agents over ACP say"}
+              note={
+                stats.tokens
+                  ? `${formatTokens(Math.round(totalTokens(stats.tokens) / stats.withTokens))} a run, said by ${stats.withTokens} of ${stats.runs}`
+                  : "only Claude Code and agents over ACP say"
+              }
             />
+            <Stat
+              label="Failed tool calls"
+              value={stats.tools?.calls ? `${Math.round((stats.tools.failed / stats.tools.calls) * 100)}%` : "—"}
+              note={stats.tools ? `${stats.tools.failed} of ${stats.tools.calls}` : "only Claude Code, Copilot and ACP say"}
+            />
+            {stats.looped > 0 && (
+              <Stat
+                label="On a loop"
+                value={String(stats.looped)}
+                note={`${stats.rounds} ${stats.rounds === 1 ? "round" : "rounds"} sent back`}
+              />
+            )}
           </div>
 
-          <div className="run-days" role="img" aria-label={`Runs on each of the last ${DAYS} days, and those that went wrong`}>
-            {days.map((d) => (
-              <div key={d.day} className="run-day" title={`${d.day}: ${d.runs} ${d.runs === 1 ? "run" : "runs"}, ${d.wrong} went wrong`}>
-                <div className="bar" style={{ height: `${(d.runs / peak) * 100}%` }}>
-                  <div className="wrong" style={{ height: d.runs ? `${(d.wrong / d.runs) * 100}%` : 0 }} />
-                </div>
-              </div>
-            ))}
-          </div>
-          <div className="run-days-axis">
-            <span>{DAYS} days ago</span>
-            <span>today</span>
-          </div>
+          <RunChart days={days} />
+          <RunBreakdown agents={perAgent} tasks={tasks} repos={repos} agentName={agentName} />
 
+          <h3 className="run-list-title">Every run</h3>
           <div className="run-list">
             {shown.map((r) => (
               <RunRow
@@ -182,68 +192,4 @@ function Stat({ label, value, note, bad }: { label: string; value: string; note?
       {note && <div className="note">{note}</div>}
     </div>
   );
-}
-
-function RunRow({ run, agentName, open, onToggle, now }: {
-  run: Run;
-  agentName: string;
-  open: boolean;
-  onToggle: () => void;
-  now: number;
-}) {
-  const result = resultOf(run);
-  return (
-    <div className={`run-row ${result}`}>
-      <button type="button" className="run-line" onClick={onToggle} aria-expanded={open}>
-        <span className="run-mark" title={RESULT[result].label}>{RESULT[result].mark}</span>
-        <span className="run-what"><b>{agentName}</b> · {run.task || "a task since removed"}</span>
-        <span className="chips">
-          {run.repos.map((p) => <span key={p.id} className="chip">{p.name}</span>)}
-          {run.loop && <span className="chip">{run.loop.used}/{run.loop.rounds} rounds</span>}
-        </span>
-        <span className="spacer" />
-        <span className="run-took">{formatDuration(durationMs(run))}</span>
-        <span className="run-when">{ago(run.ended_at, now)}</span>
-      </button>
-      {open && (
-        <dl className="run-detail">
-          <dt>Ended</dt>
-          <dd>{ending(run)}</dd>
-          {run.loop && (
-            <>
-              <dt>Loop</dt>
-              <dd>
-                {run.loop.end === "passed" ? "passed" : run.loop.end === "gave_up" ? "gave up" : "stopped"},{" "}
-                {run.loop.used} of {run.loop.rounds} rounds used
-              </dd>
-            </>
-          )}
-          <dt>Ran</dt>
-          <dd>
-            {new Date(run.started_at).toLocaleString()} – {new Date(run.ended_at).toLocaleTimeString()},{" "}
-            {run.acp ? "as a conversation (ACP)" : "in a terminal"}
-          </dd>
-          <dt>Tokens</dt>
-          <dd>
-            {run.tokens
-              ? `${formatTokens(run.tokens.input)} in · ${formatTokens(run.tokens.output)} out · ${formatTokens(run.tokens.cached_read)} read from cache · ${formatTokens(run.tokens.cached_write)} written to cache`
-              : run.acp
-                ? "not said: this agent puts no usage on its answers"
-                : "not said: of the agents in a terminal, only Claude Code does"}
-          </dd>
-        </dl>
-      )}
-    </div>
-  );
-}
-
-function ending(run: Run): string {
-  switch (run.end) {
-    case "stopped":
-      return "stopped: by you, a restart, its task closing or the app quitting";
-    case "exited":
-      return "on its own, exit code 0";
-    case "failed":
-      return run.code === null ? "failed, with no exit code" : `failed, exit code ${run.code}`;
-  }
 }

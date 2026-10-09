@@ -126,6 +126,81 @@ pub struct Run {
     pub on_loop: Option<LoopRun>,
     #[serde(default)]
     pub tokens: Option<Tokens>,
+    /// Turns it finished: how often it was given something and came back.
+    #[serde(default)]
+    pub turns: u32,
+    /// Times it stopped on something only you could answer: a permission,
+    /// the trust question, a usage limit (RUN-7).
+    #[serde(default)]
+    pub asks: u32,
+    /// How long those waited on you, in seconds.
+    #[serde(default)]
+    pub waited_secs: u64,
+    /// It hit its plan's usage limit.
+    #[serde(default)]
+    pub limited: bool,
+    /// Its tool calls, where the agent says: Claude Code's and Copilot's
+    /// hooks, or an agent over ACP.
+    #[serde(default)]
+    pub tools: Option<ToolCalls>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolCalls {
+    #[serde(default)]
+    pub calls: u32,
+    #[serde(default)]
+    pub failed: u32,
+}
+
+impl ToolCalls {
+    pub fn finished(&mut self, failed: bool) {
+        self.calls = self.calls.saturating_add(1);
+        if failed {
+            self.failed = self.failed.saturating_add(1);
+        }
+    }
+}
+
+/// What a run needed of you and did, counted as it goes (RUN-7). Asking is
+/// worked out from the agent's report and a notice, each changed in several
+/// places; each of them settles the tally, which counts at the edges.
+#[derive(Clone, Debug, Default)]
+pub struct Tally {
+    asks: u32,
+    /// Since when it has been asking, while it is.
+    asking_since: Option<DateTime<Utc>>,
+    waited_ms: i64,
+    limited: bool,
+    tools: Option<ToolCalls>,
+}
+
+impl Tally {
+    /// Where it stands now: asking or not, on a usage limit or not.
+    pub fn settle(&mut self, asking: bool, limited: bool, now: DateTime<Utc>) {
+        match (asking, self.asking_since) {
+            (true, None) => {
+                self.asks = self.asks.saturating_add(1);
+                self.asking_since = Some(now);
+            }
+            (false, Some(since)) => {
+                self.waited_ms += (now - since).num_milliseconds().max(0);
+                self.asking_since = None;
+            }
+            _ => {}
+        }
+        self.limited |= limited;
+    }
+
+    /// A tool call a hook says finished.
+    pub fn tool(&mut self, failed: bool) {
+        self.tools.get_or_insert_default().finished(failed);
+    }
+
+    /// The same, from an agent that counts its own (ACP).
+    pub fn tools_from(&mut self, tools: ToolCalls) {
+        self.tools = Some(tools);
+    }
 }
 
 /// What a pane knew as its agent's process ended.
@@ -138,6 +213,8 @@ pub struct Ended {
     pub stopping: bool,
     pub code: Option<i32>,
     pub tokens: Option<Tokens>,
+    pub turns: u32,
+    pub tally: Tally,
 }
 
 /// How a process that ended reads (RUN-2). Being asked to stop comes
@@ -153,7 +230,9 @@ pub fn end_of(stopping: bool, code: Option<i32>) -> End {
 
 /// The row for a run that just ended.
 fn describe(config: &AppConfig, ended: Ended, on_loop: Option<LoopView>, now: DateTime<Utc>) -> Run {
-    let Ended { info, born, stopping, code, tokens } = ended;
+    let Ended { info, born, stopping, code, tokens, turns, mut tally } = ended;
+    // A question still open is one that waited until the end.
+    tally.settle(false, false, now);
     let repo = |project_id: &str| RunRepo {
         id: project_id.to_string(),
         name: config
@@ -197,6 +276,11 @@ fn describe(config: &AppConfig, ended: Ended, on_loop: Option<LoopView>, now: Da
             },
         }),
         tokens,
+        turns,
+        asks: tally.asks,
+        waited_secs: (tally.waited_ms / 1000) as u64,
+        limited: tally.limited,
+        tools: tally.tools,
     }
 }
 
@@ -354,6 +438,34 @@ mod tests {
             code: Some(0),
             on_loop: None,
             tokens: None,
+            turns: 0,
+            asks: 0,
+            waited_secs: 0,
+            limited: false,
+            tools: None,
+        }
+    }
+
+    /// An agent pane of task t1's, at the task's root.
+    fn info() -> PaneInfo {
+        PaneInfo {
+            id: "p1".into(),
+            task_id: "t1".into(),
+            checkout_id: None,
+            kind: PaneKind::Agent,
+            title: "Claude Code".into(),
+            agent_id: Some("claude".into()),
+            cwd: "/Users/you/code".into(),
+            running: false,
+            exit_code: Some(1),
+            started_at: Utc::now(),
+            last_output_at: Utc::now(),
+            notice: None,
+            activity: crate::pty::Activity::Idle,
+            activity_since: Utc::now(),
+            topic: None,
+            acp: false,
+            loop_said: None,
         }
     }
 
@@ -451,6 +563,19 @@ mod tests {
         let r = ended(&exited);
         assert_eq!((r.end, r.code), (End::Exited, Some(0)));
         assert!(r.ended_at >= r.started_at);
+
+        // Given a prompt, asked a question, answered with a key, a tool
+        // call failed, its turn done, stopped.
+        let asked = start(None, "sleep 30");
+        st.ptys.write(&asked, "fix the login\r").unwrap();
+        st.ptys.report_with(&asked, None, |_| Some(crate::pty::Activity::Asking)).unwrap();
+        st.ptys.write(&asked, "1").unwrap();
+        st.ptys.report_with(&asked, Some(true), |_| None).unwrap();
+        st.ptys.report_with(&asked, Some(false), |_| Some(crate::pty::Activity::Done)).unwrap();
+        st.ptys.kill(&asked).unwrap();
+        let r = ended(&asked);
+        assert_eq!((r.asks, r.turns, r.tools), (1, 1, Some(ToolCalls { calls: 2, failed: 1 })));
+        assert_eq!(ended(&exited).tools, None, "a terminal agent whose hooks said nothing");
         std::fs::remove_dir_all(&root).ok();
     }
 
@@ -459,29 +584,13 @@ mod tests {
         let root = temp_dir();
         let cfg = config(&root);
         let ended = || Ended {
-            info: PaneInfo {
-                id: "p1".into(),
-                task_id: "t1".into(),
-                checkout_id: None,
-                kind: PaneKind::Agent,
-                title: "Claude Code".into(),
-                agent_id: Some("claude".into()),
-                cwd: root.to_string_lossy().to_string(),
-                running: false,
-                exit_code: Some(1),
-                started_at: Utc::now(),
-                last_output_at: Utc::now(),
-                notice: None,
-                activity: crate::pty::Activity::Idle,
-                activity_since: Utc::now(),
-                topic: None,
-                acp: false,
-                loop_said: None,
-            },
+            info: info(),
             born: Utc::now(),
             stopping: true,
             code: Some(1),
             tokens: None,
+            turns: 0,
+            tally: Tally::default(),
         };
         let view = |phase: Phase| LoopView {
             pane_id: "p1".into(),
@@ -501,6 +610,32 @@ mod tests {
         assert_eq!(looped(Phase::Waiting).map(|l| l.end), Some(LoopEnd::Stopped));
         assert_eq!(describe(&cfg, ended(), None, Utc::now()).on_loop, None);
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Asking is worked out afresh from several places, each of which
+    /// settles the tally: the same question settled twice is one question.
+    #[test]
+    fn a_question_is_counted_once_and_its_wait_until_answered_or_the_end() {
+        let at = |s: i64| DateTime::<Utc>::UNIX_EPOCH + chrono::TimeDelta::seconds(s);
+        let mut tally = Tally::default();
+        tally.settle(true, false, at(0));
+        tally.settle(true, false, at(5));
+        tally.settle(false, false, at(30));
+        tally.settle(true, true, at(100));
+        tally.tool(false);
+        tally.tool(true);
+        let ended = Ended {
+            info: info(),
+            born: at(0),
+            stopping: true,
+            code: Some(1),
+            tokens: None,
+            turns: 3,
+            tally,
+        };
+        let run = describe(&AppConfig::default(), ended, None, at(160));
+        assert_eq!((run.asks, run.waited_secs, run.limited, run.turns), (2, 90, true, 3), "30s answered, 60s open at the end");
+        assert_eq!(run.tools, Some(ToolCalls { calls: 2, failed: 1 }));
     }
 
     #[test]

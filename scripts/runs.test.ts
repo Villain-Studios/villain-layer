@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  byAgent,
   filterRuns,
   formatDuration,
   formatTokens,
@@ -7,6 +8,7 @@ import {
   runChoices,
   runDays,
   runStats,
+  topSpend,
   wentWrong,
 } from "../src/lib/runs";
 import type { Run } from "../src/lib/types-runs";
@@ -28,6 +30,11 @@ function run(over: Partial<Run> = {}): Run {
     code: 0,
     loop: null,
     tokens: null,
+    turns: 1,
+    asks: 0,
+    waited_secs: 0,
+    limited: false,
+    tools: null,
     ...over,
   };
 }
@@ -81,7 +88,26 @@ describe("the sums", () => {
       run({ end: "stopped", loop: { used: 5, rounds: 5, end: "gave_up" }, started_at: daysAgo(0, 20), ended_at: daysAgo(0) }),
     ]);
     expect([s.runs, s.wrong, s.wrongRate, s.looped, s.rounds]).toEqual([4, 2, 0.5, 2, 8]);
-    expect(s.avgMs).toBe(20 * 60_000);
+    expect(s.medianMs).toBe(20 * 60_000);
+  });
+
+  test("give the typical run, which one left open overnight does not drag out", () => {
+    const minutes = [5, 6, 7, 8, 9, 10, 11, 12, 13, 600].map((m) => run({ started_at: daysAgo(0, m), ended_at: daysAgo(0) }));
+    const s = runStats(minutes);
+    expect(s.medianMs).toBe(9 * 60_000);
+    expect(s.p90Ms).toBe(13 * 60_000);
+  });
+
+  test("add up how often agents needed you, how long they waited, and their failed tools", () => {
+    const s = runStats([
+      run({ asks: 2, waited_secs: 90, limited: true, tools: { calls: 10, failed: 1 } }),
+      run({ asks: 1, waited_secs: 30, tools: { calls: 5, failed: 2 } }),
+      run(),
+    ]);
+    expect([s.asks, s.waitedSecs, s.limited]).toEqual([3, 120, 1]);
+    expect(s.tools).toEqual({ calls: 15, failed: 3 });
+    expect(s.withTools).toBe(2);
+    expect(runStats([run()]).tools).toBeNull();
   });
 
   test("add up tokens only over the runs that said, and say how many did", () => {
@@ -93,7 +119,25 @@ describe("the sums", () => {
   });
 
   test("of nothing are nothing, not NaN", () => {
-    expect(runStats([])).toMatchObject({ runs: 0, wrongRate: 0, avgMs: 0, tokens: null });
+    expect(runStats([])).toMatchObject({ runs: 0, wrongRate: 0, medianMs: 0, p90Ms: 0, tokens: null, tools: null });
+  });
+});
+
+describe("the breakdowns", () => {
+  test("put each agent side by side, the busiest first", () => {
+    const rows = byAgent([run({ agent: "gemini" }), run(), run({ end: "failed" })]);
+    expect(rows.map((r) => [r.agent, r.stats.runs, r.stats.wrong])).toEqual([["claude", 2, 1], ["gemini", 1, 0]]);
+  });
+
+  test("say where the time went, a run at a task's root counting for each repository", () => {
+    const api = { id: "api", name: "ACME API" }, web = { id: "web", name: "ACME Web" };
+    const runs = [
+      run({ task_id: "t1", task: "Fix the login", repos: [api, web], started_at: daysAgo(0, 30), ended_at: daysAgo(0) }),
+      run({ task_id: "t2", task: "", repos: [web], started_at: daysAgo(0, 10), ended_at: daysAgo(0), tokens: { input: 1, output: 2, cached_read: 3, cached_write: 4 } }),
+    ];
+    expect(topSpend(runs, "task", 5).map((s) => [s.name, s.ms / 60_000])).toEqual([["Fix the login", 30], ["a task since removed", 10]]);
+    expect(topSpend(runs, "repo", 5).map((s) => [s.name, s.ms / 60_000, s.tokens])).toEqual([["ACME Web", 40, 10], ["ACME API", 30, 0]]);
+    expect(topSpend(runs, "repo", 1)).toHaveLength(1);
   });
 });
 
@@ -110,10 +154,16 @@ describe("the chart", () => {
       now,
     );
     expect(days).toHaveLength(14);
-    expect(days[13]).toEqual({ day: "2026-10-09", runs: 2, wrong: 1 });
-    expect(days[12]).toEqual({ day: "2026-10-08", runs: 0, wrong: 0 });
-    expect(days[11]).toEqual({ day: "2026-10-07", runs: 1, wrong: 1 });
+    expect(days[13]).toEqual({ day: "2026-10-09", runs: 2, wrong: 1, tokens: 0, waitedSecs: 0 });
+    expect(days[12]).toEqual({ day: "2026-10-08", runs: 0, wrong: 0, tokens: 0, waitedSecs: 0 });
+    expect(days[11]).toEqual({ day: "2026-10-07", runs: 1, wrong: 1, tokens: 0, waitedSecs: 0 });
     expect(days.reduce((n, d) => n + d.runs, 0)).toBe(3);
+  });
+
+  test("can show a day's tokens and time waited on you instead", () => {
+    const tokens = { input: 1, output: 2, cached_read: 3, cached_write: 4 };
+    const [today] = runDays([run({ tokens, waited_secs: 60 }), run({ tokens, waited_secs: 5 })], 1, now);
+    expect([today.tokens, today.waitedSecs]).toEqual([20, 65]);
   });
 });
 

@@ -104,6 +104,7 @@ impl<R: Runtime> acp::Pane for Sink<R> {
             let mut meta = pane.meta.lock();
             meta.info.notice = Some("usage_limit".into());
             meta.notice_at = Utc::now();
+            meta.settle();
         }
         let _ = self.app.emit("pty:notice", NoticeEvent { pane_id: &self.id, notice: Some("usage_limit") });
     }

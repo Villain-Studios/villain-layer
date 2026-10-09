@@ -189,7 +189,7 @@ pub(crate) fn take_hook(ptys: &crate::pty::PtyManager, pane: &str, payload: &Val
     if let Some(session) = crate::agents::hook_session(payload) {
         let _ = ptys.note_session(pane, session);
     }
-    ptys.report_with(pane, |now| crate::agents::hook_activity(def.integration, payload, now))
+    ptys.report_with(pane, crate::agents::hook_tool(payload), |now| crate::agents::hook_activity(def.integration, payload, now))
         .unwrap_or(false)
 }
 

@@ -319,7 +319,7 @@ export function Watchers() {
       if (e.payload.notice === "trust_prompt") {
         state.toast(
           "info",
-          `${pane.title} is asking whether to trust ${owner?.name ?? "the worktree"} — answer it in Terminals or it will not start.`,
+          `${pane.title} is asking whether to trust ${owner?.name ?? "the worktree"} — answer it in its Agents tab or it will not start.`,
           { target, record: false },
         );
       } else if (e.payload.notice === "usage_limit") {

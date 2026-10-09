@@ -109,7 +109,7 @@ built yourself opens without a warning.
      a channel. An incoming-webhook URL works too.
 3. **Start work.** Tickets → click a ticket → Start work. Check the repos
    and the base branch, pick an agent, Start.
-4. **Work with the agent** in the task's Terminals tab. A dot's colour and
+4. **Work with the agent** in the task's Agents tab. A dot's colour and
    the "N need you" badge say when it is waiting on you.
 5. **Review** in the Diff tab: click a line number to leave a note, then
    *Send to agent*. Commit when it is right.

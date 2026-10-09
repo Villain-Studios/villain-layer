@@ -171,7 +171,7 @@ function TaskMain({ task }: { task: TaskView }) {
   const fail = useStore((s) => s.fail);
   // Where the board has it, from your ticket list: in step with the work or not.
   const ticket = useStore((s) => s.issues.find((i) => i.key === task.issue_key));
-  // The Terminals badge counts what is open now. The task's own count comes
+  // The Agents badge counts what is open now. The task's own count comes
   // from the task poll, which can be a minute behind a pane just opened.
   const paneCount = useStore((s) => s.panes.filter((p) => p.task_id === task.id).length);
   const [updating, setUpdating] = useState(false);
@@ -268,7 +268,7 @@ function TaskMain({ task }: { task: TaskView }) {
           className={tab === "terminals" ? "active" : ""}
           onClick={() => setTab("terminals")}
         >
-          Terminals<span className="badge">{paneCount}</span>
+          Agents<span className="badge">{paneCount}</span>
         </button>
         <button className={tab === "diff" ? "active" : ""} onClick={() => setTab("diff")}>
           Diff{changed > 0 && <span className="badge">{changed}</span>}

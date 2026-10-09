@@ -349,8 +349,9 @@ pub fn run() {
         .run(|app, event| {
             // Quitting used to take the agents down with SIGHUP, so they never
             // wrote their transcripts and nothing could be resumed next time.
-            // Ask them to stop and give them a moment to save.
-            if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
+            // Ask them to stop and give them a moment to save. Once: closing
+            // the last window asks first and then exits.
+            if quits(&event) && !QUITTING.swap(true, std::sync::atomic::Ordering::AcqRel) {
                 let state = app.state::<AppState>();
                 // Whatever the writer had not got to yet.
                 let _ = state.messages.flush();
@@ -366,4 +367,31 @@ pub fn run() {
                 let _ = closing.join();
             }
         });
+}
+
+/// The agents have been asked to stop, on the way out.
+static QUITTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether `event` is the app going away (PANE-5).
+///
+/// Cmd+Q, the Dock's Quit and logging out arrive as `Exit` alone: AppKit's
+/// `terminate:` ends the event loop without asking first. Only closing the
+/// last window and `app.exit` send `ExitRequested`, and that was the only one
+/// listened for, so an ordinary quit stopped nothing. Terminal agents were
+/// hung up on with no time to save, and an agent over ACP, which has no
+/// terminal to lose, could run on with nobody to talk to: two were found
+/// still holding their conversations the morning after the app had gone.
+fn quits(event: &tauri::RunEvent) -> bool {
+    matches!(event, tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quitting_from_the_menu_or_the_dock_stops_the_agents_too() {
+        assert!(quits(&tauri::RunEvent::Exit));
+        assert!(!quits(&tauri::RunEvent::Ready));
+    }
 }

@@ -242,6 +242,8 @@ const answer: Record<string, Answer> = {
   ...loopAnswers(world.projects),
   resumable_agents: () => [],
   task_prompt: () => "Work on ACME-123: Fix login race.\n\nThe ticket says…",
+  // Unanswered, a handoff opened on a null briefing and took the page down.
+  handoff_prompt: () => "Continue ACME-123: Fix login race.\n\nWhat changed so far…\n\nThe last agent's terminal ended with…",
   // Specs (§19). A draft arrives in pieces, as the real one does.
   ...specAnswers(world),
   spawn_agent: (a) => {

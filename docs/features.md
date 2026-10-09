@@ -284,7 +284,8 @@ Each of them can also run as a conversation the app draws, over ACP (§20).
 - **PANE-5** Stopping MUST be graceful then certain. An agent gets SIGTERM
   (a shell SIGHUP), up to 5 seconds (2 when a whole task is being
   deleted) to save its transcript, then SIGKILL to its process group.
-  Quitting the app does the same for every pane.
+  Quitting the app does the same for every pane, however it is quit:
+  Cmd+Q, the Dock, closing the window, logging out.
 - **PANE-6** A pane stopped on purpose (Stop, handoff, close) MUST NOT be
   reported as having exited with an error, nor posted to Slack as
   finished.

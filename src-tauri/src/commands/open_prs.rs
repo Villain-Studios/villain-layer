@@ -87,8 +87,8 @@ pub async fn github_open_prs(
                 };
                 open = prs.iter().find(|p| p.state == "open").cloned();
                 if let Some(pr) = super::landed(&prs) {
-                    if super::advance(&state, &checkout, &pr.head_sha).await? {
-                        (changed, committed) = measure(Some(pr.head_sha.clone())).await?;
+                    if let Some(point) = super::advance(&state, &checkout, &pr.head_sha).await? {
+                        (changed, committed) = measure(Some(point)).await?;
                         merged = Some(pr.number);
                     }
                 }

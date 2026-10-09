@@ -8,12 +8,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 
+mod landed;
 mod only;
 mod outgoing;
 mod remote;
 mod snapshot;
 mod store;
 mod upkeep;
+pub use landed::{all_landed, have_commit, landed_through};
 pub use only::{commit_only, head_commit};
 pub use outgoing::{outgoing_commits, outgoing_from, outgoing_patch};
 pub use remote::origin_slug;

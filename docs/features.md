@@ -1309,6 +1309,9 @@ ring marks where it clicked.
   the tab that opened it, and the active one. When it closes, by the
   page closing itself as sign-in windows do or by the user or an agent
   closing it, the tab that opened it is active again if it is still open.
+  An agent's action that opened one is answered with it, however late
+  Chrome says it opened: the app also asks Chrome for windows the task's
+  tabs opened that it has not yet heard of, and waits for those.
 - **BRW-15** While an agent is using the browser, the panel MUST say so,
   and the user MUST be kept out of the whole panel: an overlay over the
   page names the agent and what it last did, tab changes included

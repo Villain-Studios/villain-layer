@@ -95,7 +95,9 @@ impl Page {
                 return;
             }
             // A tab the action opened is the page it led to, once it is one.
-            let loading = browser.adopting() || browser.state_of(&self.task).is_some_and(|s| s.2);
+            let loading = browser.adopting()
+                || browser.state_of(&self.task).is_some_and(|s| s.2)
+                || self.opening(browser).await;
             if !loading {
                 if let Ok(Value::String(s)) = self.eval("document.readyState").await {
                     if s != "loading" {
@@ -104,6 +106,16 @@ impl Page {
                 }
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    /// A window this task's tabs opened that Chrome has made and the app has
+    /// not heard of yet (`Browser::unheard`). The page made it while the
+    /// action ran, so Chrome lists it as soon as the action is done.
+    async fn opening(&self, browser: &Browser) -> bool {
+        match self.cdp.call("Target.getTargets", json!({}), None).await {
+            Ok(all) => all.get("targetInfos").and_then(Value::as_array).is_some_and(|t| browser.unheard(&self.task, t)),
+            Err(_) => false,
         }
     }
 

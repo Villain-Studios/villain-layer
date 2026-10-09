@@ -201,8 +201,9 @@ impl Browser {
             return;
         };
         let (task, opened) = {
-            let inner = self.inner.lock();
+            let mut inner = self.inner.lock();
             let Some((task, _)) = tab_of(&inner, None, Some(&opener)) else { return };
+            inner.heard.insert(target.clone());
             // Already one of the app's: a tab it made itself.
             if tab_of(&inner, None, Some(&target)).is_some() {
                 return;
@@ -254,6 +255,22 @@ impl Browser {
     pub fn adopting(&self) -> bool {
         self.inner.lock().adopting > 0
     }
+
+    /// Whether Chrome lists a window one of `task`'s tabs opened that the app
+    /// has not heard of yet. On a busy machine its `targetCreated` came after
+    /// `settle` had looked, and a click that opened a tab was answered with
+    /// the page it was clicked on (BRW-14).
+    pub fn unheard(&self, task: &str, targets: &[Value]) -> bool {
+        let inner = self.inner.lock();
+        let Some(tabs) = inner.tabs.get(task) else { return false };
+        let ours = |id: &str| tabs.list.iter().any(|t| t.target == id);
+        targets.iter().any(|t| {
+            let s = |k: &str| t.get(k).and_then(Value::as_str);
+            s("type") == Some("page")
+                && s("openerId").is_some_and(ours)
+                && s("targetId").is_some_and(|id| !ours(id) && !inner.heard.contains(id))
+        })
+    }
 }
 
 #[cfg(test)]
@@ -266,6 +283,38 @@ mod tests {
 
     fn text(content: &[Value]) -> String {
         content.iter().filter_map(|c| c.get("text").and_then(Value::as_str)).collect()
+    }
+
+    /// Chrome made the window as the click ran, and lists it; its
+    /// `targetCreated` is still on its way. The click's answer waits for
+    /// that window, and for no other: not one already heard of (adopting
+    /// says the rest), not another task's, not the tab itself.
+    #[test]
+    fn an_action_waits_for_a_window_chrome_made_and_the_app_has_not_heard_of() {
+        let tab = |id: &str| super::super::Tab {
+            target: id.into(),
+            session: format!("s-{id}"),
+            url: String::new(),
+            title: String::new(),
+            loading: false,
+            viewport: Default::default(),
+            console: Default::default(),
+            dialog: None,
+            opener: None,
+            secret: None,
+            screencasts: 0,
+        };
+        let browser = Browser::default();
+        browser.inner.lock().tabs.insert("t1".into(), super::super::tabs::Tabs::new(vec![tab("home")], 0));
+        let window = |id: &str, opener: &str| json!({ "type": "page", "targetId": id, "openerId": opener });
+
+        assert!(browser.unheard("t1", &[window("popup", "home")]));
+        assert!(!browser.unheard("t1", &[window("popup", "another-tasks-tab")]));
+        assert!(!browser.unheard("t1", &[json!({ "type": "page", "targetId": "home" })]));
+        assert!(!browser.unheard("t1", &[json!({ "type": "service_worker", "targetId": "sw", "openerId": "home" })]));
+        assert!(!browser.unheard("t2", &[window("popup", "home")]), "a task with no tabs");
+        browser.inner.lock().heard.insert("popup".into());
+        assert!(!browser.unheard("t1", &[window("popup", "home")]));
     }
 
     /// Against a real Chrome: a page that cannot be reached keeps its own

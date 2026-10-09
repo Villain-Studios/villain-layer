@@ -1,14 +1,9 @@
-import { useRef, useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { api } from "../lib/api";
 import { useStore } from "../store";
+import { THEMES, type Theme } from "../lib/theme";
 import type { ThemeChoice, UiPrefs } from "../lib/types";
 import { Field, Switch } from "./ui";
-
-const THEMES: [ThemeChoice, string][] = [
-  ["dark", "Dark"],
-  ["light", "Light"],
-  ["system", "Match the Mac"],
-];
 
 /** Settings → Appearance: how the app looks, and how its terminals and agents behave. */
 export function AppearanceSettings() {
@@ -70,19 +65,9 @@ export function AppearanceSettings() {
     <>
       <Field
         label="Theme"
-        hint="Match the Mac follows its appearance as it changes. A paired phone draws in the same theme, or under Match the Mac in its own appearance. In a terminal an agent picks its own colours: if one stays dark, change its theme (Claude Code: /theme)."
+        hint="Match the Mac switches between Light and Dark as the Mac does. A paired phone draws in the same theme, or under Match the Mac in its own appearance. In a terminal an agent picks its own colours: if one stays dark, change its theme (Claude Code: /theme)."
       >
-        <div className="row">
-          {THEMES.map(([v, label]) => (
-            <button
-              key={v}
-              className={`btn btn-sm${ui.theme === v ? " btn-primary" : ""}`}
-              onClick={() => void saveUi({ theme: v })}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+        <ThemePicker value={ui.theme} onPick={(theme) => void saveUi({ theme })} />
       </Field>
 
       <Field
@@ -185,6 +170,62 @@ export function AppearanceSettings() {
         onChange={(v) => slideUi({ conversation_font_size: v })}
       />
     </>
+  );
+}
+
+/**
+ * The themes as small pictures of the app, each drawn in its own tokens:
+ * three buttons named Dark, Light and Match the Mac said nothing of what a
+ * theme looks like, and the names stop saying it once there are more.
+ */
+function ThemePicker({ value, onPick }: { value: ThemeChoice; onPick: (theme: ThemeChoice) => void }) {
+  const tile = (id: ThemeChoice, name: string, shot: ReactNode, note?: string) => (
+    <button
+      key={id}
+      className={`theme-tile${value === id ? " on" : ""}`}
+      aria-pressed={value === id}
+      onClick={() => onPick(id)}
+    >
+      <div className="theme-shot">{shot}</div>
+      <span className="theme-name">
+        {name}
+        {note && <span className="theme-note">{note}</span>}
+      </span>
+    </button>
+  );
+  return (
+    <div className="theme-picker">
+      {THEMES.map((t) => tile(t.id, t.name, <Preview theme={t.id} />))}
+      {tile(
+        "system",
+        "Match the Mac",
+        <>
+          <Preview theme="dark" />
+          <Preview theme="light" half />
+        </>,
+        "Light or Dark",
+      )}
+    </div>
+  );
+}
+
+/** The app in miniature: top bar, task list, a page with text, statuses and a button. */
+function Preview({ theme, half }: { theme: Theme; half?: boolean }) {
+  return (
+    <div className={`theme-preview${half ? " left-half" : ""}`} data-theme={theme} aria-hidden>
+      <div className="tp-bar"><i className="on" /><i /><i /></div>
+      <div className="tp-body">
+        <div className="tp-side"><i className="on" /><i /><i style={{ width: "70%" }} /></div>
+        <div className="tp-main">
+          <i className="text" style={{ width: "80%" }} />
+          <i style={{ width: "55%" }} />
+          <div className="tp-dots">
+            {["--green", "--amber", "--red", "--blue"].map((c) => <b key={c} style={{ background: `var(${c})` }} />)}
+          </div>
+          <span className="tp-button" />
+        </div>
+      </div>
+    </div>
   );
 }
 

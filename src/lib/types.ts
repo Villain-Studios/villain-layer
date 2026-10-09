@@ -401,7 +401,7 @@ export interface SlackConfig {
   allow_agent_posts: boolean;
 }
 
-export type ThemeChoice = "dark" | "light" | "system";
+export type ThemeChoice = "dark" | "light" | "tokyo-night" | "system";
 
 export interface UiPrefs {
   scale: number;

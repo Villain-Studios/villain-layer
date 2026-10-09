@@ -244,8 +244,8 @@ pub struct SavedLoop {
 #[serde(default)]
 pub struct UiPrefs {
     pub scale: f32,
-    /// The app's colours (SET-5): "dark", "light", or "system" for the Mac's
-    /// own appearance, followed as it changes. Dark by default: it is what
+    /// The app's colours (SET-5): a palette `THEMES` names, or "system" for
+    /// the Mac's own appearance, followed as it changes. Dark by default: it is what
     /// the app has always been, and an update should not repaint it.
     #[serde(default = "dark")]
     pub theme: String,
@@ -304,7 +304,7 @@ fn dark() -> String {
 }
 
 /// The themes `UiPrefs::theme` may name, as `src/theme.css` names them.
-pub const THEMES: &[&str] = &["dark", "light", "system"];
+pub const THEMES: &[&str] = &["dark", "light", "tokyo-night", "system"];
 
 /// The models the reviewer pass may run on, as `claude --model` names them.
 pub const REVIEWER_MODELS: &[&str] = &["sonnet", "opus", "haiku"];

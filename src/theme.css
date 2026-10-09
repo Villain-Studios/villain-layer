@@ -3,10 +3,13 @@
    so it becomes a token here, or a color-mix of one.
 
    Dark until told otherwise, as the app was before there was a choice.
-   `lib/theme.ts` sets data-theme on <html>; `theme.rs` paints the window
-   behind the page in --bg; the terminals' palettes are in `lib/terminal.ts`. */
+   `lib/theme.ts` sets data-theme on <html>, and lists the themes; `theme.rs`
+   paints the window behind the page in --bg; the terminals' palettes are in
+   `lib/terminal.ts`. Any element may carry data-theme too: the picker's
+   previews draw each theme inside a page drawn in another. */
 
-:root {
+:root,
+[data-theme="dark"] {
   --bg: #0c0c11;
   --panel: #12121a;
   --panel-2: #171722;
@@ -49,7 +52,8 @@
   color-scheme: dark;
 }
 
-:root[data-theme="light"] {
+:root[data-theme="light"],
+[data-theme="light"] {
   --bg: #ffffff;
   --panel: #f6f6f9;
   --panel-2: #ececf1;
@@ -82,4 +86,42 @@
   --shade: rgba(30, 30, 50, 0.4);
 
   color-scheme: light;
+}
+
+/* Tokyo Night, after enkia's and folke's: the night variant's palette. Its
+   accent is the blue it is known by, so "blue" for a status is its cyan. */
+:root[data-theme="tokyo-night"],
+[data-theme="tokyo-night"] {
+  --bg: #1a1b26;
+  --panel: #1f2335;
+  --panel-2: #24283b;
+  --border: #2f344d;
+  --border-soft: #262a3d;
+  --text: #c0caf5;
+  --dim: #737aa2;
+  --dimmer: #565f89;
+  --tab-text: #a9b1d6;
+  --tab-count: #8b93b8;
+  --accent: #7aa2f7;
+  --accent-dim: #3d59a1;
+  --accent-fill: #3d59a1;
+  --on-accent: #f3f6ff;
+  --green: #9ece6a;
+  --red: #f7768e;
+  --amber: #e0af68;
+  --blue: #7dcfff;
+  --green-line: #374235;
+  --red-line: #4b2f3d;
+  --amber-line: #463c35;
+  --blue-line: #304356;
+  --add-text: #c3e88d;
+  --del-text: #ffa0b4;
+  --danger-fill: #914c54;
+  --on-danger: #ffe8ee;
+  --on-red: #1a1b26;
+  --scroll: #363b54;
+  --scroll-hover: #414868;
+  --shade: #000;
+
+  color-scheme: dark;
 }

@@ -14,7 +14,7 @@
  *   &task=t-login          the selected task (none: the All agents overview)
  *   &tab=terminals|diff|pr
  *   &loop=checking|held|passed|gave_up   the task's agents on a loop (§21)
- *   &theme=dark|light|system   the saved theme (SET-5)
+ *   &theme=dark|light|tokyo-night|system   the saved theme (SET-5)
  *
  * From the console, or a browser tool's JavaScript:
  *

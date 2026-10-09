@@ -42,6 +42,58 @@ const PALETTES: Record<Theme, ITheme> = {
     brightYellow: "#e0af68", brightBlue: "#7aa2f7", brightMagenta: "#bb9af7",
     brightCyan: "#7dcfff", brightWhite: "#c0caf5",
   },
+  // Cursor's own terminal colours (theme-cursor), on the page's --bg rather
+  // than its panel's, and opaque where Cursor's are see-through.
+  "cursor-dark": {
+    background: "#181818",
+    foreground: "#f0f0f0",
+    cursor: "#f0f0f0",
+    cursorAccent: "#181818",
+    selectionBackground: "#3b3b3b",
+    black: "#242424", red: "#fc6b83", green: "#3fa266", yellow: "#d2943e",
+    blue: "#81a1c1", magenta: "#b48ead", cyan: "#88c0d0", white: "#f0f0f0",
+    brightBlack: "#9a9a9a", brightRed: "#fc6b83", brightGreen: "#70b489",
+    brightYellow: "#f1b467", brightBlue: "#87a6c4", brightMagenta: "#b48ead",
+    brightCyan: "#88c0d0", brightWhite: "#ffffff",
+  },
+  "cursor-light": {
+    background: "#fcfcfc",
+    foreground: "#141414",
+    cursor: "#141414",
+    cursorAccent: "#fcfcfc",
+    selectionBackground: "#dbdbdb",
+    black: "#141414", red: "#be1744", green: "#007041", yellow: "#8b5700",
+    blue: "#0064b0", magenta: "#92156a", cyan: "#176c74", white: "#6c6c6c",
+    brightBlack: "#505050", brightRed: "#ce405b", brightGreen: "#00854c",
+    brightYellow: "#a46700", brightBlue: "#2778c1", brightMagenta: "#b54e90",
+    brightCyan: "#3b7e84", brightWhite: "#949494",
+  },
+  // Ayu's terminal colours as its extension publishes them, on the page's
+  // --bg, with its accent for a cursor as its editor has.
+  "ayu-dark": {
+    background: "#10141c",
+    foreground: "#bfbdb6",
+    cursor: "#e6b450",
+    cursorAccent: "#10141c",
+    selectionBackground: "#193155",
+    black: "#1b1f29", red: "#f06b73", green: "#70bf56", yellow: "#fdb04c",
+    blue: "#4fbfff", magenta: "#d0a1ff", cyan: "#93e2c8", white: "#c7c7c7",
+    brightBlack: "#686868", brightRed: "#f07178", brightGreen: "#aad94c",
+    brightYellow: "#ffb454", brightBlue: "#59c2ff", brightMagenta: "#d2a6ff",
+    brightCyan: "#95e6cb", brightWhite: "#ffffff",
+  },
+  "ayu-light": {
+    background: "#fcfcfc",
+    foreground: "#5c6166",
+    cursor: "#f29718",
+    cursorAccent: "#fcfcfc",
+    selectionBackground: "#d7e4f6",
+    black: "#000000", red: "#f06b6c", green: "#6cbf43", yellow: "#e7a100",
+    blue: "#21a1e2", magenta: "#a176cb", cyan: "#4abc96", white: "#c7c7c7",
+    brightBlack: "#686868", brightRed: "#f07171", brightGreen: "#86b300",
+    brightYellow: "#eba400", brightBlue: "#22a4e6", brightMagenta: "#a37acc",
+    brightCyan: "#4cbf99", brightWhite: "#d1d1d1",
+  },
 };
 
 /**

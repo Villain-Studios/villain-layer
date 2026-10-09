@@ -14,6 +14,14 @@ use crate::commands::AppState;
 const DARK: Color = Color(0x0c, 0x0c, 0x11, 0xff);
 const LIGHT: Color = Color(0xff, 0xff, 0xff, 0xff);
 const TOKYO_NIGHT: Color = Color(0x1a, 0x1b, 0x26, 0xff);
+const CURSOR_DARK: Color = Color(0x18, 0x18, 0x18, 0xff);
+const CURSOR_LIGHT: Color = Color(0xfc, 0xfc, 0xfc, 0xff);
+const AYU_DARK: Color = Color(0x10, 0x14, 0x1c, 0xff);
+const AYU_LIGHT: Color = Color(0xfc, 0xfc, 0xfc, 0xff);
+
+/// The themes drawn dark on light, which macOS must draw its own parts of
+/// the window for (scrollbars, dialogs, `prefers-color-scheme`) in light.
+const LIGHT_THEMES: &[&str] = &["light", "cursor-light", "ayu-light"];
 
 /// Give the app the appearance `choice` names (one of `config::THEMES`),
 /// and paint the window to match.
@@ -21,7 +29,7 @@ pub fn apply<R: Runtime>(app: &AppHandle<R>, choice: &str) {
     let Some(window) = app.get_webview_window("main") else { return };
     let _ = window.set_theme(match choice {
         "system" => None,
-        "light" => Some(Theme::Light),
+        _ if LIGHT_THEMES.contains(&choice) => Some(Theme::Light),
         _ => Some(Theme::Dark),
     });
     paint(&window.as_ref().window(), choice);
@@ -47,6 +55,10 @@ fn paint<R: Runtime>(window: &Window<R>, choice: &str) {
 fn background(choice: &str, light: bool) -> Color {
     match choice {
         "tokyo-night" => TOKYO_NIGHT,
+        "cursor-dark" => CURSOR_DARK,
+        "cursor-light" => CURSOR_LIGHT,
+        "ayu-dark" => AYU_DARK,
+        "ayu-light" => AYU_LIGHT,
         _ if light => LIGHT,
         _ => DARK,
     }
@@ -68,6 +80,13 @@ mod tests {
             let Color(r, g, b, _) = background(name, *name == "light");
             assert_eq!(bg, format!("#{r:02x}{g:02x}{b:02x}"), "{name}'s window and page backgrounds differ");
             assert!(listed.contains(&format!("id: \"{name}\"")), "{name} not offered in lib/theme.ts");
+            // A light page in a window macOS draws dark has dark scrollbars
+            // and dialogs, and xterm leaves faint colours faint on it.
+            let light = LIGHT_THEMES.contains(name);
+            let scheme = css[at..].split("color-scheme:").nth(1).and_then(|s| s.split(';').next()).unwrap().trim();
+            assert_eq!(scheme, if light { "light" } else { "dark" }, "{name}'s color-scheme");
+            let entry = listed.lines().find(|l| l.contains(&format!("id: \"{name}\""))).unwrap();
+            assert!(entry.contains(&format!("light: {light}")), "{name} is light in one place and dark in another");
         }
     }
 }

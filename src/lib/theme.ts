@@ -14,6 +14,10 @@ export const THEMES: readonly { id: Theme; name: string; light: boolean }[] = [
   { id: "dark", name: "Dark", light: false },
   { id: "light", name: "Light", light: true },
   { id: "tokyo-night", name: "Tokyo Night", light: false },
+  { id: "cursor-dark", name: "Cursor Dark", light: false },
+  { id: "cursor-light", name: "Cursor Light", light: true },
+  { id: "ayu-dark", name: "Ayu Dark", light: false },
+  { id: "ayu-light", name: "Ayu Light", light: true },
 ];
 
 const CHOICES: readonly ThemeChoice[] = [...THEMES.map((t) => t.id), "system"];

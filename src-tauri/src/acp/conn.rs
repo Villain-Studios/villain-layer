@@ -69,6 +69,8 @@ pub(super) struct State {
     /// conversation opened has none yet: a conversation being picked up
     /// replays itself first, and the prompt goes after it, not into it.
     pub(super) queue: VecDeque<(String, Option<usize>)>,
+    /// What its finished turns used, where it says (RUN-4).
+    pub(super) tokens: Option<crate::runs::Tokens>,
 }
 
 impl State {
@@ -132,6 +134,7 @@ impl Conn {
                 ready: false,
                 exited: false,
                 queue,
+                tokens: None,
             }),
             pane: OnceLock::new(),
             stderr: Mutex::new(String::new()),
@@ -418,6 +421,9 @@ impl Conn {
                         None => {
                             let reason = result.get("stopReason").and_then(Value::as_str).unwrap_or("end_turn");
                             st.convo.turn_ended(reason);
+                            if let Some(used) = result.get("usage").and_then(turn_tokens) {
+                                st.tokens.get_or_insert_default().add(used);
+                            }
                             fx.report = Some(if reason == "cancelled" { Activity::Idle } else { Activity::Done });
                         }
                     }
@@ -468,6 +474,19 @@ impl Conn {
             pane.exited(code);
         }
     }
+}
+
+/// What one turn used, from the `usage` on the answer to its prompt, which
+/// Claude's adapter counts afresh for each prompt.
+fn turn_tokens(usage: &Value) -> Option<crate::runs::Tokens> {
+    let n = |k: &str| usage.get(k).and_then(Value::as_u64).unwrap_or(0);
+    let used = crate::runs::Tokens {
+        input: n("inputTokens"),
+        output: n("outputTokens"),
+        cached_read: n("cachedReadTokens"),
+        cached_write: n("cachedWriteTokens"),
+    };
+    (used != crate::runs::Tokens::default()).then_some(used)
 }
 
 /// How an agent's `authMethods` say to sign in, one line each.
@@ -631,6 +650,25 @@ mod tests {
         reply(&c, &first["id"], json!({ "stopReason": "end_turn" }));
         let second = sent(&rx).remove(0);
         assert_eq!(second["params"]["prompt"][0]["text"], "two");
+    }
+
+    /// Claude's adapter counts each prompt's tokens afresh, so a run's are
+    /// the sum of its turns'. A turn stopped early says nothing.
+    #[test]
+    fn the_tokens_of_each_finished_turn_add_up_for_the_run() {
+        let (c, rx, _) = opened(None);
+        assert_eq!(c.tokens(), None, "an agent that never says has none, not zero");
+        let usage = |input: u64| json!({ "inputTokens": input, "outputTokens": 20, "cachedReadTokens": 300, "cachedWriteTokens": 4, "totalTokens": input + 324 });
+        c.prompt("one").unwrap();
+        reply(&c, &sent(&rx)[0]["id"], json!({ "stopReason": "end_turn", "usage": usage(10) }));
+        c.prompt("two").unwrap();
+        reply(&c, &sent(&rx)[0]["id"], json!({ "stopReason": "end_turn", "usage": usage(5) }));
+        c.prompt("three").unwrap();
+        reply(&c, &sent(&rx)[0]["id"], json!({ "stopReason": "cancelled" }));
+        assert_eq!(
+            c.tokens(),
+            Some(crate::runs::Tokens { input: 15, output: 40, cached_read: 600, cached_write: 8 })
+        );
     }
 
     #[test]

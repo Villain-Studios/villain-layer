@@ -10,7 +10,7 @@
  * URL parameters set the scene before the app boots:
  *
  *   ?scenario=busy|empty|unlinked|tickets|reviews   which world (default busy)
- *   &view=work|tickets|reviews|chat|repos
+ *   &view=work|tickets|reviews|chat|runs|repos
  *   &task=t-login          the selected task (none: the All agents overview)
  *   &tab=terminals|diff|pr
  *   &loop=checking|held|passed|gave_up   the task's agents on a loop (§21)
@@ -33,6 +33,7 @@ import { ago, SCENARIOS } from "./world";
 import { acpAnswers, seedAcp } from "./acp";
 import { loopAnswers, seedLoop } from "./loop";
 import { specAnswers } from "./spec";
+import { runAnswers } from "./runs";
 
 type Args = Record<string, unknown>;
 type Answer = (args: Args) => unknown;
@@ -246,6 +247,8 @@ const answer: Record<string, Answer> = {
   handoff_prompt: () => "Continue ACME-123: Fix login race.\n\nWhat changed so far…\n\nThe last agent's terminal ended with…",
   // Specs (§19). A draft arrives in pieces, as the real one does.
   ...specAnswers(world),
+  // The run log (§22).
+  ...runAnswers(world.tasks.length > 0),
   spawn_agent: (a) => {
     const p = newPane(a, "agent", a.taskId as string);
     // An ACP agent is sent its opening prompt once its conversation opens.

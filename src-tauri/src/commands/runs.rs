@@ -1,38 +1,22 @@
-//! Commands for the agent run dashboard.
+//! The run log (§22): the log is `crate::runs`; these only read and change
+//! it in memory, so they stay plain commands. Its writer thread does the
+//! disk.
 
-use crate::commands::AppState;
-use crate::runs::{AgentRun, RunStats};
-use crate::error::Result;
+use tauri::{AppHandle, State};
 
-/// List all agent runs, optionally filtered by agent or project.
+use super::AppState;
+use crate::runs::{changed, Run};
+
+/// Every run kept, newest first (RUN-3). Filters and sums are the view's.
 #[tauri::command]
-pub fn list_runs(
-    state: tauri::State<'_, AppState>,
-    agent_id: Option<String>,
-    project_id: Option<String>,
-) -> Result<Vec<AgentRun>> {
-    Ok(state.runs.filter(
-        agent_id.as_deref(),
-        project_id.as_deref(),
-    ))
+pub fn list_runs(state: State<AppState>) -> Vec<Run> {
+    state.runs.list()
 }
 
-/// Get aggregate statistics over runs, optionally filtered.
+/// Forget every run (RUN-6).
 #[tauri::command]
-pub fn run_stats(
-    state: tauri::State<'_, AppState>,
-    agent_id: Option<String>,
-    project_id: Option<String>,
-) -> Result<RunStats> {
-    Ok(state.runs.stats(
-        agent_id.as_deref(),
-        project_id.as_deref(),
-    ))
-}
-
-/// Clear all run history.
-#[tauri::command]
-pub fn clear_runs(state: tauri::State<'_, AppState>) -> Result<()> {
-    state.runs.clear();
-    Ok(())
+pub fn clear_runs(app: AppHandle, state: State<AppState>) {
+    if state.runs.clear() {
+        changed(&app);
+    }
 }

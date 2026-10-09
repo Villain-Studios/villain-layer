@@ -1053,7 +1053,7 @@ Known gaps:
 
 | Where | What |
 |---|---|
-| `~/Library/Application Support/eu.codevillain.villain-layer/` | `config.json`: repos, tasks, settings, saved panes. `messages.json`: the message center (MSG-4). `notes.json`: repo notes (MEM-7). At agent launch also `.mcp.json` (0600), `claude-hooks.json`, `copilot-plugin/`, `opencode-plugin.js` |
+| `~/Library/Application Support/eu.codevillain.villain-layer/` | `config.json`: repos, tasks, settings, saved panes. `messages.json`: the message center (MSG-4). `notes.json`: repo notes (MEM-7). `runs.json`: the run log (RUN-5). At agent launch also `.mcp.json` (0600), `claude-hooks.json`, `copilot-plugin/`, `opencode-plugin.js` |
 | Keychain, service `eu.codevillain.villain-layer` | one item holding every token, paired phones' included (PHONE-3), and the passwords of the browser's saved sign-ins (BRW-18) |
 | `~/.villain-worktrees/` (settable) | task folders, `_chat/` rooms, and `.repos/`: the app's own copy of each repo (REPO-4) |
 | a task folder | the worktrees, `AGENTS.md` and `CLAUDE.md` (task context), `TICKET.md` (PANE-13), `.spec-drafts/`: spec drafts and checks (SPEC-6, SPEC-15), `.mcp.json`, and `.gemini/settings.json`, `PR_DESCRIPTION.md`, `PR_FEEDBACK.md`, and hand-offs too long to type (`CONFLICTS.md`, `REVIEW_COMMENTS.md`, `PR_DRAFT_REQUEST.md`, `FIRST_PROMPT.md`, `CHECKS.md` (LOOP-6), PANE-11) as they come up |
@@ -1837,50 +1837,79 @@ Known gaps:
 
 ---
 
-## 22. Run Dashboard
+## 22. Runs
 
-The Runs view shows a history of every agent run: which agent, how long it
-took, whether it succeeded, errors it hit, and tokens used when available.
-Runs can be filtered by agent or repository, showing aggregate statistics
-(success rate, average duration, error rate, total tokens). All data is
-stored locally in `runs.json` and can be cleared by the user. No telemetry
-is sent; no data leaves the machine.
+Every agent's process is a run, from its start to its exit. The Runs view
+in the top bar lists them, newest first: which agent, in which task and
+repositories, how long it ran, how it ended, the loop it was on, and the
+tokens it used where it says. Over the runs its filters leave, it adds up
+how many went wrong, the average run, the loops' rounds and the tokens,
+and charts the last two weeks. It is a log on this Mac: nothing in it is
+sent anywhere.
 
-- **RUN-1** Agent runs MUST be recorded locally when an agent pane exits,
-  tracking: agent id, task name, repository (when scoped), branch, start
-  and end time, duration, exit code, result (success/failure/stopped/error),
-  loop rounds completed when on a loop, error count, and token usage when
-  available. The most recent 1000 runs are kept.
-- **RUN-2** A run is recorded only for agent panes (not shells), and only
-  when the pane exits. The result is determined by exit code: 0 is success,
-  non-zero is failure, and no exit code (killed) is stopped. Loop rounds
-  are included when the loop ended before the pane did.
-- **RUN-3** The Runs view MUST show all runs newest first, with filters for
-  agent and repository. Each row shows the result (icon), agent, task name,
-  repository, branch, when it ended, duration, error count when non-zero,
-  and loop rounds when on a loop. Clicking a row expands it to show start
-  time, end time, exit code, result, and token breakdown when available.
-- **RUN-4** Aggregate statistics MUST be shown at the top when runs exist:
-  total count, success/failure/stopped/error counts, success rate, average
-  duration, average errors per run, total tokens used, and count of runs
-  with loops. Statistics reflect the current filter.
-- **RUN-5** Clearing runs MUST ask for confirmation, then delete all runs
-  permanently. The action cannot be undone. Runs are stored in
-  `runs.json` alongside the config and loaded at startup.
-- **RUN-6** Token usage is not currently tracked by the app, so the tokens
-  field is always null. Future work could instrument agent CLIs to report
-  token counts via hooks or the protocol.
+- **RUN-1** An agent pane's run MUST be recorded when its process ends,
+  in a terminal or over ACP, whatever ends it: the pane's id, the agent,
+  its task (by the name it had), the repositories it worked in (its own,
+  or every one of its task's when it ran at the task's root), when the
+  process started and ended, how it ended and its exit code, the last
+  loop it was on, and its tokens. A restarted pane is a new run from its
+  own start, not from the place in the list it took over (PANE-14). A
+  shell has no run. The run is recorded before the pane reads as exited,
+  so quitting, which waits for that, finds it to save.
+- **RUN-2** How a process ended MUST be read in this order: asked to stop
+  (Stop, a restart, its task closing, the app quitting) is **stopped**,
+  whatever its exit code; otherwise exit code 0 is **exited**, and any
+  other code, or none, **failed**. portable-pty reports every process
+  ended by a signal as exit code 1, so read by its code alone, every Stop
+  was a failure. Its loop is the pane's last: **passed**, **gave up**, or
+  **stopped** (by you, or still going when the agent ended), with the
+  rounds used of those allowed. What a run came to: an agent that failed
+  failed, whatever its loop said; otherwise a loop that passed or gave up
+  says so; otherwise how the process ended. A run **went wrong** when it
+  failed or its loop gave up.
+- **RUN-3** The Runs view MUST list the runs newest first, each with what
+  it came to, its agent, task, repositories, loop rounds, length, and how
+  long ago it ended. A click opens how it ended (with its exit code), its
+  loop, when it ran and how (terminal or ACP), and its tokens. Filters by
+  agent and by repository offer what the log has seen; a run at a task's
+  root counts for each of its task's repositories. The view follows the
+  log as it changes (`runs:changed`), without asking on a timer.
+- **RUN-4** Over the runs the filters leave, the view MUST show how many
+  there are, the share that went wrong, the average length, how many were
+  on a loop and the rounds they sent back, and the tokens summed over the
+  runs that said, with how many did; and a bar for each of the last 14
+  days, as tall as the runs that ended that day, red for those that went
+  wrong. Tokens are only what an agent says: one over ACP that puts
+  `usage` on its answer to each prompt (Claude's adapter does) has its
+  finished turns summed, as input, output, and read from and written to
+  cache. A terminal agent says nothing, and its tokens are left empty,
+  not counted as zero.
+- **RUN-5** The log MUST be kept in `runs.json` beside `config.json`: the
+  newest 1,000 runs, written whole by a thread of its own a moment after
+  it changes, and on quitting. The view says when it is full. A file that
+  cannot be read is kept as `runs.json.unreadable`; a row this build
+  cannot read is dropped on its own. Nothing in it leaves the Mac.
+- **RUN-6** Clear MUST ask first, then forget every run. Agents, tasks
+  and their work are not touched.
 
-Code: `runs.rs` (storage), `commands/runs.rs` (commands), `pty.rs`
-(`record_run` when a pane exits), `RunsView.tsx`.
+Code: `runs.rs` (the log, and how a run reads), `pty.rs` (`log_run`, at a
+process's exit), `pty/acp.rs`, `acp/conn.rs` (tokens),
+`commands/runs.rs`, `lib/runs.ts` (what a run came to, the sums, the
+chart), `RunsView.tsx`.
 
 Known gaps:
-- Token usage is not tracked. It would require agent-specific
-  instrumentation to read token counts from each CLI's output or API.
-- Error tracking during a run is not yet wired: `error_count` is always 0.
-  Future work could track errors from tool failures or agent reports.
-- Loop rounds are recorded only when the loop ends before the pane does.
-  A loop stopped or abandoned mid-run shows no rounds.
+- Tokens are only what an agent over ACP says, and only for turns that
+  finished: a turn stopped early says nothing. A terminal agent's are not
+  read, though Claude Code writes them in its transcript.
+- The token sum counts cache reads, which make up most of a long
+  conversation's; each run's split is in its detail.
+- A run keeps only its pane's last loop: a pane put on two loops shows
+  the second.
+- Ctrl+C typed into a terminal agent, if the CLI then exits with a code
+  other than 0, reads as failed: only the app asking it to stop counts as
+  stopped.
+- An agent killed at the end of quitting's grace period, having ignored
+  being asked, can end after the log was saved, and its run is lost.
 
 ---
 

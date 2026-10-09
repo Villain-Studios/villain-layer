@@ -120,7 +120,7 @@ pub fn run() {
             let config = ConfigStore::load(handle)?;
             let (log, dirty) = messages::Messages::load(config.folder());
             let notes = notes::Notes::load(config.folder());
-            let runs = runs::RunStore::new(config.folder());
+            let (runs, runs_dirty) = runs::Runs::load(config.folder());
             let state = AppState {
                 config,
                 ptys: PtyManager::default(),
@@ -134,12 +134,12 @@ pub fn run() {
                 browser: Default::default(),
                 loops: Default::default(),
                 runs,
-                run_tracker: Default::default(),
             };
             app.manage(state);
             // Before the window first draws, or a light theme opens dark.
             theme::apply(handle, &handle.state::<AppState>().config.read().ui.theme);
             messages::spawn_writer(handle.clone(), dirty)?;
+            runs::spawn_writer(handle.clone(), runs_dirty)?;
 
             // Agents reach the app's Jira, GitHub and Slack connections through
             // this rather than holding their own credentials. Bound before any
@@ -348,7 +348,6 @@ pub fn run() {
             commands::browser_save_sign_in,
             commands::set_browser_sites,
             commands::list_runs,
-            commands::run_stats,
             commands::clear_runs,
         ])
         .build(tauri::generate_context!())
@@ -372,6 +371,10 @@ pub fn run() {
                 state.loops.stop_all();
                 state.ptys.shutdown(std::time::Duration::from_secs(5));
                 state.loops.kill_checks();
+                // The runs of the agents just stopped: each is in memory
+                // before its pane reads as exited, which is what shutdown
+                // waits for.
+                let _ = state.runs.flush();
                 let _ = closing.join();
             }
         });

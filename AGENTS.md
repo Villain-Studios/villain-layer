@@ -234,6 +234,7 @@ build does the same.
 | `src-tauri/src/news.rs` | new review requests and tickets, for banners |
 | `src-tauri/src/messages.rs` | the message center's log, kept in `messages.json` |
 | `src-tauri/src/notes.rs` | repo notes, kept in `notes.json`; `commands/notes.rs` measures them against git |
+| `src-tauri/src/runs.rs` | the run log: each agent's run, start to exit, kept in `runs.json` |
 | `src-tauri/src/integrations/` | Jira, GitHub and Slack HTTP clients |
 | `src-tauri/src/secrets.rs` | tokens in the keychain |
 | `src-tauri/src/shellenv.rs` | the login shell's environment, for spawned processes |

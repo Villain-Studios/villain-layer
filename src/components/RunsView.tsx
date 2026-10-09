@@ -1,339 +1,249 @@
-import { useEffect, useState } from "react";
-
+import { useEffect, useMemo, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { api } from "../lib/api";
+import {
+  durationMs,
+  filterRuns,
+  formatDuration,
+  formatTokens,
+  resultOf,
+  runChoices,
+  runDays,
+  runStats,
+  totalTokens,
+  type RunResult,
+} from "../lib/runs";
 import { ago } from "../lib/time";
+import type { Run } from "../lib/types-runs";
 import { useNow, useStore } from "../store";
-import { SidebarToggle, Spinner, Confirm } from "./ui";
-import type { AgentRun, RunStats } from "../lib/types";
+import { Confirm, SidebarToggle, Spinner } from "./ui";
 
+/** What `runs.rs` keeps; said once the log is that full (RUN-5). */
+const CAP = 1000;
+/** Days the chart covers (RUN-4). */
+const DAYS = 14;
+
+const RESULT: Record<RunResult, { mark: string; label: string }> = {
+  passed: { mark: "✓", label: "Its loop passed" },
+  gave_up: { mark: "✗", label: "Its loop gave up" },
+  failed: { mark: "✗", label: "Failed" },
+  stopped: { mark: "■", label: "Stopped" },
+  exited: { mark: "●", label: "Exited on its own" },
+};
+
+/** Every agent's run, newest first, with what they add up to (§22). */
 export function RunsView() {
   const agents = useStore((s) => s.agents);
-  const projects = useStore((s) => s.projects);
   const fail = useStore((s) => s.fail);
   const now = useNow(30_000);
-
-  const [runs, setRuns] = useState<AgentRun[]>([]);
-  const [stats, setStats] = useState<RunStats | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [filterAgent, setFilterAgent] = useState<string | null>(null);
-  const [filterProject, setFilterProject] = useState<string | null>(null);
-  const [expandedRun, setExpandedRun] = useState<string | null>(null);
-  const [confirmClear, setConfirmClear] = useState(false);
+  const [runs, setRuns] = useState<Run[] | null>(null);
+  const [agent, setAgent] = useState<string | null>(null);
+  const [repo, setRepo] = useState<string | null>(null);
+  const [open, setOpen] = useState<string | null>(null);
+  const [clearing, setClearing] = useState(false);
 
   useEffect(() => {
-    loadRuns();
-  }, [filterAgent, filterProject]);
+    let current = true;
+    let asked = 0;
+    const load = () => {
+      // Agents ending together ask together; only the last answer counts.
+      const mine = ++asked;
+      api.listRuns().then((r) => { if (current && mine === asked) setRuns(r); }).catch(fail);
+    };
+    load();
+    const p = listen("runs:changed", load);
+    return () => {
+      current = false;
+      void p.then((un) => un());
+    };
+  }, [fail]);
 
-  async function loadRuns() {
-    setLoading(true);
-    try {
-      const [runsData, statsData] = await Promise.all([
-        api.listRuns(filterAgent, filterProject),
-        api.runStats(filterAgent, filterProject),
-      ]);
-      setRuns(runsData);
-      setStats(statsData);
-    } catch (e) {
-      fail(e);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function clearData() {
-    try {
-      await api.clearRuns();
-      setConfirmClear(false);
-      await loadRuns();
-    } catch (e) {
-      fail(e);
-    }
-  }
-
-  const agentMap = new Map(agents.map((a) => [a.id, a.name]));
-
-  function resultIcon(result: string) {
-    switch (result) {
-      case "success":
-        return <span style={{ color: "var(--green)" }}>✓</span>;
-      case "failure":
-        return <span style={{ color: "var(--red)" }}>✗</span>;
-      case "stopped":
-        return <span style={{ color: "var(--grey)" }}>■</span>;
-      case "error":
-        return <span style={{ color: "var(--amber)" }}>⚠</span>;
-      default:
-        return null;
-    }
-  }
-
-  function formatDuration(secs: number) {
-    if (secs < 60) return `${secs.toFixed(1)}s`;
-    const mins = Math.floor(secs / 60);
-    const s = Math.floor(secs % 60);
-    if (mins < 60) return `${mins}m ${s}s`;
-    const hrs = Math.floor(mins / 60);
-    const m = mins % 60;
-    return `${hrs}h ${m}m`;
-  }
-
-  function formatTokens(tokens: { input: number; output: number; total: number } | null) {
-    if (!tokens) return "—";
-    return `${(tokens.total / 1000).toFixed(1)}k`;
-  }
+  const all = useMemo(() => runs ?? [], [runs]);
+  const choices = useMemo(() => runChoices(all), [all]);
+  const shown = useMemo(() => filterRuns(all, { agent, repo }), [all, agent, repo]);
+  const stats = useMemo(() => runStats(shown), [shown]);
+  const days = useMemo(() => runDays(shown, DAYS, now), [shown, now]);
+  const peak = Math.max(1, ...days.map((d) => d.runs));
+  const agentName = (id: string) => agents.find((a) => a.id === id)?.name ?? (id || "an agent");
 
   return (
-    <div className="wide">
+    <div className="wide runs">
       <div className="wide-head">
         <SidebarToggle />
-        <h2>Run History</h2>
+        <h2>Runs</h2>
         <span className="sub">
-          {stats && (
-            <>
-              {stats.total} run{stats.total === 1 ? "" : "s"} · {stats.success} passed ·{" "}
-              {stats.failure + stats.error} failed · avg{" "}
-              {formatDuration(stats.avg_duration)}
-            </>
-          )}
+          {all.length >= CAP ? `the newest ${CAP} are kept` : "kept on this Mac only"}
         </span>
         <div className="spacer" />
-        <button className="btn btn-sm" onClick={() => void loadRuns()}>
-          Refresh
-        </button>
-        {runs.length > 0 && (
-          <button
-            className="btn btn-sm btn-danger"
-            onClick={() => setConfirmClear(true)}
-          >
-            Clear All
-          </button>
+        {all.length > 0 && (
+          <>
+            <select value={agent ?? ""} onChange={(e) => setAgent(e.target.value || null)} aria-label="Agent">
+              <option value="">Every agent</option>
+              {choices.agents.map((a) => <option key={a} value={a}>{agentName(a)}</option>)}
+            </select>
+            <select value={repo ?? ""} onChange={(e) => setRepo(e.target.value || null)} aria-label="Repository">
+              <option value="">Every repository</option>
+              {choices.repos.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+            <button type="button" className="btn btn-sm btn-danger" onClick={() => setClearing(true)}>
+              Clear…
+            </button>
+          </>
         )}
       </div>
 
-      <div style={{ padding: 16, display: "flex", gap: 12, borderBottom: "1px solid var(--divider)" }}>
-        <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
-          <span style={{ fontSize: 13, color: "var(--grey)" }}>Agent:</span>
-          <select
-            value={filterAgent ?? ""}
-            onChange={(e) => setFilterAgent(e.target.value || null)}
-            style={{
-              padding: "4px 8px",
-              fontSize: 13,
-              background: "var(--panel-bg)",
-              color: "var(--text)",
-              border: "1px solid var(--divider)",
-              borderRadius: 4,
-            }}
-          >
-            <option value="">All</option>
-            {agents.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.name}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
-          <span style={{ fontSize: 13, color: "var(--grey)" }}>Repository:</span>
-          <select
-            value={filterProject ?? ""}
-            onChange={(e) => setFilterProject(e.target.value || null)}
-            style={{
-              padding: "4px 8px",
-              fontSize: 13,
-              background: "var(--panel-bg)",
-              color: "var(--text)",
-              border: "1px solid var(--divider)",
-              borderRadius: 4,
-            }}
-          >
-            <option value="">All</option>
-            {projects.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
-
-      {stats && stats.total > 0 && (
-        <div
-          style={{
-            padding: 16,
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
-            gap: 12,
-            borderBottom: "1px solid var(--divider)",
-          }}
-        >
-          <div className="stat">
-            <div className="label">Success Rate</div>
-            <div className="value">
-              {((stats.success / stats.total) * 100).toFixed(1)}%
-            </div>
-          </div>
-          <div className="stat">
-            <div className="label">Avg Duration</div>
-            <div className="value">{formatDuration(stats.avg_duration)}</div>
-          </div>
-          <div className="stat">
-            <div className="label">Errors</div>
-            <div className="value">{stats.error_rate.toFixed(1)} per run</div>
-          </div>
-          {stats.total_tokens && (
-            <div className="stat">
-              <div className="label">Total Tokens</div>
-              <div className="value">{(stats.total_tokens.total / 1000000).toFixed(2)}M</div>
-            </div>
-          )}
-          {stats.runs_with_loop > 0 && (
-            <div className="stat">
-              <div className="label">With Loops</div>
-              <div className="value">{stats.runs_with_loop}</div>
-            </div>
-          )}
+      {runs === null ? (
+        <div className="empty"><Spinner /></div>
+      ) : all.length === 0 ? (
+        <div className="empty">
+          <h2>No runs yet</h2>
+          <p>
+            Each agent is recorded here when it ends: how long it ran, how it ended, the loop it was on, and the
+            tokens it used where it says. Nothing leaves this Mac.
+          </p>
         </div>
-      )}
-
-      {loading && (
-        <div style={{ padding: 40, textAlign: "center" }}>
-          <Spinner />
-        </div>
-      )}
-
-      {!loading && runs.length === 0 && (
-        <div className="card">
-          <div className="muted" style={{ lineHeight: 1.6 }}>
-            No runs yet. Agent runs are tracked locally as they complete. Start an agent
-            from a task to see its run history here.
+      ) : shown.length === 0 ? (
+        <div className="empty"><p>No run matches these filters.</p></div>
+      ) : (
+        <>
+          <div className="run-stats">
+            <Stat label="Runs" value={String(stats.runs)} />
+            <Stat
+              label="Went wrong"
+              value={`${Math.round(stats.wrongRate * 100)}%`}
+              note={`${stats.wrong} of ${stats.runs}: failed, or a loop gave up`}
+              bad={stats.wrong > 0}
+            />
+            <Stat label="Average run" value={formatDuration(stats.avgMs)} />
+            <Stat
+              label="On a loop"
+              value={String(stats.looped)}
+              note={stats.looped ? `${stats.rounds} ${stats.rounds === 1 ? "round" : "rounds"} sent back` : undefined}
+            />
+            <Stat
+              label="Tokens"
+              value={stats.tokens ? formatTokens(totalTokens(stats.tokens)) : "—"}
+              note={stats.tokens ? `said by ${stats.withTokens} of ${stats.runs}` : "only agents over ACP say"}
+            />
           </div>
-        </div>
-      )}
 
-      {!loading && runs.length > 0 && (
-        <div style={{ padding: "8px 0" }}>
-          {runs.map((run) => {
-            const isExpanded = expandedRun === run.id;
-            const agentName = agentMap.get(run.agent_id) || run.agent_id;
-            const projectName = run.project_name || "Task-wide";
-
-            return (
-              <div
-                key={run.id}
-                className="run-row"
-                style={{
-                  padding: "12px 16px",
-                  borderBottom: "1px solid var(--divider)",
-                  cursor: "pointer",
-                  transition: "background 0.1s",
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.background = "var(--hover-bg)";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = "";
-                }}
-                onClick={() => setExpandedRun(isExpanded ? null : run.id)}
-              >
-                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                  <div style={{ fontSize: 16 }}>{resultIcon(run.result)}</div>
-
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 14, fontWeight: 500 }}>
-                      {agentName} · {run.task_name}
-                    </div>
-                    <div style={{ fontSize: 12, color: "var(--grey)", marginTop: 2 }}>
-                      {projectName}
-                      {run.branch && ` · ${run.branch}`} · {ago(run.ended_at, now)}
-                    </div>
-                  </div>
-
-                  <div style={{ fontSize: 13, color: "var(--grey)", textAlign: "right" }}>
-                    {formatDuration(run.duration_secs)}
-                  </div>
-
-                  {run.error_count > 0 && (
-                    <div
-                      style={{
-                        fontSize: 11,
-                        color: "var(--amber)",
-                        background: "var(--amber-dim)",
-                        padding: "2px 6px",
-                        borderRadius: 3,
-                      }}
-                    >
-                      {run.error_count} error{run.error_count === 1 ? "" : "s"}
-                    </div>
-                  )}
-
-                  {run.loop_rounds !== null && (
-                    <div
-                      style={{
-                        fontSize: 11,
-                        color: "var(--blue)",
-                        background: "var(--blue-dim)",
-                        padding: "2px 6px",
-                        borderRadius: 3,
-                      }}
-                    >
-                      loop: {run.loop_rounds} round{run.loop_rounds === 1 ? "" : "s"}
-                    </div>
-                  )}
+          <div className="run-days" role="img" aria-label={`Runs on each of the last ${DAYS} days, and those that went wrong`}>
+            {days.map((d) => (
+              <div key={d.day} className="run-day" title={`${d.day}: ${d.runs} ${d.runs === 1 ? "run" : "runs"}, ${d.wrong} went wrong`}>
+                <div className="bar" style={{ height: `${(d.runs / peak) * 100}%` }}>
+                  <div className="wrong" style={{ height: d.runs ? `${(d.wrong / d.runs) * 100}%` : 0 }} />
                 </div>
-
-                {isExpanded && (
-                  <div
-                    style={{
-                      marginTop: 12,
-                      paddingTop: 12,
-                      borderTop: "1px solid var(--divider)",
-                      fontSize: 13,
-                      display: "grid",
-                      gridTemplateColumns: "auto 1fr",
-                      gap: "6px 12px",
-                    }}
-                  >
-                    <div style={{ color: "var(--grey)" }}>Started:</div>
-                    <div>{new Date(run.started_at).toLocaleString()}</div>
-
-                    <div style={{ color: "var(--grey)" }}>Ended:</div>
-                    <div>{new Date(run.ended_at).toLocaleString()}</div>
-
-                    <div style={{ color: "var(--grey)" }}>Exit code:</div>
-                    <div>{run.exit_code !== null ? run.exit_code : "—"}</div>
-
-                    <div style={{ color: "var(--grey)" }}>Result:</div>
-                    <div style={{ textTransform: "capitalize" }}>{run.result}</div>
-
-                    {run.tokens && (
-                      <>
-                        <div style={{ color: "var(--grey)" }}>Tokens:</div>
-                        <div>
-                          {formatTokens(run.tokens)} (in: {(run.tokens.input / 1000).toFixed(1)}k, out:{" "}
-                          {(run.tokens.output / 1000).toFixed(1)}k)
-                        </div>
-                      </>
-                    )}
-                  </div>
-                )}
               </div>
-            );
-          })}
-        </div>
+            ))}
+          </div>
+          <div className="run-days-axis">
+            <span>{DAYS} days ago</span>
+            <span>today</span>
+          </div>
+
+          <div className="run-list">
+            {shown.map((r) => (
+              <RunRow
+                key={r.id}
+                run={r}
+                agentName={agentName(r.agent)}
+                open={open === r.id}
+                onToggle={() => setOpen(open === r.id ? null : r.id)}
+                now={now}
+              />
+            ))}
+          </div>
+        </>
       )}
 
-      {confirmClear && (
+      {clearing && (
         <Confirm
-          title="Clear all run history?"
-          body="This will permanently delete all recorded agent runs. This action cannot be undone."
+          title="Clear the run log?"
+          body="Every run kept here is forgotten. Agents, tasks and their work are not touched."
           confirmLabel="Clear"
-          danger={true}
-          onConfirm={() => void clearData()}
-          onCancel={() => setConfirmClear(false)}
+          onConfirm={() =>
+            api.clearRuns().then(() => {
+              setAgent(null);
+              setRepo(null);
+            }).catch(fail)
+          }
+          onCancel={() => setClearing(false)}
         />
       )}
     </div>
   );
+}
+
+function Stat({ label, value, note, bad }: { label: string; value: string; note?: string; bad?: boolean }) {
+  return (
+    <div className="run-stat">
+      <div className="label">{label}</div>
+      <div className={`value${bad ? " bad" : ""}`}>{value}</div>
+      {note && <div className="note">{note}</div>}
+    </div>
+  );
+}
+
+function RunRow({ run, agentName, open, onToggle, now }: {
+  run: Run;
+  agentName: string;
+  open: boolean;
+  onToggle: () => void;
+  now: number;
+}) {
+  const result = resultOf(run);
+  return (
+    <div className={`run-row ${result}`}>
+      <button type="button" className="run-line" onClick={onToggle} aria-expanded={open}>
+        <span className="run-mark" title={RESULT[result].label}>{RESULT[result].mark}</span>
+        <span className="run-what"><b>{agentName}</b> · {run.task || "a task since removed"}</span>
+        <span className="chips">
+          {run.repos.map((p) => <span key={p.id} className="chip">{p.name}</span>)}
+          {run.loop && <span className="chip">{run.loop.used}/{run.loop.rounds} rounds</span>}
+        </span>
+        <span className="spacer" />
+        <span className="run-took">{formatDuration(durationMs(run))}</span>
+        <span className="run-when">{ago(run.ended_at, now)}</span>
+      </button>
+      {open && (
+        <dl className="run-detail">
+          <dt>Ended</dt>
+          <dd>{ending(run)}</dd>
+          {run.loop && (
+            <>
+              <dt>Loop</dt>
+              <dd>
+                {run.loop.end === "passed" ? "passed" : run.loop.end === "gave_up" ? "gave up" : "stopped"},{" "}
+                {run.loop.used} of {run.loop.rounds} rounds used
+              </dd>
+            </>
+          )}
+          <dt>Ran</dt>
+          <dd>
+            {new Date(run.started_at).toLocaleString()} – {new Date(run.ended_at).toLocaleTimeString()},{" "}
+            {run.acp ? "as a conversation (ACP)" : "in a terminal"}
+          </dd>
+          <dt>Tokens</dt>
+          <dd>
+            {run.tokens
+              ? `${formatTokens(run.tokens.input)} in · ${formatTokens(run.tokens.output)} out · ${formatTokens(run.tokens.cached_read)} read from cache · ${formatTokens(run.tokens.cached_write)} written to cache`
+              : run.acp
+                ? "not said: this agent puts no usage on its answers"
+                : "not said: an agent in a terminal does not"}
+          </dd>
+        </dl>
+      )}
+    </div>
+  );
+}
+
+function ending(run: Run): string {
+  switch (run.end) {
+    case "stopped":
+      return "stopped: by you, a restart, its task closing or the app quitting";
+    case "exited":
+      return "on its own, exit code 0";
+    case "failed":
+      return run.code === null ? "failed, with no exit code" : `failed, exit code ${run.code}`;
+  }
 }

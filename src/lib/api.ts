@@ -2,7 +2,6 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
   AcpView,
   AddedRepo,
-  AgentRun,
   AgentStatus,
   Catchup,
   ChangedFile,
@@ -32,7 +31,6 @@ import type {
   RepoSuggestion,
   RepoUpdate,
   Resumable,
-  RunStats,
   WaitingPane,
   ReviewComment,
   ReviewQueue,
@@ -65,6 +63,7 @@ import type {
   SavedSignIn,
   SignInForm,
 } from "./types";
+import type { Run } from "./types-runs";
 
 export const api = {
   // projects
@@ -333,6 +332,10 @@ export const api = {
   /** Every message when `ids` is left out. */
   markMessagesRead: (ids?: number[]) => invoke<void>("mark_messages_read", { ids: ids ?? null }),
   clearMessages: () => invoke<void>("clear_messages"),
+
+  // the run log (§22)
+  listRuns: () => invoke<Run[]>("list_runs"),
+  clearRuns: () => invoke<void>("clear_runs"),
   setWorktreeRoot: (path: string | null) => invoke<void>("set_worktree_root", { path }),
   setUiPrefs: (ui: UiPrefs) => invoke<void>("set_ui_prefs", { ui }),
   disconnect: (which: "jira" | "github" | "slack") => invoke<void>("disconnect", { which }),
@@ -379,13 +382,6 @@ export const api = {
     invoke<void>("browser_dialog", { taskId, accept, text: text ?? null }),
   /** Returns the list as kept: each site as its host, what is not one dropped. */
   setBrowserSites: (sites: string[]) => invoke<string[]>("set_browser_sites", { sites }),
-
-  // runs (RUN-*)
-  listRuns: (agentId?: string | null, projectId?: string | null) =>
-    invoke<AgentRun[]>("list_runs", { agentId: agentId ?? null, projectId: projectId ?? null }),
-  runStats: (agentId?: string | null, projectId?: string | null) =>
-    invoke<RunStats>("run_stats", { agentId: agentId ?? null, projectId: projectId ?? null }),
-  clearRuns: () => invoke<void>("clear_runs"),
 };
 
 export function errMessage(e: unknown): string {

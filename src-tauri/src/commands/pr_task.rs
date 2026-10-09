@@ -177,6 +177,7 @@ mod tests {
             notes: crate::notes::Notes::load(root),
             browser: Default::default(),
             loops: Default::default(),
+            runs: crate::runs::Runs::for_tests(std::env::temp_dir().join("vl-test-runs.json")),
         }
     }
 

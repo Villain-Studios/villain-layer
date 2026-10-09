@@ -44,43 +44,82 @@ export interface RunStats {
   wrong: number;
   /** Of `runs`, 0 with none. */
   wrongRate: number;
-  avgMs: number;
+  /**
+   * The typical run, and the slowest tenth's. Not the average: one agent
+   * left open overnight made the average of a day's runs hours long.
+   */
+  medianMs: number;
+  p90Ms: number;
+  /** Times agents stopped on something only you could answer, and how long they waited (RUN-7). */
+  asks: number;
+  waitedSecs: number;
+  /** Runs that hit a usage limit. */
+  limited: number;
   /** Runs that were on a loop, and the rounds they used between them. */
   looped: number;
   rounds: number;
   /** Summed over the runs that said, and how many did. */
   tokens: RunTokens | null;
   withTokens: number;
+  /** Tool calls over the runs that said, and how many did. */
+  tools: { calls: number; failed: number } | null;
+  withTools: number;
+}
+
+/** The value `p` of the way up `values` (0.5 the median), 0 for none. */
+export function percentile(values: number[], p: number): number {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(p * sorted.length) - 1))];
+}
+
+function addTokens(into: RunTokens, t: RunTokens) {
+  into.input += t.input;
+  into.output += t.output;
+  into.cached_read += t.cached_read;
+  into.cached_write += t.cached_write;
 }
 
 export function runStats(runs: Run[]): RunStats {
-  let wrong = 0, ms = 0, looped = 0, rounds = 0, withTokens = 0;
+  let wrong = 0, asks = 0, waitedSecs = 0, limited = 0, looped = 0, rounds = 0, withTokens = 0, withTools = 0;
   const tokens: RunTokens = { input: 0, output: 0, cached_read: 0, cached_write: 0 };
+  const tools = { calls: 0, failed: 0 };
   for (const r of runs) {
     if (wentWrong(r)) wrong++;
-    ms += durationMs(r);
+    asks += r.asks;
+    waitedSecs += r.waited_secs;
+    if (r.limited) limited++;
     if (r.loop) {
       looped++;
       rounds += r.loop.used;
     }
     if (r.tokens) {
       withTokens++;
-      tokens.input += r.tokens.input;
-      tokens.output += r.tokens.output;
-      tokens.cached_read += r.tokens.cached_read;
-      tokens.cached_write += r.tokens.cached_write;
+      addTokens(tokens, r.tokens);
+    }
+    if (r.tools) {
+      withTools++;
+      tools.calls += r.tools.calls;
+      tools.failed += r.tools.failed;
     }
   }
   const n = runs.length;
+  const lengths = runs.map(durationMs);
   return {
     runs: n,
     wrong,
     wrongRate: n ? wrong / n : 0,
-    avgMs: n ? ms / n : 0,
+    medianMs: percentile(lengths, 0.5),
+    p90Ms: percentile(lengths, 0.9),
+    asks,
+    waitedSecs,
+    limited,
     looped,
     rounds,
     tokens: withTokens ? tokens : null,
     withTokens,
+    tools: withTools ? tools : null,
+    withTools,
   };
 }
 
@@ -94,6 +133,8 @@ export interface RunDay {
   day: string;
   runs: number;
   wrong: number;
+  tokens: number;
+  waitedSecs: number;
 }
 
 function dayOf(t: number): string {
@@ -111,7 +152,7 @@ export function runDays(runs: Run[], days: number, now: number): RunDay[] {
   for (let i = days - 1; i >= 0; i--) {
     const d = new Date(today);
     d.setDate(today.getDate() - i);
-    const day: RunDay = { day: dayOf(d.getTime()), runs: 0, wrong: 0 };
+    const day: RunDay = { day: dayOf(d.getTime()), runs: 0, wrong: 0, tokens: 0, waitedSecs: 0 };
     at.set(day.day, day);
     out.push(day);
   }
@@ -120,8 +161,53 @@ export function runDays(runs: Run[], days: number, now: number): RunDay[] {
     if (!day) continue;
     day.runs++;
     if (wentWrong(r)) day.wrong++;
+    if (r.tokens) day.tokens += totalTokens(r.tokens);
+    day.waitedSecs += r.waited_secs;
   }
   return out;
+}
+
+/** One agent's runs, side by side with the others' (RUN-8). */
+export interface AgentRow {
+  agent: string;
+  stats: RunStats;
+}
+
+/** A row per agent, the busiest first. */
+export function byAgent(runs: Run[]): AgentRow[] {
+  const of = new Map<string, Run[]>();
+  for (const r of runs) of.set(r.agent, [...(of.get(r.agent) ?? []), r]);
+  return [...of].map(([agent, rs]) => ({ agent, stats: runStats(rs) })).sort((a, b) => b.stats.runs - a.stats.runs);
+}
+
+/** Where agents' time and tokens went: a task or a repository (RUN-8). */
+export interface Spend {
+  id: string;
+  name: string;
+  runs: number;
+  ms: number;
+  tokens: number;
+}
+
+/**
+ * The tasks, or repositories, agents spent longest on, `n` of them. A run
+ * at a task's root counts in full for each of its repositories, since it
+ * could have changed any of them.
+ */
+export function topSpend(runs: Run[], by: "task" | "repo", n: number): Spend[] {
+  const at = new Map<string, Spend>();
+  for (const r of runs) {
+    const places = by === "task" ? [{ id: r.task_id, name: r.task || "a task since removed" }] : r.repos;
+    for (const p of places) {
+      // Newest first, so the first name seen is the latest.
+      const s = at.get(p.id) ?? { id: p.id, name: p.name || p.id, runs: 0, ms: 0, tokens: 0 };
+      s.runs++;
+      s.ms += durationMs(r);
+      if (r.tokens) s.tokens += totalTokens(r.tokens);
+      at.set(p.id, s);
+    }
+  }
+  return [...at.values()].sort((a, b) => b.ms - a.ms).slice(0, n);
 }
 
 /** The filters' choices: every agent and repository the log has seen, the latest name for each. */

@@ -33,6 +33,9 @@ pub struct Conversation {
     pub settings: Vec<Setting>,
     pub commands: Vec<Command>,
     pub usage: Option<Usage>,
+    /// Tool calls that finished, and those that failed, for the run log
+    /// (RUN-7).
+    pub calls: crate::runs::ToolCalls,
     /// The text copy written so far, waiting to be taken into the scrollback.
     text: String,
     /// What the text copy last wrote, so a new block starts on a new line.
@@ -408,8 +411,12 @@ impl Conversation {
                 .collect::<Vec<_>>()
         });
 
+        let done = |s: &str| s == "completed" || s == "failed";
         let known = self.tools.get(&id).copied().filter(|&i| self.entry(i).is_some());
         let Some(at) = known else {
+            if let Some(status) = status.as_deref().filter(|s| done(s)) {
+                self.calls.finished(status == "failed");
+            }
             let title = title.unwrap_or_else(|| "Tool call".into());
             self.line(&format!("● {title}"));
             let at = self.push(Body::Tool {
@@ -424,6 +431,7 @@ impl Conversation {
             return;
         };
         let mut failed = None;
+        let mut finished = None;
         if let Some(Entry { body: Body::Tool { title: t, tool: k, status: s, content: c, locations: l, .. }, .. }) =
             self.get_mut(at)
         {
@@ -437,6 +445,9 @@ impl Conversation {
                 if status == "failed" && *s != "failed" {
                     failed = Some(t.clone());
                 }
+                if done(&status) && !done(s) {
+                    finished = Some(status == "failed");
+                }
                 *s = status;
             }
             if let Some(content) = content {
@@ -445,6 +456,9 @@ impl Conversation {
             if let Some(locations) = locations {
                 *l = locations;
             }
+        }
+        if let Some(failed) = finished {
+            self.calls.finished(failed);
         }
         if let Some(title) = failed {
             self.line(&format!("  ✗ {title} failed"));
@@ -598,5 +612,23 @@ mod tests {
         assert_eq!(c.settings[0].current, "plan");
         c.apply(&json!({ "sessionUpdate": "usage_update", "used": 40680, "size": 200000, "cost": { "amount": 0.0757, "currency": "USD" } }));
         assert_eq!(c.usage, Some(Usage { used: 40680, size: 200000, cost: Some("0.08 USD".into()) }));
+    }
+
+    /// An agent repeats a call's status as it updates its content: a call is
+    /// counted when it first finishes, and one that arrives finished too.
+    #[test]
+    fn a_tool_call_counts_once_when_it_finishes_and_a_failure_as_one() {
+        let mut c = Conversation::default();
+        let call = |c: &mut Conversation, id: &str, status: &str| {
+            c.apply(&json!({ "sessionUpdate": "tool_call_update", "toolCallId": id, "status": status }));
+        };
+        c.apply(&json!({ "sessionUpdate": "tool_call", "toolCallId": "a", "title": "Read", "status": "pending" }));
+        call(&mut c, "a", "in_progress");
+        call(&mut c, "a", "completed");
+        call(&mut c, "a", "completed");
+        c.apply(&json!({ "sessionUpdate": "tool_call", "toolCallId": "b", "title": "Run tests", "status": "in_progress" }));
+        call(&mut c, "b", "failed");
+        c.apply(&json!({ "sessionUpdate": "tool_call", "toolCallId": "c", "title": "Grep", "status": "completed" }));
+        assert_eq!(c.calls, crate::runs::ToolCalls { calls: 3, failed: 1 });
     }
 }

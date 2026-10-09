@@ -16,6 +16,17 @@ const TASKS = [
 ];
 const AGENTS = ["claude", "claude", "claude", "copilot", "gemini"];
 
+/** Most runs ask nothing; some wait on you a minute, a few far longer. */
+function asked(roll: number): Pick<Run, "asks" | "waited_secs"> {
+  if (roll < 0.45) return { asks: 0, waited_secs: 0 };
+  const asks = 1 + Math.floor(roll * 6);
+  return { asks, waited_secs: Math.floor(asks * (roll < 0.9 ? 40 : 900) * roll) };
+}
+
+function tools(calls: number, roll: number): Run["tools"] {
+  return { calls, failed: Math.floor(calls * roll * 0.15) };
+}
+
 function made(): Run[] {
   // The same runs at every load: a small linear congruential generator.
   let seed = 7;
@@ -49,6 +60,11 @@ function made(): Run[] {
       tokens: agent === "claude"
         ? { input: Math.floor(next() * 4000), output: Math.floor(next() * 60_000), cached_read: Math.floor(next() * 3_000_000), cached_write: Math.floor(next() * 200_000) }
         : null,
+      turns: 1 + Math.floor(next() * 12),
+      ...asked(next()),
+      limited: next() < 0.05,
+      // Claude Code and Copilot say through their hooks, an agent over ACP itself; Gemini does not.
+      tools: agent === "gemini" ? null : tools(Math.floor(next() * 80), next()),
     });
   }
   // A loop stopped by hand, and a run still on its loop when its agent ended.

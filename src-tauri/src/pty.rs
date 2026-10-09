@@ -172,6 +172,8 @@ struct PaneMeta {
     /// Every one it has said it was in, for its run's tokens (RUN-4):
     /// `/clear` starts a new conversation in the same process.
     conversations: Vec<String>,
+    /// What its run needed of you and did, as it goes (RUN-7).
+    tally: crate::runs::Tally,
     /// On a loop that is running (LOOP-8). Between turns the app is still at
     /// work on it, checking what the turn did, so the end of one is not your
     /// turn: counted as done, every round woke the dock and a banner.
@@ -255,6 +257,15 @@ impl PaneMeta {
         if ended {
             self.turns.send_modify(|n| *n += 1);
         }
+        self.settle();
+    }
+
+    /// Bring the run's tally up to date (RUN-7), after anything that can
+    /// change whether it is asking: a report, a key, a notice.
+    fn settle(&mut self) {
+        let asking = self.info.notice.is_some() || matches!(self.reported, Some((Activity::Asking, _)));
+        let limited = self.info.notice.as_deref() == Some("usage_limit");
+        self.tally.settle(asking, limited, Utc::now());
     }
 
     /// The process ended: a loop waiting on a turn has none coming.
@@ -286,6 +297,7 @@ impl PaneMeta {
             }
             _ => {}
         }
+        self.settle();
     }
 
     fn sent(&mut self, data: &str) {
@@ -638,6 +650,7 @@ impl PtyManager {
                 notice_at: now,
                 session: None,
                 conversations: Vec::new(),
+                tally: Default::default(),
                 looping: false,
                 turns: tokio::sync::watch::Sender::new(0),
             }),
@@ -824,6 +837,7 @@ impl PtyManager {
                                 {
                                     meta.info.notice = found.map(str::to_string);
                                     meta.notice_at = now;
+                                    meta.settle();
                                     if found.is_some() {
                                         let _ = app.emit(
                                             "pty:notice",
@@ -1027,11 +1041,16 @@ impl PtyManager {
     pub fn report_with(
         &self,
         id: &str,
+        tool: Option<bool>,
         decide: impl FnOnce(Option<Activity>) -> Option<Activity>,
     ) -> Result<bool> {
         let pane = self.get(id)?;
         let watched = pane.watched.load(Ordering::Acquire);
         let mut meta = pane.meta.lock();
+        // A tool call finished, and whether it failed (RUN-7).
+        if let Some(failed) = tool {
+            meta.tally.tool(failed);
+        }
         let Some(activity) = decide(meta.reported.map(|(a, _)| a)) else {
             return Ok(false);
         };
@@ -1287,21 +1306,25 @@ impl PtyManager {
 /// pane reads as exited, so quitting, which waits for that, finds the run
 /// in memory to save.
 fn log_run<R: Runtime>(app: &AppHandle<R>, pane: &Pane, code: Option<i32>) {
-    let (info, born, stopping, conversations) = {
+    let (info, born, stopping, conversations, turns, mut tally) = {
         let meta = pane.meta.lock();
-        (meta.info.clone(), meta.born, meta.stopping, meta.conversations.clone())
+        let turns = u32::try_from(*meta.turns.borrow()).unwrap_or(u32::MAX);
+        (meta.info.clone(), meta.born, meta.stopping, meta.conversations.clone(), turns, meta.tally.clone())
     };
     if info.kind != PaneKind::Agent {
         return;
     }
     let tokens = match &pane.io {
-        Io::Acp(conn) => conn.tokens(),
+        Io::Acp(conn) => {
+            tally.tools_from(conn.tools());
+            conn.tokens()
+        }
         // A terminal says nothing of them; Claude Code's transcript does.
         Io::Pty { .. } => info.agent_id.as_deref().and_then(|agent| {
             crate::agents::transcript_tokens(agent, &info.cwd, &conversations, born, Utc::now())
         }),
     };
-    crate::runs::record(app, crate::runs::Ended { info, born, stopping, code, tokens });
+    crate::runs::record(app, crate::runs::Ended { info, born, stopping, code, tokens, turns, tally });
 }
 
 #[cfg(test)]
@@ -1341,6 +1364,7 @@ mod tests {
             notice_at: now,
             session: None,
             conversations: Vec::new(),
+            tally: Default::default(),
             looping: false,
             turns: tokio::sync::watch::Sender::new(0),
         }

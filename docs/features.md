@@ -1841,18 +1841,21 @@ Known gaps:
 
 Every agent's process is a run, from its start to its exit. The Runs view
 in the top bar lists them, newest first: which agent, in which task and
-repositories, how long it ran, how it ended, the loop it was on, and the
-tokens it used where it says. Over the runs its filters leave, it adds up
-how many went wrong, the average run, the loops' rounds and the tokens,
-and charts the last two weeks. It is a log on this Mac: nothing in it is
-sent anywhere.
+repositories, how long it ran, how it ended, how often it needed you, its
+tool calls, the loop it was on, and the tokens it used where it says. Over
+the runs its filters leave, it says how many went wrong, the typical run,
+the time agents waited on you, the tokens and the failed tool calls; puts
+each agent side by side; says which tasks and repositories took the most
+time; and charts the last two weeks. It is a log on this Mac: nothing in
+it is sent anywhere.
 
 - **RUN-1** An agent pane's run MUST be recorded when its process ends,
   in a terminal or over ACP, whatever ends it: the pane's id, the agent,
   its task (by the name it had), the repositories it worked in (its own,
   or every one of its task's when it ran at the task's root), when the
   process started and ended, how it ended and its exit code, the last
-  loop it was on, and its tokens. A restarted pane is a new run from its
+  loop it was on, its tokens, and what it needed of you and did (RUN-7).
+  A restarted pane is a new run from its
   own start, not from the place in the list it took over (PANE-14). A
   shell has no run. The run is recorded before the pane reads as exited,
   so quitting, which waits for that, finds it to save.
@@ -1866,20 +1869,31 @@ sent anywhere.
   rounds used of those allowed. What a run came to: an agent that failed
   failed, whatever its loop said; otherwise a loop that passed or gave up
   says so; otherwise how the process ended. A run **went wrong** when it
-  failed or its loop gave up.
+  failed or its loop gave up. A failed tool call does not make it so:
+  Claude Code reports every command that exits non-zero as a failed tool,
+  a search that finds nothing included, and nearly every run would read
+  as wrong.
 - **RUN-3** The Runs view MUST list the runs newest first, each with what
-  it came to, its agent, task, repositories, loop rounds, length, and how
-  long ago it ended. A click opens how it ended (with its exit code), its
-  loop, when it ran and how (terminal or ACP), and its tokens. Filters by
+  it came to, its agent, task, repositories, how often it asked you, a
+  usage limit it hit, its loop rounds, tokens, length, and how long ago it
+  ended. A click opens how it ended (with its exit code), its turns, how
+  often it asked you and how long that waited, its tool calls and those
+  that failed, its loop, when it ran and how (terminal or ACP), and its
+  tokens. Filters by
   agent and by repository offer what the log has seen; a run at a task's
   root counts for each of its task's repositories. The view follows the
   log as it changes (`runs:changed`), without asking on a timer.
 - **RUN-4** Over the runs the filters leave, the view MUST show how many
-  there are, the share that went wrong, the average length, how many were
-  on a loop and the rounds they sent back, and the tokens summed over the
-  runs that said, with how many did; and a bar for each of the last 14
-  days, as tall as the runs that ended that day, red for those that went
-  wrong. Tokens are only what an agent says, as input, output, and read
+  there are; the share that went wrong; the typical run, which is the
+  median, and the length the slowest tenth run past (an average let one
+  agent left open overnight make a day's runs read hours long); the time
+  agents waited on you, how often they asked, and how many hit a usage
+  limit; the tokens summed over the runs that said, a run's on average and
+  how many said; the share of tool calls that failed, over the runs that
+  said; and, only when some were on a loop, how many and the rounds they
+  sent back. A bar for each of the last 14 days is as tall as the runs
+  that ended that day, red for those that went wrong, or, switched, as
+  the tokens they used or the time they waited on you. Tokens are only what an agent says, as input, output, and read
   from and written to cache. One over ACP that puts `usage` on its answer
   to each prompt (Claude's adapter does) has its finished turns summed.
   Claude Code in a terminal says nothing while it runs, so its run is
@@ -1896,12 +1910,30 @@ sent anywhere.
   cannot read is dropped on its own. Nothing in it leaves the Mac.
 - **RUN-6** Clear MUST ask first, then forget every run. Agents, tasks
   and their work are not touched.
+- **RUN-7** What a run needed of you and did MUST be counted as it goes,
+  on its pane: its finished turns; each time it stopped on something only
+  you could answer (a permission, the trust question, a usage limit) and
+  how long that waited, until it was answered, or until the run ended
+  with it still open; whether it hit its usage limit; and its tool calls
+  and those that failed. Asking is read from the agent's report and a
+  notice, which change in several places, and each change settles the
+  count, so a question still asking is counted once. Tool calls are those
+  an agent says finished: Claude Code's and Copilot's `PostToolUse` and
+  `PostToolUseFailure` hooks, or an ACP agent's calls reaching
+  `completed` or `failed`, each once. An agent that says nothing of them
+  has none recorded, not zero.
+- **RUN-8** The view MUST put each agent side by side, the busiest first:
+  its runs, the share that went wrong, its typical run, its tokens and
+  its waiting on you a run, and its failed tool calls; and list the five
+  tasks and five repositories agents spent longest on, with their time,
+  a run at a task's root counting in full for each of its repositories.
 
 Code: `runs.rs` (the log, and how a run reads), `pty.rs` (`log_run`, at a
 process's exit), `pty/acp.rs`, `acp/conn.rs` and `agents/usage.rs`
 (tokens),
 `commands/runs.rs`, `lib/runs.ts` (what a run came to, the sums, the
-chart), `RunsView.tsx`.
+chart, the breakdowns), `RunsView.tsx`, `runs/` (`RunRow`, `RunChart`,
+`RunBreakdown`).
 
 Known gaps:
 - Tokens are only what an agent over ACP says, for turns that finished (a
@@ -1916,6 +1948,14 @@ Known gaps:
   conversation's; each run's split is in its detail.
 - A run keeps only its pane's last loop: a pane put on two loops shows
   the second.
+- Gemini and OpenCode in a terminal say nothing of their tool calls, and
+  whether Copilot sends `PostToolUseFailure` has not been seen: its
+  failures may read as none.
+- Waiting on you is only asking. An agent finished and waiting for your
+  next prompt is not counted, since nothing tells that from you having
+  moved on.
+- A run at a task's root counts in full for each of its repositories, so
+  the repositories' times add up to more than the agents ran.
 - Ctrl+C typed into a terminal agent, if the CLI then exits with a code
   other than 0, reads as failed: only the app asking it to stop counts as
   stopped.

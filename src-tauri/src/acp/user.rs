@@ -99,6 +99,11 @@ impl Conn {
         self.state.lock().tokens
     }
 
+    /// Its tool calls that finished, and failed (RUN-7).
+    pub fn tools(&self) -> crate::runs::ToolCalls {
+        self.state.lock().convo.calls
+    }
+
     pub fn view(&self, since: Option<u64>) -> View {
         let st = self.state.lock();
         View {

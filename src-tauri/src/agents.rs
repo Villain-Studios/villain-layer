@@ -551,6 +551,16 @@ pub fn hook_session(payload: &serde_json::Value) -> Option<String> {
     Some(uuid::Uuid::parse_str(id).ok()?.hyphenated().to_string())
 }
 
+/// A tool call a hook's post says finished, and whether it failed (RUN-7):
+/// Claude Code's PostToolUse and PostToolUseFailure, which Copilot sends too.
+pub fn hook_tool(payload: &serde_json::Value) -> Option<bool> {
+    match payload.get("hook_event_name")?.as_str()? {
+        "PostToolUse" => Some(false),
+        "PostToolUseFailure" => Some(true),
+        _ => None,
+    }
+}
+
 /// What a hook's post says the agent is doing now. None when it says nothing
 /// new.
 pub fn hook_activity(

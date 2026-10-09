@@ -39,4 +39,14 @@ export interface Run {
   code: number | null;
   loop: RunLoop | null;
   tokens: RunTokens | null;
+  /** Turns it finished. */
+  turns: number;
+  /** Times it stopped on something only you could answer (RUN-7). */
+  asks: number;
+  /** How long those waited on you. */
+  waited_secs: number;
+  /** It hit its plan's usage limit. */
+  limited: boolean;
+  /** Its tool calls, where the agent says: Claude Code's and Copilot's hooks, or ACP. */
+  tools: { calls: number; failed: number } | null;
 }

@@ -1030,16 +1030,16 @@ Known gaps:
 
 - **SET-5** The theme MUST reach everything the app draws: every view,
   the terminals, the window behind the page before it has drawn, and a
-  paired phone's page. The themes are Dark, Light and Tokyo Night, each
-  picked from a small picture of the app drawn in it, beside Match the
-  Mac. Match the Mac MUST switch between Light and Dark as the Mac's
+  paired phone's page. The themes are Dark, Light, Tokyo Night, Cursor
+  Dark, Cursor Light, Ayu Dark and Ayu Light, each picked from a small
+  picture of the app drawn in it, beside Match the Mac. Match the Mac MUST switch between Light and Dark as the Mac's
   appearance changes, without a restart; a phone under Match the Mac
   follows its own appearance. The app MUST open in the theme it was last in, not
   flash another first. Dark is the default, so an update does not repaint
   the app. A colour is a token in `theme.css`, with a value for every
   theme, never written into a rule: one written there is a colour no
   theme reaches. What an agent prints in a terminal keeps its own colours;
-  on Light, xterm darkens any too faint to read (4.5:1), and answers an
+  on a light theme, xterm darkens any too faint to read (4.5:1), and answers an
   agent that asks the terminal for its background.
 
 Code: `commands/settings.rs`, `config.rs` (`UiPrefs`), `Settings.tsx`,

@@ -125,3 +125,161 @@
 
   color-scheme: dark;
 }
+
+/* Cursor Dark and Cursor Light, from the theme files Cursor ships
+   (theme-cursor), made opaque where Cursor draws its foreground through: a
+   border there is #f0f0f0 at 7% over the panel. The side panels are darker
+   than the page in the dark one, as Cursor's sidebar is beside its editor.
+   The accent is the buttons' blue, so a status's blue is the cyan. */
+:root[data-theme="cursor-dark"],
+[data-theme="cursor-dark"] {
+  --bg: #181818;
+  --panel: #141414;
+  --panel-2: #262626;
+  --border: #2f2f2f;
+  --border-soft: #242424;
+  --text: #f0f0f0;
+  --dim: #8f8f8f;
+  --dimmer: #666666;
+  --tab-text: #afafaf;
+  --tab-count: #989898;
+  --accent: #81a1c1;
+  --accent-dim: #4c5c6c;
+  /* Cursor's buttons: its blue, under near-black text. */
+  --accent-fill: #81a1c1;
+  --on-accent: #191c22;
+  --green: #70b489;
+  --red: #fc6b83;
+  --amber: #f1b467;
+  --blue: #88c0d0;
+  --green-line: #2a372f;
+  --red-line: #46292d;
+  --amber-line: #433728;
+  --blue-line: #2e3a3d;
+  --add-text: #a3ccb2;
+  --del-text: #f7a0af;
+  --danger-fill: #883149;
+  --on-danger: #ffe8ee;
+  --on-red: #141414;
+  --scroll: #323232;
+  --scroll-hover: #414141;
+  --shade: #000;
+
+  color-scheme: dark;
+}
+
+:root[data-theme="cursor-light"],
+[data-theme="cursor-light"] {
+  --bg: #fcfcfc;
+  --panel: #f3f3f3;
+  --panel-2: #e8e8e8;
+  --border: #e0e0e0;
+  --border-soft: #eaeaea;
+  --text: #141414;
+  --dim: #6c6c6c;
+  --dimmer: #949494;
+  --tab-text: #454545;
+  --tab-count: #696969;
+  --accent: #2778c1;
+  --accent-dim: #b1cee7;
+  --accent-fill: #2778c1;
+  --on-accent: #fcfcfc;
+  --green: #007041;
+  --red: #be1744;
+  --amber: #a46700;
+  --blue: #3b7e84;
+  --green-line: #bdd9cd;
+  --red-line: #ecc3ce;
+  --amber-line: #e6d7bd;
+  --blue-line: #ccdcde;
+  --add-text: #005c35;
+  --del-text: #9c1338;
+  --danger-fill: #be1744;
+  --on-danger: #ffffff;
+  --on-red: #ffffff;
+  --scroll: #dbdbdb;
+  --scroll-hover: #cecece;
+  --shade: rgba(20, 20, 20, 0.35);
+
+  color-scheme: light;
+}
+
+/* Ayu Dark and Ayu Light, from the theme files teabyii's extension
+   publishes (1.4.0, bordered). Ayu's own grey for the UI's text is fainter
+   than the app's captions can be, and its light palette draws orange and
+   green text on white, so the text tokens are those hues taken darker or
+   brighter until they read (4:1 on the page). Its accent is its orange;
+   a status's amber is its yellow on Light and its keyword orange on Dark,
+   so that neither is mistaken for it. */
+:root[data-theme="ayu-dark"],
+[data-theme="ayu-dark"] {
+  --bg: #10141c;
+  --panel: #0d1017;
+  --panel-2: #1c212b;
+  --border: #1b1f29;
+  --border-soft: #161a23;
+  --text: #bfbdb6;
+  --dim: #6c7383;
+  --dimmer: #484f61;
+  --tab-text: #848992;
+  --tab-count: #767c89;
+  --accent: #e6b450;
+  --accent-dim: #705c33;
+  --accent-fill: #e6b450;
+  --on-accent: #0d1017;
+  --green: #70bf56;
+  --red: #f26d78;
+  --amber: #ff8f40;
+  --blue: #59c2ff;
+  --green-line: #233628;
+  --red-line: #3d262e;
+  --amber-line: #402d23;
+  --blue-line: #1f3749;
+  --add-text: #aad94c;
+  --del-text: #f699a0;
+  --danger-fill: #7f393c;
+  --on-danger: #ffe8e8;
+  --on-red: #0d1017;
+  --scroll: #2e3441;
+  --scroll-hover: #3c4353;
+  --shade: #000;
+
+  color-scheme: dark;
+}
+
+:root[data-theme="ayu-light"],
+[data-theme="ayu-light"] {
+  --bg: #fcfcfc;
+  --panel: #f8f9fa;
+  --panel-2: #e4e7eb;
+  --border: #e3e6e9;
+  --border-soft: #eaedef;
+  --text: #5c6166;
+  --dim: #727d8c;
+  --dimmer: #a7afbb;
+  --tab-text: #5c6166;
+  --tab-count: #6f7a88;
+  --accent: #b16e12;
+  --accent-dim: #f8d4a1;
+  /* Ayu's buttons are its orange as it is, under dark brown text. */
+  --accent-fill: #f29718;
+  --on-accent: #3d2400;
+  --green: #4f8b31;
+  --red: #d84b4b;
+  --amber: #a47300;
+  --blue: #4280be;
+  --green-line: #d8edce;
+  --red-line: #f6d1d1;
+  --amber-line: #f8e6bd;
+  --blue-line: #cfe0f0;
+  --add-text: #3c6b26;
+  --del-text: #aa3b3b;
+  --danger-fill: #d84b4b;
+  --on-danger: #ffffff;
+  --on-red: #ffffff;
+  --scroll: #cbd0d7;
+  --scroll-hover: #b3bac4;
+  --shade: rgba(60, 70, 85, 0.3);
+
+  color-scheme: light;
+}

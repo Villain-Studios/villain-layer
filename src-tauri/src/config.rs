@@ -304,7 +304,7 @@ fn dark() -> String {
 }
 
 /// The themes `UiPrefs::theme` may name, as `src/theme.css` names them.
-pub const THEMES: &[&str] = &["dark", "light", "tokyo-night", "system"];
+pub const THEMES: &[&str] = &["dark", "light", "tokyo-night", "cursor-dark", "cursor-light", "ayu-dark", "ayu-light", "system"];
 
 /// The models the reviewer pass may run on, as `claude --model` names them.
 pub const REVIEWER_MODELS: &[&str] = &["sonnet", "opus", "haiku"];
